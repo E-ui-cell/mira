@@ -1707,9 +1707,6 @@ function Send-ProviderPayload($provider,$model,$payload){
         $asyncResult=$powershell.BeginInvoke()
         $frames=@('.  ','.. ','...','   ')
         $i=0
-        $frame=$frames[0]
-        # BeginInvoke() keeps the entire HTTP request in the background.
-        # The foreground thread owns the timer and repaints the live row.
         $sw=[Diagnostics.Stopwatch]::StartNew()
 
         while(-not $asyncResult.IsCompleted){
@@ -1726,14 +1723,15 @@ function Send-ProviderPayload($provider,$model,$payload){
 
             $frame=$frames[$i % $frames.Length]
             $elapsed=[int]$sw.ElapsedMilliseconds
-            Write-MessageFrameStatus "$frame  $([math]::Round($elapsed/1000,1))s"
+            $bullet=if($script:SessionActive){'  ●'}else{''}
+            $status="$frame  $([math]::Round($elapsed/1000,1))s      $bullet"
+            Write-Host ("`r" + (" " * [Math]::Max(1,((Width)-1))) + "`r" + $status) -NoNewline -ForegroundColor DarkGray
             Start-Sleep -Milliseconds 150
             ++$i
         }
         $sw.Stop()
         $script:LastRequestElapsedMs=[int]$sw.ElapsedMilliseconds
-        $script:LastRequestFrame=[string]$frame
-
+        $script:LastRequestFrame=$frames[[Math]::Max(0,$i-1) % $frames.Length]
 
         if($cancelled){
             try{$powershell.EndInvoke($asyncResult)|Out-Null}catch{}
@@ -1743,6 +1741,8 @@ function Send-ProviderPayload($provider,$model,$payload){
 
         # Keep the final timer line alive until the response is available, then
         # finalize it with token counts on the same line.
+        $elapsed=[int]$sw.ElapsedMilliseconds
+        $frame=$frames[$i % $frames.Length]
 
         $response=@($powershell.EndInvoke($asyncResult))
         $runspaceErrors=@($powershell.Streams.Error)
@@ -1785,6 +1785,11 @@ function Send-ProviderPayload($provider,$model,$payload){
         }catch{}
 
         $bullet=if($script:SessionActive){'  ●'}else{''}
+        $status="$frame  $([math]::Round($elapsed/1000,1))s      ↑ $tokensIn  ↓ $tokensOut$bullet"
+        $script:LastStatusRow=Row
+        $script:LastStatusText=$status
+        $script:LastStatusHasBullet=$script:SessionActive
+        Write-Host ("`r" + (" " * [Math]::Max(1,(Width))) + "`r" + $status) -NoNewline -ForegroundColor DarkGray
         return $final
     }finally{
         if($null -ne $oldTreatControlCAsInput){try{[Console]::TreatControlCAsInput=$oldTreatControlCAsInput}catch{}}
