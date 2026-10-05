@@ -3046,69 +3046,56 @@ function End-MessageFrame(){
 
 function Write-MarkupInline([string]$line,[bool]$ContinueLine=$false){
     if($null -eq $line){$line=''}
-
-    # Basic Markdown inline syntax only. Deliberately do NOT rewrite
-    # punctuation such as quotes, dashes, Unicode symbols, or emoji.
-    $pattern='(\*\*[^*\r\n]+\*\*|~~[^~\r\n]+~~|`[^`\r\n]+`|\[[^\]]+\]\([^\)]+\)|<\/?[A-Za-z_][A-Za-z0-9_.:-]*(?:\s+[^<>]*?)?\/?>|(?<!\*)\*[^*\r\n]+\*(?!\*)|(?<![A-Za-z0-9_])_[^_\r\n]+_(?![A-Za-z0-9_])|(?<!\$)\$(?!\$)[^$\r\n]+\$(?!\$))'
-    try {$matches=[regex]::Matches($line,$pattern)} catch {
-        if($ContinueLine){Add-MarkupSegment $line ([ConsoleColor]::Gray)}else{Write-MarkupPlainLine $line ([ConsoleColor]::Gray)}
-        return
-    }
-
     if(-not $ContinueLine){Begin-MarkupLine}
-    $pos=0
-    foreach($m in $matches){
-        if($m.Index -gt $pos){Add-MarkupSegment $line.Substring($pos,$m.Index-$pos) ([ConsoleColor]::Gray)}
-        $token=$m.Value
-        if($token.StartsWith('**') -and $token.EndsWith('**')){
-            Add-MarkupSegment $token.Substring(2,$token.Length-4) ([ConsoleColor]::White)
+    try{
+        foreach($span in @(Parse-MiraInline $line)){
+            $fg=Convert-MiraRgbToConsoleColor ([string]$span.Fg) ([ConsoleColor]::Gray)
+            Add-MarkupSegment ([string]$span.Text) $fg
         }
-        elseif($token.StartsWith('~~') -and $token.EndsWith('~~')){
-            Add-MarkupSegment $token.Substring(2,$token.Length-4) ([ConsoleColor]::DarkGray)
-        }
-        elseif($token.StartsWith('`')){
-            Add-MarkupSegment $token ([ConsoleColor]::Yellow)
-        }
-        elseif($token.StartsWith('[')){
-            Add-MarkupSegment $token ([ConsoleColor]::Cyan)
-        }
-        elseif($token.StartsWith('<')){
-            Add-MarkupSegment $token ([ConsoleColor]::DarkCyan)
-        }
-        elseif($token.StartsWith('$') -and $token.EndsWith('$')){
-            Add-MarkupSegment (Convert-LatexToUnicode $token.Substring(1,$token.Length-2)) ([ConsoleColor]$script:MarkupTheme.MathTextColor)
-        }
-        else{
-            Add-MarkupSegment $token.Substring(1,$token.Length-2) ([ConsoleColor]::Gray)
-        }
-        $pos=$m.Index+$m.Length
-    }
-    if($pos -lt $line.Length){Add-MarkupSegment $line.Substring($pos) ([ConsoleColor]::Gray)}
+    }catch{Add-MarkupSegment ([string]$line) ([ConsoleColor]::Gray)}
     if(-not $ContinueLine){End-MarkupLine}
 }
 
 function Write-JsonColored([string]$line){
     if($null -eq $line){$line=''}
-    try{
-        $pattern='("(?:\\.|[^"\\])*")\s*(:)?|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|\b(true|false|null)\b|([{}\[\],])'
-        $matches=[regex]::Matches($line,$pattern)
-    }catch{
-        Write-MarkupPlainLine $line ([ConsoleColor]::Gray);return
-    }
     Begin-MarkupLine
-    if($matches.Count -eq 0){Add-MarkupSegment $line ([ConsoleColor]::Gray);End-MarkupLine;return}
-    $pos=0
-    foreach($m in $matches){
-        if($m.Index -gt $pos){Add-MarkupSegment $line.Substring($pos,$m.Index-$pos) ([ConsoleColor]::Gray)}
-        $tok=$m.Value
-        if($m.Groups[1].Success){$fg=[ConsoleColor]::Yellow}
-        elseif($m.Groups[3].Success){$fg=[ConsoleColor]::Green}
-        elseif($m.Groups[4].Success){$fg=[ConsoleColor]::Magenta}
-        else{$fg=[ConsoleColor]::DarkCyan}
-        Add-MarkupSegment $tok $fg
-        $pos=$m.Index+$m.Length
+    $pos=0;$plainStart=0
+    while($pos -lt $line.Length){
+        $end=$pos;$kind=''
+        $ch=$line[$pos]
+        if($ch -eq [char]34){
+            $end=$pos+1;$escaped=$false
+            while($end -lt $line.Length){
+                $q=$line[$end]
+                if($q -eq [char]34 -and -not $escaped){++$end;break}
+                if($q -eq [char]92 -and -not $escaped){$escaped=$true}else{$escaped=$false}
+                ++$end
+            }
+            $kind='string'
+        }elseif(([char]::IsDigit($ch)) -or ($ch -eq '-' -and $pos+1 -lt $line.Length -and [char]::IsDigit($line[$pos+1]))){
+            ++$end
+            while($end -lt $line.Length){
+                $n=[string]$line[$end]
+                if('0123456789+-.eE'.IndexOf($n) -lt 0){break}
+                ++$end
+            }
+            $kind='number'
+        }else{
+            $tail=$line.Substring($pos)
+            if($tail.StartsWith('true')){$end=$pos+4;$kind='literal'}
+            elseif($tail.StartsWith('false')){$end=$pos+5;$kind='literal'}
+            elseif($tail.StartsWith('null')){$end=$pos+4;$kind='literal'}
+            elseif('{}[],'.IndexOf($ch) -ge 0){$end=$pos+1;$kind='punct'}
+        }
+        if($kind -ne ''){
+            if($pos -gt $plainStart){Add-MarkupSegment $line.Substring($plainStart,$pos-$plainStart) ([ConsoleColor]::Gray)}
+            $fg=switch($kind){'string'{[ConsoleColor]::Yellow};'number'{[ConsoleColor]::Green};'literal'{[ConsoleColor]::Magenta};default{[ConsoleColor]::DarkCyan}}
+            Add-MarkupSegment $line.Substring($pos,$end-$pos) $fg
+            $pos=$end;$plainStart=$pos;continue
+        }
+        ++$pos
     }
-    if($pos -lt $line.Length){Add-MarkupSegment $line.Substring($pos) ([ConsoleColor]::Gray)}
+    if($plainStart -lt $line.Length){Add-MarkupSegment $line.Substring($plainStart) ([ConsoleColor]::Gray)}
     End-MarkupLine
 }
 
