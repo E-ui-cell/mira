@@ -1809,7 +1809,7 @@ function Send-ProviderPayload($provider,$model,$payload){
         $script:LastStatusRow=Row
         $script:LastStatusText=$status
         $script:LastStatusHasBullet=$script:SessionActive
-        Write-Host ("`r" + (" " * [Math]::Max(1,(Width))) + "`r" + $status) -NoNewline -ForegroundColor DarkGray
+        Write-Host ("`r" + (" " * [Math]::Max(1,(Width)-1)) + "`r" + $status) -NoNewline -ForegroundColor DarkGray
         return $final
     }finally{
         if($null -ne $oldTreatControlCAsInput){try{[Console]::TreatControlCAsInput=$oldTreatControlCAsInput}catch{}}
@@ -2616,7 +2616,7 @@ function Begin-MessageFrame(){
 
     $top=Get-MessageFrameTop $status $width
     try{
-        Write-Host ("`r" + (' ' * $width) + "`r" + $top) -ForegroundColor ([ConsoleColor]$script:MarkupTheme.MessageFrameColor)
+        Write-Host ("`r" + (' ' * [Math]::Max(1,$width-1)) + "`r" + $top) -ForegroundColor ([ConsoleColor]$script:MarkupTheme.MessageFrameColor)
     }catch{
         $script:MarkupFrameActive=$false
         return
