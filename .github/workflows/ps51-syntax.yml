@@ -1,0 +1,16 @@
+name: PowerShell 5.1 syntax
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  syntax:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\mira-tui.b3.ps1
