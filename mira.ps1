@@ -120,13 +120,6 @@ $script:MarkupTheme = [pscustomobject]@{
     # -------------------------------------------------------------------------
     # CODE BLOCK THEME -- short U+2219 separator, about 25% of terminal width.
     # -------------------------------------------------------------------------
-    CodeFrameColor       = 'DarkGray'       # legacy alias
-    CodeFrameRGB          = '96;100;110'     # legacy alias
-    CodeLanguageColor    = 'Red'            # legacy alias
-    CodeTextColor        = 'Gray'           # legacy alias
-    CodeHeaderPrefix     = '∙∙ '            # legacy alias
-    CodeLanguageGap      = ' '              # legacy alias
-    CodeRuleChar         = '∙'              # legacy alias
     CodeRulePercent      = 0.25             # about 25% of terminal width
     CodeRuleMinWidth     = 18               # minimum readable rule
     CodeShowLanguage     = $true
@@ -2704,7 +2697,7 @@ function Write-JsonColored([string]$line){
 function Write-JsonColoredCodeLine([string]$line,[string]$background,[int]$fillWidth){
     # Kept as a compatibility wrapper. Code blocks no longer paint a full
     # background; they use the normal terminal background for clean framing.
-    Write-MarkupPlainLine ([string]$line) ([ConsoleColor]$script:MarkupTheme.CodeTextColor)
+    Write-MarkupPlainLine ([string]$line) ([ConsoleColor]$script:MarkupTheme.CodeTextFg)
 }
 
 function Normalize-CodeBlockLines([string[]]$lines){
