@@ -38,7 +38,7 @@ The status line shows request time and token counts, for example:
 
 Markdown-aware TUI renderer with code, math, tables, quotes and JSON.
 
-Native file/image input, diff sending, sessions, model discovery and OpenAI-compatible streaming.
+Native file/image input, diff sending, on-demand sessions with export, model discovery and OpenAI-compatible streaming.
 
 ## Quickstart
 
@@ -156,13 +156,13 @@ Every prompt is sent as an independent request unless a session is explicitly en
 Start a RAM-only session:
 
 ```text
-.session
+.enable-session
 ```
 
 Or give it a name:
 
 ```text
-.session project
+.enable-session project
 ```
 
 The active session is indicated on the status line.
@@ -184,6 +184,20 @@ End the session and discard its context:
 ```text
 .delete session
 ```
+
+Export the active session to a Markdown file:
+
+```text
+.export-session
+```
+
+Or choose a file name:
+
+```text
+.export-session project.md
+```
+
+Session export includes session metadata, any compressed summary, and the conversation text. Image attachments are recorded as attachment markers rather than embedded binary data.
 
 Session context is memory-only and is not saved as a persistent MIRA session database.
 
@@ -388,8 +402,9 @@ Show the raw JSON request:
 | `.ui on/off` | Enable/disable renderer |
 | `.stream on/off` | Toggle OpenAI-compatible streaming |
 | `.reasoning on/off` | Toggle reasoning output |
-| `.session [name]` | Start RAM-only session |
+| `.enable-session [name]` | Start RAM-only session |
 | `.empty session` | Clear active session context |
+| `.export-session [name]` | Export active session to a file |
 | `.compress session` | Compress older session context |
 | `.delete session` | End and discard session |
 | `.q`, `:q`, `:wq`, `quit` | Exit |
@@ -469,7 +484,7 @@ No PS7-specific runtime requirement.
 
 ### Functional
 
-The current beta includes the native readline/TUI, built-in providers, API-key based configuration, one-shot requests, RAM-only sessions, session compression, persistent history, model-list caching and refresh, model probing, Markdown rendering, file/text/image input, clipboard screenshots, diffs, output saving/copying, OpenAI-compatible streaming, reasoning display, request inspection and raw-response mode.
+The current beta includes the native readline/TUI, built-in providers, API-key based configuration, one-shot requests, RAM-only sessions that can be enabled on demand and exported to a file, session compression, persistent history, model-list caching and refresh, model probing, Markdown rendering, file/text/image input, clipboard screenshots, diffs, output saving/copying, OpenAI-compatible streaming, reasoning display, request inspection and raw-response mode.
 
 ### Not yet done
 
