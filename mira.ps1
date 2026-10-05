@@ -3444,7 +3444,7 @@ function Write-MarkupText([string]$Text){
                 # close on a later line. This covers:
                 # $$E = mc^2$$
                 # $$A = \begin{pmatrix ... \end{pmatrix}$$
-                if($safeLine.TrimStart().StartsWith('$')){
+                if($safeLine.TrimStart().StartsWith(([string][char]36)+([string][char]36))){
                     if($tableBuffer.Count -gt 0){
                         try{Write-MarkupTable @($tableBuffer)}catch{foreach($t in @($tableBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
                         $tableBuffer.Clear()
