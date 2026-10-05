@@ -2,6 +2,38 @@
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# Windows 7 Explorer's "Run with PowerShell" verb on this machine passes the
+# legacy execution-policy wrapper after -File. That makes an interactive TUI
+# run inside a short-lived Explorer-launched PowerShell host. Detect only that
+# exact signature and relaunch once in a persistent console.
+$rawStartupArgs=@($args | ForEach-Object {[string]$_})
+$script:MiraExplorerLaunch=$false
+if(
+    $rawStartupArgs.Count -ge 2 -and
+    $rawStartupArgs[0] -ieq '-Command' -and
+    $rawStartupArgs[1] -match '(?is)^\s*if\(\(Get-ExecutionPolicy\s*\)\s*-ne\s*AllSigned\s*\)\s*\{\s*Set-ExecutionPolicy\s*-Scope\s+Process\s+Bypass\s*\}\s*$'
+){
+    $script:MiraExplorerLaunch=$true
+}
+
+if($script:MiraExplorerLaunch){
+    $self=$PSCommandPath
+    if([string]::IsNullOrWhiteSpace($self)){$self=$MyInvocation.MyCommand.Path}
+    try{
+        $psExe=Join-Path $PSHOME 'powershell.exe'
+        $workDir=Split-Path -Parent $self
+        $quotedSelf='"'+($self -replace '"','\"')+'"'
+        $argLine='-NoExit -NoProfile -File '+$quotedSelf+' --mira-console'
+        Start-Process -FilePath $psExe -ArgumentList $argLine -WorkingDirectory $workDir | Out-Null
+        exit 0
+    }catch{
+        Write-Host ('[startup] Explorer launch bootstrap failed: '+$_.Exception.Message) -ForegroundColor Red
+        Write-Host ''
+        Read-Host 'Press Enter to close'
+        exit 1
+    }
+}
+
 $script:MiraVersion = '0.1.0-beta.2'
 $script:MiraBuild = 'b90879230'
 
@@ -4425,33 +4457,9 @@ function Read-Line {
         }
     }
 }
-$rawCliArgs=@($args | ForEach-Object {[string]$_})
-
-# Windows 7 "Run with PowerShell" can invoke .ps1 with the legacy
-# association suffix:
-#   -File "%1" "-Command" "if((Get-ExecutionPolicy ) -ne AllSigned) { ... }"
-# With -File, those values become script arguments. They are Explorer's
-# execution-policy wrapper, not MIRA CLI arguments, so strip that exact
-# suffix before normal CLI parsing. Do not broadly swallow arbitrary
-# -Command arguments.
-$cliArgs=New-Object System.Collections.Generic.List[string]
-$i=0
-while($i -lt $rawCliArgs.Count){
-    $arg=$rawCliArgs[$i]
-    if(
-        $arg -eq '-Command' -and
-        ($i + 1) -lt $rawCliArgs.Count -and
-        [string]$rawCliArgs[$i + 1] -match '(?i)^if((Get-ExecutionPolicy\s*\)\s*-ne\s*AllSigned\)'
-    ){
-        $i+=2
-        continue
-    }
-    [void]$cliArgs.Add($arg)
-    ++$i
-}
-
+$cliArgs=@($args | ForEach-Object {[string]$_})
 if($cliArgs.Count -gt 0){
-    foreach($arg in @($cliArgs)){
+    foreach($arg in $cliArgs){
         if($arg -eq '--mira-console'){
             continue
         }
