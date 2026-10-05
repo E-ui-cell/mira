@@ -2,59 +2,6 @@
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-function Write-MiraStartupTrace([string]$Text){
-    $stamp=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
-    $line=$stamp+' '+[string]$Text
-    $paths=New-Object System.Collections.Generic.List[string]
-    foreach($root in @($env:TEMP,$env:LOCALAPPDATA,(Split-Path -Parent $MyInvocation.MyCommand.Path))){
-        if(-not [string]::IsNullOrWhiteSpace([string]$root)){
-            $path=Join-Path ([string]$root) 'mira-startup.log'
-            if(-not $paths.Contains($path)){[void]$paths.Add($path)}
-        }
-    }
-    foreach($path in @($paths)){try{Add-Content -LiteralPath $path -Value $line -ErrorAction Stop}catch{}}
-}
-
-function Get-MiraParentProcessName(){
-    try{
-        $me=Get-WmiObject Win32_Process -Filter ('ProcessId='+[int]$PID) -ErrorAction Stop
-        if($null -eq $me -or $null -eq $me.ParentProcessId){return ''}
-        $parent=Get-WmiObject Win32_Process -Filter ('ProcessId='+[int]$me.ParentProcessId) -ErrorAction Stop
-        if($null -ne $parent){return [string]$parent.Name}
-    }catch{}
-    return ''
-}
-
-$script:MiraConsoleBootstrap=($args -contains '--mira-console')
-$script:MiraParentProcess=Get-MiraParentProcessName
-Write-MiraStartupTrace (
-    'pid='+$PID+
-    ' ps='+$PSVersionTable.PSVersion.ToString()+
-    ' host='+[string]$Host.Name+
-    ' interactive='+[string][Environment]::UserInteractive+
-    ' inputRedirected='+[string][Console]::IsInputRedirected+
-    ' outputRedirected='+[string][Console]::IsOutputRedirected+
-    ' parent='+$script:MiraParentProcess+
-    ' args='+(@($args) -join '|')+
-    ' cwd='+[string](Get-Location).Path+
-    ' script='+[string]$PSCommandPath
-)
-if(-not $script:MiraConsoleBootstrap -and $script:MiraParentProcess -ieq 'explorer.exe'){
-    $self=$PSCommandPath
-    if([string]::IsNullOrWhiteSpace($self)){$self=$MyInvocation.MyCommand.Path}
-    Write-MiraStartupTrace ('explorer launch detected; relaunching with -NoExit')
-    try{
-        $psExe=Join-Path $PSHOME 'powershell.exe'
-        $workDir=Split-Path -Parent $self
-        $quoted='"'+($self -replace '"','\"')+'"'
-        Start-Process -FilePath $psExe -ArgumentList @('-NoExit','-File',$quoted,'--mira-console') -WorkingDirectory $workDir | Out-Null
-        exit 0
-    }catch{
-        Write-MiraStartupTrace ('relaunch failed: '+[string]$_.Exception)
-        throw
-    }
-}
-
 $script:MiraVersion = '0.1.0-beta.2'
 $script:MiraBuild = 'b90879230'
 
