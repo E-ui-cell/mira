@@ -4485,8 +4485,14 @@ W ('OpenAI-compatible stream: ' + $(if($script:StreamResponses){'on'}else{'off'}
 W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
 W ('Used models: ' + $script:UsedModelsCacheFile + ' • learned from successful text replies/probes') DarkGray
 W ''
+$script:MiraConsoleInputConfigured=$false
 try{
-    [Console]::TreatControlCAsInput=$true
+    try{
+        if($Host.Name -ne 'Windows PowerShell ISE Host'){
+            [Console]::TreatControlCAsInput=$true
+            $script:MiraConsoleInputConfigured=$true
+        }
+    }catch{}
     while($script:Running){
         Reset-TuiHistorySearch;Clear-Menu
         $line=Read-Line (Row)
@@ -4496,4 +4502,9 @@ try{
             try{ W ('[command error] '+$_.Exception.Message) Red }catch{}
         }
     }
-}finally{Save-TuiHistory;try{[Console]::TreatControlCAsInput=$false}catch{}}
+}finally{
+    Save-TuiHistory
+    if($script:MiraConsoleInputConfigured){
+        try{[Console]::TreatControlCAsInput=$false}catch{}
+    }
+}
