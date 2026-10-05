@@ -2,29 +2,40 @@
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-function Test-MiraInteractiveConsole(){
+function Get-MiraParentProcessName(){
     try{
-        if([Console]::IsInputRedirected -or [Console]::IsOutputRedirected){return $false}
-        [void][Console]::WindowWidth
-        [void][Console]::WindowHeight
-        [void][Console]::CursorTop
-        return $true
-    }catch{return $false}
+        $me=Get-WmiObject Win32_Process -Filter ('ProcessId='+[int]$PID) -ErrorAction Stop
+        if($null -eq $me -or $null -eq $me.ParentProcessId){return ''}
+        $parent=Get-WmiObject Win32_Process -Filter ('ProcessId='+[int]$me.ParentProcessId) -ErrorAction Stop
+        if($null -ne $parent){return [string]$parent.Name}
+    }catch{}
+    return ''
+}
+
+function Write-MiraStartupTrace([string]$Text){
+    try{
+        $root=$env:TEMP
+        if([string]::IsNullOrWhiteSpace($root)){$root=$env:LOCALAPPDATA}
+        if([string]::IsNullOrWhiteSpace($root)){$root=Split-Path -Parent $MyInvocation.MyCommand.Path}
+        $path=Join-Path $root 'mira-startup.log'
+        Add-Content -LiteralPath $path -Value ([string]$Text) -ErrorAction Stop
+    }catch{}
 }
 
 $script:MiraConsoleBootstrap=($args -contains '--mira-console')
-if(-not $script:MiraConsoleBootstrap -and -not (Test-MiraInteractiveConsole)){
+$script:MiraParentProcess=Get-MiraParentProcessName
+if(-not $script:MiraConsoleBootstrap -and $script:MiraParentProcess -ieq 'explorer.exe'){
     $self=$PSCommandPath
     if([string]::IsNullOrWhiteSpace($self)){$self=$MyInvocation.MyCommand.Path}
+    Write-MiraStartupTrace ('explorer launch detected; pid='+$PID+' parent='+$script:MiraParentProcess+' host='+$Host.Name)
     try{
         $psExe=Join-Path $PSHOME 'powershell.exe'
         $workDir=Split-Path -Parent $self
-        $argLine='-NoExit -File "'+($self -replace '"','\"')+'" --mira-console'
-        Start-Process -FilePath $psExe -ArgumentList $argLine -WorkingDirectory $workDir | Out-Null
+        $quoted='"'+($self -replace '"','\"')+'"'
+        Start-Process -FilePath $psExe -ArgumentList @('-NoExit','-File',$quoted,'--mira-console') -WorkingDirectory $workDir | Out-Null
         exit 0
     }catch{
-        $log=Join-Path $env:TEMP 'mira-startup-error.log'
-        try{ [IO.File]::WriteAllText($log,([string]$_.Exception)+'`r`n') }catch{}
+        Write-MiraStartupTrace ('relaunch failed: '+[string]$_.Exception)
         throw
     }
 }
