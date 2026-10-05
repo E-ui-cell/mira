@@ -4180,6 +4180,8 @@ try{
         Add-TuiHistory $line;Save-TuiHistory
         try{ Handle $line }catch{
             try{ W ('[command error] '+$_.Exception.Message) Red }catch{}
+        }finally{
+            $script:ResponseAnchorRow=-1
         }
     }
 }finally{
