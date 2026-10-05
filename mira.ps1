@@ -91,7 +91,7 @@ $script:ModelMenuIndex = 0
 $script:ModelMenuTyped = ''
 
 $script:Commands = @(
-    '.help','.clear','.clear history','.history','.history persist on','.history persist off','.file','.read','.diff','.shot','.model','.models','.models test','.providers','.request','.request json','.save','.copy','.grab','.ui','.stream','.reasoning','.session','.empty session','.compress session','.delete session','.q',':q',':wq'
+    '.help','.clear','.clear history','.history','.history persist on','.history persist off','.file','.read','.diff','.shot','.model','.models','.models test','.providers','.request','.request json','.save','.copy','.grab','.ui','.stream','.reasoning','.enable-session','.export-session','.empty session','.compress session','.delete session','.q',':q',':wq'
 )
 
 # -----------------------------------------------------------------------------
@@ -1853,6 +1853,78 @@ function Compress-Session(){
     }
 }
 
+function Export-Session([string]$Name=''){
+    if(-not $script:SessionActive){W '[no active session]' Yellow;return $false}
+
+    try{
+        $base=if([string]::IsNullOrWhiteSpace($Name)){'mira_session_'+(Get-Date -Format 'yyyyMMdd_HHmmss')}else{$Name.Trim()}
+        if([IO.Path]::GetExtension($base)){
+            $ext=[IO.Path]::GetExtension($base)
+            $stem=[IO.Path]::GetFileNameWithoutExtension($base)
+        }else{
+            $ext='.md'
+            $stem=$base
+        }
+
+        $path=Get-UniqueSavePath $stem $ext
+        $lines=New-Object System.Collections.Generic.List[string]
+        [void]$lines.Add('# MIRA Session')
+        [void]$lines.Add('')
+        [void]$lines.Add('- Session: '+$script:SessionName)
+        [void]$lines.Add('- Provider: '+$script:CurrentProviderName)
+        [void]$lines.Add('- Model: '+$script:CurrentModel)
+        [void]$lines.Add('- Exported: '+(Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+        [void]$lines.Add('- Messages: '+$script:Conversation.Count)
+        [void]$lines.Add('')
+
+        if(-not [string]::IsNullOrWhiteSpace([string]$script:SessionSummary)){
+            [void]$lines.Add('## Compressed summary')
+            [void]$lines.Add('')
+            [void]$lines.Add([string]$script:SessionSummary)
+            [void]$lines.Add('')
+        }
+
+        [void]$lines.Add('## Conversation')
+        [void]$lines.Add('')
+
+        foreach($m in @($script:Conversation)){
+            $role=([string]$m.role).ToLowerInvariant()
+            $heading=switch($role){
+                'user' {'User'}
+                'assistant' {'Assistant'}
+                default {[string]$m.role}
+            }
+            [void]$lines.Add('### '+$heading)
+            [void]$lines.Add('')
+            [void]$lines.Add([string]$m.text)
+
+            if($null -ne $m.parts){
+                foreach($part in @($m.parts)){
+                    if($null -ne $part.kind -and [string]$part.kind -eq 'image'){
+                        $mime=if($null -ne $part.mimeType){[string]$part.mimeType}else{'image'}
+                        [void]$lines.Add('')
+                        [void]$lines.Add('[image attachment: '+$mime+']')
+                    }
+                }
+            }
+
+            if($null -ne $m.reasoning_details -and @($m.reasoning_details).Count -gt 0){
+                [void]$lines.Add('')
+                [void]$lines.Add('> Reasoning details were present in the session record.')
+            }
+
+            [void]$lines.Add('')
+        }
+
+        [IO.File]::WriteAllLines($path,$lines.ToArray(),(New-Object System.Text.UTF8Encoding($true)))
+        W ('[Session exported: '+(Split-Path -Leaf $path)+']') Green
+        return $true
+    }catch{
+        W ('[session export error] '+$_.Exception.Message) Red
+        return $false
+    }
+}
+
 function Start-Session([string]$name){
     $script:SessionActive=$true
     $script:SessionName=if([string]::IsNullOrWhiteSpace($name)){'temp'}else{$name.Trim()}
@@ -3410,7 +3482,7 @@ function Help(){
     W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
     W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
     Show-ApiKeyStatus
-    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <Tab>              refresh only providers with a non-empty API key env' DarkGray; W '  .models test               pre-filter fetched models, probe API, learn successful text models into used.list' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .session [name]            begin RAM-only context session' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live OpenAI-compatible streaming' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
+    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <Tab>              refresh only providers with a non-empty API key env' DarkGray; W '  .models test               pre-filter fetched models, probe API, learn successful text models into used.list' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live OpenAI-compatible streaming' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
 }
 
 function Add-Message($role,$text,$reasoningDetails=$null,$parts=$null){
@@ -3692,8 +3764,9 @@ function Handle($line){
     if($t -in @('.stream on','.stream off')){$script:StreamResponses=($t -eq '.stream on');W ('[stream '+$(if($script:StreamResponses){'on'}else{'off'})+']') Cyan;return}
     if($t -eq '.reasoning'){W ('[reasoning] '+$(if($script:ShowReasoning){'on'}else{'off'})) Cyan;return}
     if($t -in @('.reasoning on','.reasoning off')){$script:ShowReasoning=($t -eq '.reasoning on');W ('[reasoning '+$(if($script:ShowReasoning){'on'}else{'off'})+']') Cyan;return}
-    if($t -eq '.session'){Start-Session '';return}
-    if($t.StartsWith('.session ')){Start-Session ($t.Substring(9));return}
+    if($t -eq '.enable-session'){Start-Session '';return}
+    if($t.StartsWith('.enable-session ')){Start-Session ($t.Substring(16));return}
+    if($t -eq '.export-session' -or $t.StartsWith('.export-session ')){[void](Export-Session (($t.Substring(15)).Trim()));return}
     if($t -eq '.empty session'){Empty-Session;return}
     if($t -eq '.compress session'){[void](Compress-Session);return}
     if($t -eq '.delete session'){Exit-Session;return}
@@ -4159,7 +4232,7 @@ Load-Providers
 Load-TuiHistory
 W 'MIRA-TUI / SLIM PROVIDERS' Cyan
 W ('Own readline • no PSReadLine • Tab • history • multiline • attachments • model: ' + $script:CurrentProviderName + ':' + $script:CurrentModel) DarkGray
-W ('Session: off (one-shot requests) • .session enables RAM context • compress threshold: ' + $script:CompressThreshold) DarkGray
+W ('Session: off (one-shot requests) • .enable-session enables RAM context • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
 W ('History persistence: ' + $(if($script:PersistHistory){$script:HistoryFile}else{'OFF (RAM only)'}) + ' • loaded last ' + $script:HistoryLoadLimit + ' entries • .history persist on/off') DarkGray
 W ('OpenAI-compatible stream: ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning: ' + $(if($script:ShowReasoning){'on'}else{'off'})) DarkGray
 W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
