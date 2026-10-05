@@ -2370,88 +2370,100 @@ function Convert-MiraSubscript([string]$Text){
 function Parse-MiraInline([string]$Line){
     if($null -eq $Line){return @()}
     $s=[string]$Line;$out=New-Object System.Collections.Generic.List[object]
-    $normalFg=[string]$script:MarkupTheme.InlineTextRGB
-    $state=Get-MiraInlineState $normalFg '' 0 ''
+    $state=Get-MiraInlineState ([string]$script:MarkupTheme.InlineTextRGB) '' 0 ''
     $stack=New-Object System.Collections.Generic.Stack[object]
-    $pattern='(<!--.*?-->)|(\*\*([^*\r\n]+)\*\*|__([^_\r\n]+)__|~~([^~\r\n]+)~~|\x60([^\x60\r\n]+)\x60|(?<!\$)\$([^$\r\n]+)\$(?!\$)|\[([^\]]+)\]\(([^\)]+)\)|(?<!\*)\*([^*\r\n]+)\*(?!\*)|(?<![A-Za-z0-9_])_([^_\r\n]+)_(?![A-Za-z0-9_]))|(<(/?)(b|strong|i|em|u|s|strike|del|code|mark|kbd|sup|sub|small|a|br|hr|img)(?:\s+([^>]*?))?\s*/?>)'
-    try{$matches=[regex]::Matches($s,$pattern)}catch{return @(New-MiraInlineSpan $s $normalFg)}
-    $pos=0
-    foreach($m in $matches){
-        if($m.Index -gt $pos){
-            $plain=$s.Substring($pos,$m.Index-$pos)
-            if($state.Mode -eq 'sup'){$plain=Convert-MiraSuperscript $plain}
-            elseif($state.Mode -eq 'sub'){$plain=Convert-MiraSubscript $plain}
-            [void]$out.Add((New-MiraInlineSpan $plain $state.Fg $state.Bg $state.Attr))
-        }
-        if($m.Groups[1].Success){$pos=$m.Index+$m.Length;continue}
-        if($m.Groups[2].Success){
-            $fg=[string]$state.Fg;$bg=[string]$state.Bg;$attr=[int]$state.Attr;$value=''
-            if($m.Groups[3].Success){$value=$m.Groups[3].Value;$fg=[string]$script:MarkupTheme.InlineBoldRGB;$attr=$attr -bor 1}
-            elseif($m.Groups[4].Success){$value=$m.Groups[4].Value;$fg=[string]$script:MarkupTheme.InlineBoldRGB;$attr=$attr -bor 1}
-            elseif($m.Groups[5].Success){$value=$m.Groups[5].Value;$fg=[string]$script:MarkupTheme.InlineStrikeRGB;$attr=$attr -bor 9}
-            elseif($m.Groups[6].Success){$value=$m.Groups[6].Value;$fg=[string]$script:MarkupTheme.InlineCodeRGB;$bg=[string]$script:MarkupTheme.InlineCodeBG;$attr=0}
-            elseif($m.Groups[7].Success){$value=Convert-LatexToUnicode $m.Groups[7].Value;$fg=[string]$script:MarkupTheme.MathTextColor}
-            elseif($m.Groups[8].Success){$value=$m.Groups[8].Value;$fg=[string]$script:MarkupTheme.InlineLinkRGB;$attr=$attr -bor 4}
-            elseif($m.Groups[9].Success){$value=$m.Groups[9].Value;$fg=[string]$script:MarkupTheme.InlineItalicRGB;$attr=$attr -bor 3}
-            elseif($m.Groups[10].Success){$value=$m.Groups[10].Value;$fg=[string]$script:MarkupTheme.InlineItalicRGB;$attr=$attr -bor 3}
-            if($value.Length -gt 0){[void]$out.Add((New-MiraInlineSpan $value $fg $bg $attr))}
-            $pos=$m.Index+$m.Length;continue
-        }
-        if($m.Groups[11].Success){
-            $closing=($m.Groups[12].Value -eq '/');$name=$m.Groups[13].Value.ToLowerInvariant();$attrs=[string]$m.Groups[14].Value
-            if($closing){
-                if($stack.Count -gt 0){
-                    while($stack.Count -gt 0){
-                        $entry=$stack.Pop();$state=$entry.State
-                        if([string]$entry.Tag -eq $name){break}
-                    }
-                }
-            }else{
-                if($name -in @('br','hr','img')){
-                    $glyph='';$fg=[string]$state.Fg;$bg=[string]$state.Bg;$attr=[int]$state.Attr
-                    switch($name){
-                        'br' {$glyph='↵';$fg=[string]$script:MarkupTheme.InlineTagRGB}
-                        'hr' {$glyph='─';$fg=[string]$script:MarkupTheme.MathFrameRGB}
-                        'img' {
-                            $alt=''
-                            if($attrs -match '(?i)\balt\s*=\s*["'']([^"'']*)["'']'){$alt=$Matches[1]}
-                            $glyph=if([string]::IsNullOrWhiteSpace($alt)){'🖼'}else{'🖼 '+$alt};$fg=[string]$script:MarkupTheme.InlineTagRGB
-                        }
-                    }
-                    [void]$out.Add((New-MiraInlineSpan $glyph $fg $bg $attr))
-                }else{
-                    [void]$stack.Push([pscustomobject]@{Tag=$name;State=$state})
-                    $next=Get-MiraInlineState $state.Fg $state.Bg $state.Attr $state.Mode
-                    switch($name){
-                        'b' {$next.Fg=[string]$script:MarkupTheme.InlineBoldRGB;$next.Attr=$next.Attr -bor 1}
-                        'strong' {$next.Fg=[string]$script:MarkupTheme.InlineBoldRGB;$next.Attr=$next.Attr -bor 1}
-                        'i' {$next.Fg=[string]$script:MarkupTheme.InlineItalicRGB;$next.Attr=$next.Attr -bor 3}
-                        'em' {$next.Fg=[string]$script:MarkupTheme.InlineItalicRGB;$next.Attr=$next.Attr -bor 3}
-                        'u' {$next.Fg=[string]$script:MarkupTheme.InlineUnderlineRGB;$next.Attr=$next.Attr -bor 4}
-                        's' {$next.Fg=[string]$script:MarkupTheme.InlineStrikeRGB;$next.Attr=$next.Attr -bor 9}
-                        'strike' {$next.Fg=[string]$script:MarkupTheme.InlineStrikeRGB;$next.Attr=$next.Attr -bor 9}
-                        'del' {$next.Fg=[string]$script:MarkupTheme.InlineStrikeRGB;$next.Attr=$next.Attr -bor 9}
-                        'code' {$next.Fg=[string]$script:MarkupTheme.InlineCodeRGB;$next.Bg=[string]$script:MarkupTheme.InlineCodeBG;$next.Attr=0}
-                        'mark' {$next.Fg=[string]$script:MarkupTheme.InlineMarkRGB;$next.Bg=[string]$script:MarkupTheme.InlineMarkBG}
-                        'kbd' {$next.Fg=[string]$script:MarkupTheme.InlineKbdRGB;$next.Bg=[string]$script:MarkupTheme.InlineKbdBG;$next.Attr=$next.Attr -bor 1}
-                        'sup' {$next.Mode='sup'}
-                        'sub' {$next.Mode='sub'}
-                        'small' {$next.Attr=$next.Attr -bor 2}
-                        'a' {$next.Fg=[string]$script:MarkupTheme.InlineLinkRGB;$next.Attr=$next.Attr -bor 4}
-                    }
-                    $state=$next
+    $emit={param([string]$Text,[string]$Fg,[string]$Bg,[int]$Attr,[string]$Mode)
+        if([string]::IsNullOrEmpty($Text)){return}
+        $v=[string]$Text
+        if($Mode -eq 'sup'){$v=Convert-MiraSuperscript $v}elseif($Mode -eq 'sub'){$v=Convert-MiraSubscript $v}
+        [void]$out.Add((New-MiraInlineSpan $v $Fg $Bg $Attr))
+    }
+    $tags=@('b','strong','i','em','u','s','strike','del','code','mark','kbd','sup','sub','small','a','br','hr','img')
+    $pos=0;$plainStart=0
+    while($pos -lt $s.Length){
+        $kind='';$end=$pos;$value='';$tagClosing=$false;$tag=''
+        if($s[$pos] -eq '<'){
+            if($s.Substring($pos).StartsWith('<!--')){
+                $ce=$s.IndexOf('-->',$pos+4)
+                if($ce -ge 0){
+                    if($pos -gt $plainStart){&$emit $s.Substring($plainStart,$pos-$plainStart) $state.Fg $state.Bg $state.Attr $state.Mode}
+                    $pos=$ce+3;$plainStart=$pos;continue
                 }
             }
-            $pos=$m.Index+$m.Length;continue
+            $gt=$s.IndexOf('>',$pos+1)
+            if($gt -gt $pos){
+                $raw=$s.Substring($pos+1,$gt-$pos-1).Trim()
+                if($raw.StartsWith('/')){$tagClosing=$true;$raw=$raw.Substring(1).Trim()}
+                if($raw.EndsWith('/')){$raw=$raw.Substring(0,$raw.Length-1).Trim()}
+                $n=0;while($n -lt $raw.Length -and (([char]::IsLetterOrDigit($raw[$n])) -or $raw[$n] -eq ':')){++$n}
+                if($n -gt 0){$tag=$raw.Substring(0,$n).ToLowerInvariant();if($tags -contains $tag){$kind='tag';$end=$gt+1;$value=$raw}}
+            }
         }
-        $pos=$m.Index+$m.Length
+        if($kind -eq '' -and $s[$pos] -eq [char]96){
+            $q=$s.IndexOf([char]96,$pos+1);if($q -gt $pos+1){$kind='code';$end=$q+1;$value=$s.Substring($pos+1,$q-$pos-1)}
+        }
+        if($kind -eq '' -and $s[$pos] -eq '$' -and ($pos+1 -ge $s.Length -or $s[$pos+1] -ne '$')){
+            $q=$s.IndexOf('$',$pos+1);if($q -gt $pos+1){$kind='math';$end=$q+1;$value=$s.Substring($pos+1,$q-$pos-1)}
+        }
+        if($kind -eq '' -and ($s.Substring($pos).StartsWith('**') -or $s.Substring($pos).StartsWith('__'))){
+            $d=$s.Substring($pos,2);$q=$s.IndexOf($d,$pos+2);if($q -gt $pos+2){$kind='bold';$end=$q+2;$value=$s.Substring($pos+2,$q-$pos-2)}
+        }
+        if($kind -eq '' -and $s.Substring($pos).StartsWith('~~')){
+            $q=$s.IndexOf('~~',$pos+2);if($q -gt $pos+2){$kind='strike';$end=$q+2;$value=$s.Substring($pos+2,$q-$pos-2)}
+        }
+        if($kind -eq '' -and ($s[$pos] -eq '*' -or $s[$pos] -eq '_')){
+            $d=[string]$s[$pos];$open=($pos+1 -lt $s.Length -and -not [char]::IsWhiteSpace($s[$pos+1]))
+            if($d -eq '_' -and $pos -gt 0 -and [char]::IsLetterOrDigit($s[$pos-1])){$open=$false}
+            if($open){$q=$s.IndexOf($d,$pos+1);if($q -gt $pos+1){$close=($q+1 -ge $s.Length -or -not [char]::IsLetterOrDigit($s[$q+1]));if($close){$kind='italic';$end=$q+1;$value=$s.Substring($pos+1,$q-$pos-1)}}}
+        }
+        if($kind -eq '' -and $s[$pos] -eq '['){
+            $mid=$s.IndexOf('](',$pos+1);if($mid -gt $pos+1){$q=$s.IndexOf(')',$mid+2);if($q -gt $mid+2){$kind='link';$end=$q+1;$value=$s.Substring($pos+1,$mid-$pos-1)}}
+        }
+        if($kind -ne ''){
+            if($pos -gt $plainStart){&$emit $s.Substring($plainStart,$pos-$plainStart) $state.Fg $state.Bg $state.Attr $state.Mode}
+            switch($kind){
+                'code'   {&$emit $value ([string]$script:MarkupTheme.InlineCodeRGB) ([string]$script:MarkupTheme.InlineCodeBG) 0 ''}
+                'math'   {&$emit (Convert-LatexToUnicode $value) ([string]$script:MarkupTheme.MathTextColor) $state.Bg $state.Attr $state.Mode}
+                'bold'   {&$emit $value ([string]$script:MarkupTheme.InlineBoldRGB) $state.Bg ($state.Attr -bor 1) $state.Mode}
+                'strike' {&$emit $value ([string]$script:MarkupTheme.InlineStrikeRGB) $state.Bg ($state.Attr -bor 9) $state.Mode}
+                'italic' {&$emit $value ([string]$script:MarkupTheme.InlineItalicRGB) $state.Bg ($state.Attr -bor 3) $state.Mode}
+                'link'   {&$emit $value ([string]$script:MarkupTheme.InlineLinkRGB) $state.Bg ($state.Attr -bor 4) $state.Mode}
+                'tag' {
+                    if($tagClosing){
+                        if($stack.Count -gt 0){while($stack.Count -gt 0){$e=$stack.Pop();$state=$e.State;if([string]$e.Tag -eq $tag){break}}}
+                    }elseif($tag -in @('br','hr','img')){
+                        $glyph=if($tag -eq 'br'){'↵'}elseif($tag -eq 'hr'){'─'}else{'[image]'}
+                        $fg=if($tag -eq 'hr'){$script:MarkupTheme.MathFrameRGB}else{$script:MarkupTheme.InlineTagRGB}
+                        &$emit $glyph ([string]$fg) $state.Bg $state.Attr $state.Mode
+                    }else{
+                        [void]$stack.Push([pscustomobject]@{Tag=$tag;State=$state})
+                        $next=Get-MiraInlineState $state.Fg $state.Bg $state.Attr $state.Mode
+                        switch($tag){
+                            'b' {$next.Fg=$script:MarkupTheme.InlineBoldRGB;$next.Attr=$next.Attr-bor 1}
+                            'strong' {$next.Fg=$script:MarkupTheme.InlineBoldRGB;$next.Attr=$next.Attr-bor 1}
+                            'i' {$next.Fg=$script:MarkupTheme.InlineItalicRGB;$next.Attr=$next.Attr-bor 3}
+                            'em' {$next.Fg=$script:MarkupTheme.InlineItalicRGB;$next.Attr=$next.Attr-bor 3}
+                            'u' {$next.Fg=$script:MarkupTheme.InlineUnderlineRGB;$next.Attr=$next.Attr-bor 4}
+                            's' {$next.Fg=$script:MarkupTheme.InlineStrikeRGB;$next.Attr=$next.Attr-bor 9}
+                            'strike' {$next.Fg=$script:MarkupTheme.InlineStrikeRGB;$next.Attr=$next.Attr-bor 9}
+                            'del' {$next.Fg=$script:MarkupTheme.InlineStrikeRGB;$next.Attr=$next.Attr-bor 9}
+                            'code' {$next.Fg=$script:MarkupTheme.InlineCodeRGB;$next.Bg=$script:MarkupTheme.InlineCodeBG;$next.Attr=0}
+                            'mark' {$next.Fg=$script:MarkupTheme.InlineMarkRGB;$next.Bg=$script:MarkupTheme.InlineMarkBG}
+                            'kbd' {$next.Fg=$script:MarkupTheme.InlineKbdRGB;$next.Bg=$script:MarkupTheme.InlineKbdBG;$next.Attr=$next.Attr-bor 1}
+                            'sup' {$next.Mode='sup'}
+                            'sub' {$next.Mode='sub'}
+                            'small' {$next.Attr=$next.Attr-bor 2}
+                            'a' {$next.Fg=$script:MarkupTheme.InlineLinkRGB;$next.Attr=$next.Attr-bor 4}
+                        }
+                        $state=$next
+                    }
+                }
+            }
+            $pos=$end;$plainStart=$pos;continue
+        }
+        ++$pos
     }
-    if($pos -lt $s.Length){
-        $plain=$s.Substring($pos)
-        if($state.Mode -eq 'sup'){$plain=Convert-MiraSuperscript $plain}
-        elseif($state.Mode -eq 'sub'){$plain=Convert-MiraSubscript $plain}
-        [void]$out.Add((New-MiraInlineSpan $plain $state.Fg $state.Bg $state.Attr))
-    }
+    if($plainStart -lt $s.Length){&$emit $s.Substring($plainStart) $state.Fg $state.Bg $state.Attr $state.Mode}
     return @($out)
 }
 
