@@ -3113,34 +3113,99 @@ function Write-DotRule([int]$width,[ConsoleColor]$color){
     else{Write-MarkupPlainLine '' $color}
 }
 
+function Get-MiraLatexGroup([string]$Text,[int]$OpenIndex){
+    if($null -eq $Text -or $OpenIndex -lt 0 -or $OpenIndex -ge $Text.Length -or $Text[$OpenIndex] -ne '{'){return $null}
+    $depth=0
+    for($i=$OpenIndex;$i -lt $Text.Length;++$i){
+        if($Text[$i] -eq '{'){$depth++}
+        elseif($Text[$i] -eq '}'){$depth--;if($depth -eq 0){return [pscustomobject]@{End=$i;Text=$Text.Substring($OpenIndex+1,$i-$OpenIndex-1)}}}
+    }
+    return $null
+}
 function Convert-LatexToUnicode([string]$Expression){
     if($null -eq $Expression){return ''}
     $s=[string]$Expression
     try{
-        $s=$s -replace '\\left','' -replace '\\right',''
-        $s=$s -replace '\\begin\{(pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|aligned)\}','' -replace '\\end\{(pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|aligned)\}',''
-        $s=$s -replace '\\begin(pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|aligned)','' -replace '\\end(pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|aligned)',''
-        $s=$s -replace '&','  '
-        $s=$s -replace '\\\\','    '
-        $s=$s -replace '\\infty','∞' -replace '\\int','∫' -replace '\\sum','∑' -replace '\\prod','∏'
-        $s=[regex]::Replace($s,'\\sqrt\s*\{([^{}]*)\}',{param($m) ([char]0x221A).ToString()+$m.Groups[1].Value})
-        $s=$s -replace '\\pi','π' -replace '\\lambda','λ' -replace '\\mu','μ' -replace '\\sigma','σ'
-        $s=$s -replace '\\pm','±' -replace '\\mp','∓' -replace '\\partial','∂' -replace '\\nabla','∇' -replace '\\rho','ρ' -replace '\\varepsilon','ε' -replace '\\epsilon','ε' -replace '\\phi','φ' -replace '\\psi','ψ' -replace '\\omega','ω'
-        $s=$s -replace '\\mathbf\s*\{([^{}]*)\}','$1' -replace '\\mathbf(?=[A-Za-z])',''
-        $s=$s -replace '\\mathcal\s*\{([^{}]*)\}','$1' -replace '\\bar\s*\{([^{}]*)\}','$1'
-        $s=$s -replace '\\alpha','α' -replace '\\beta','β' -replace '\\gamma','γ' -replace '\\delta','δ' -replace '\\theta','θ'
-        $s=$s -replace '\\leq','≤' -replace '\\geq','≥' -replace '\\neq','≠' -replace '\\approx','≈' -replace '\\times','×'
-        $s=$s -replace '\\cdot','·' -replace '\\to','→' -replace '\\rightarrow','→'
-        $s=$s -replace '\\{','{' -replace '\\}','}' -replace '\\,',' ' -replace '\\;',' '
-        $sup=@{'0'='⁰';'1'='¹';'2'='²';'3'='³';'4'='⁴';'5'='⁵';'6'='⁶';'7'='⁷';'8'='⁸';'9'='⁹';'+'='⁺';'-'='⁻';'='='⁼';'('='⁽';')'='⁾';'a'='ᵃ';'b'='ᵇ';'c'='ᶜ';'d'='ᵈ';'e'='ᵉ';'f'='ᶠ';'g'='ᵍ';'h'='ʰ';'i'='ⁱ';'j'='ʲ';'k'='ᵏ';'l'='ˡ';'m'='ᵐ';'n'='ⁿ';'o'='ᵒ';'p'='ᵖ';'r'='ʳ';'s'='ˢ';'t'='ᵗ';'u'='ᵘ';'v'='ᵛ';'w'='ʷ';'x'='ˣ';'y'='ʸ';'z'='ᶻ'}
+        # Cheap literal command replacements first. No regex is used in the math hot path.
+        $replacements=@(
+            @('\left',''),@('\right',''),
+            @('\begin{pmatrix}',''),@('\end{pmatrix}',''),@('\begin{bmatrix}',''),@('\end{bmatrix}',''),
+            @('\begin{Bmatrix}',''),@('\end{Bmatrix}',''),@('\begin{vmatrix}',''),@('\end{vmatrix}',''),
+            @('\begin{Vmatrix}',''),@('\end{Vmatrix}',''),@('\begin{aligned}',''),@('\end{aligned}',''),
+            @('\begin(pmatrix',''),@('\end(pmatrix',''),@('\begin(bmatrix',''),@('\end(bmatrix',''),
+            @('\begin(Bmatrix',''),@('\end(Bmatrix',''),@('\begin(vmatrix',''),@('\end(vmatrix',''),
+            @('\begin(Vmatrix',''),@('\end(Vmatrix',''),@('\begin(aligned',''),@('\end(aligned',''),
+            @('\infty','∞'),@('\int','∫'),@('\sum','∑'),@('\prod','∏'),
+            @('\pi','π'),@('\lambda','λ'),@('\mu','μ'),@('\sigma','σ'),
+            @('\pm','±'),@('\mp','∓'),@('\partial','∂'),@('\nabla','∇'),
+            @('\rho','ρ'),@('\varepsilon','ε'),@('\epsilon','ε'),@('\phi','φ'),@('\psi','ψ'),@('\omega','ω'),
+            @('\alpha','α'),@('\beta','β'),@('\gamma','γ'),@('\delta','δ'),@('\theta','θ'),
+            @('\leq','≤'),@('\geq','≥'),@('\neq','≠'),@('\approx','≈'),@('\times','×'),
+            @('\cdot','·'),@('\rightarrow','→'),@('\to','→'),
+            @('\{','{'),@('\}','}'),@('\,',' '),@('\;',' ')
+        )
+        foreach($pair in $replacements){$s=$s.Replace([string]$pair[0],[string]$pair[1])}
+        $s=$s.Replace('&','  ').Replace('\\','    ')
+
+        # Simple named wrappers: keep their contents, discard the TeX wrapper.
+        foreach($name in @('\mathbf','\mathcal','\bar')){
+            while(($p=$s.IndexOf($name)) -ge 0){
+                $o=$p+$name.Length
+                while($o -lt $s.Length -and [char]::IsWhiteSpace($s[$o])){++$o}
+                if($o -ge $s.Length -or $s[$o] -ne '{'){break}
+                $g=Get-MiraLatexGroup $s $o;if($null -eq $g){break}
+                $s=$s.Substring(0,$p)+[string]$g.Text+$s.Substring($g.End+1)
+            }
+        }
+
+        # sqrt{...} -> √... ; frac{a}{b} -> (a)/(b).
+        while(($p=$s.IndexOf('\sqrt')) -ge 0){
+            $o=$p+5;while($o -lt $s.Length -and [char]::IsWhiteSpace($s[$o])){++$o}
+            if($o -ge $s.Length -or $s[$o] -ne '{'){break}
+            $g=Get-MiraLatexGroup $s $o;if($null -eq $g){break}
+            $s=$s.Substring(0,$p)+'√'+[string]$g.Text+$s.Substring($g.End+1)
+        }
+        while(($p=$s.IndexOf('\frac')) -ge 0){
+            $o=$p+5;while($o -lt $s.Length -and [char]::IsWhiteSpace($s[$o])){++$o}
+            if($o -ge $s.Length -or $s[$o] -ne '{'){break}
+            $a=Get-MiraLatexGroup $s $o;if($null -eq $a){break}
+            $o=$a.End+1;while($o -lt $s.Length -and [char]::IsWhiteSpace($s[$o])){++$o}
+            if($o -ge $s.Length -or $s[$o] -ne '{'){break}
+            $b=Get-MiraLatexGroup $s $o;if($null -eq $b){break}
+            $s=$s.Substring(0,$p)+'('+[string]$a.Text+')/('+[string]$b.Text+')'+$s.Substring($b.End+1)
+        }
+
+        $sup=@{'0'='⁰';'1'='¹';'2'='²';'3'='³';'4'='⁴';'5'='⁵';'6'='⁶';'7'='⁷';'8'='⁸';'9'='⁹';'+'='⁺';'-'='⁻';'='='⁼';'(' ='⁽';')'='⁾';'a'='ᵃ';'b'='ᵇ';'c'='ᶜ';'d'='ᵈ';'e'='ᵉ';'f'='ᶠ';'g'='ᵍ';'h'='ʰ';'i'='ⁱ';'j'='ʲ';'k'='ᵏ';'l'='ˡ';'m'='ᵐ';'n'='ⁿ';'o'='ᵒ';'p'='ᵖ';'r'='ʳ';'s'='ˢ';'t'='ᵗ';'u'='ᵘ';'v'='ᵛ';'w'='ʷ';'x'='ˣ';'y'='ʸ';'z'='ᶻ'}
         $sub=@{'0'='₀';'1'='₁';'2'='₂';'3'='₃';'4'='₄';'5'='₅';'6'='₆';'7'='₇';'8'='₈';'9'='₉';'+'='₊';'-'='₋';'='='₌';'('='₍';')'='₎';'a'='ₐ';'e'='ₑ';'h'='ₕ';'i'='ᵢ';'j'='ⱼ';'k'='ₖ';'l'='ₗ';'m'='ₘ';'n'='ₙ';'o'='ₒ';'p'='ₚ';'r'='ᵣ';'s'='ₛ';'t'='ₜ';'u'='ᵤ';'v'='ᵥ';'x'='ₓ'}
-        $s=[regex]::Replace($s,'\^\{([^{}]*)\}',{param($m) -join @($m.Groups[1].Value.ToCharArray() | ForEach-Object { if($sup.ContainsKey([string]$_)){$sup[[string]$_]}else{[string]$_} })})
-        $s=[regex]::Replace($s,'_\{([^{}]*)\}',{param($m) -join @($m.Groups[1].Value.ToCharArray() | ForEach-Object { if($sub.ContainsKey([string]$_)){$sub[[string]$_]}else{[string]$_} })})
-        $s=[regex]::Replace($s,'\^([0-9A-Za-z+\-=\(\)])',{param($m) $c=$m.Groups[1].Value.ToLowerInvariant();if($sup.ContainsKey($c)){$sup[$c]}else{'^'+$m.Groups[1].Value}})
-        $s=[regex]::Replace($s,'_([0-9A-Za-z+\-=\(\)])',{param($m) $c=$m.Groups[1].Value.ToLowerInvariant();if($sub.ContainsKey($c)){$sub[$c]}else{'_'+$m.Groups[1].Value}})
-        $s=$s -replace '\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}','($1)/($2)'
-        $s=$s -replace '\s{2,}',' '
-        $s=$s.Replace('{','').Replace('}','')
+
+        # Resolve braced powers/subscripts, then single-character forms.
+        foreach($pair in @(@('^',$sup),@('_',$sub))){
+            $mark=[string]$pair[0];$map=$pair[1]
+            while(($p=$s.IndexOf($mark+'{')) -ge 0){
+                $g=Get-MiraLatexGroup $s ($p+1);if($null -eq $g){break}
+                $buf=New-Object System.Text.StringBuilder
+                foreach($ch in ([string]$g.Text).ToCharArray()){if($map.ContainsKey([string]$ch)){[void]$buf.Append($map[[string]$ch])}else{[void]$buf.Append($ch)}}
+                $s=$s.Substring(0,$p)+$buf.ToString()+$s.Substring($g.End+1)
+            }
+        }
+        $buf=New-Object System.Text.StringBuilder
+        for($i=0;$i -lt $s.Length;){
+            if(($s[$i] -eq '^' -or $s[$i] -eq '_') -and $i+1 -lt $s.Length){
+                $map=if($s[$i] -eq '^'){$sup}else{$sub};$ch=[string]$s[$i+1].ToString().ToLowerInvariant()
+                if($map.ContainsKey($ch)){[void]$buf.Append($map[$ch]);$i+=2;continue}
+            }
+            [void]$buf.Append($s[$i]);++$i
+        }
+        $s=$buf.ToString().Replace('{','').Replace('}','')
+
+        # Collapse repeated whitespace without a regex.
+        $out=New-Object System.Text.StringBuilder;$spacePending=$false
+        foreach($ch in $s.ToCharArray()){
+            if([char]::IsWhiteSpace($ch)){if($out.Length -gt 0){$spacePending=$true};continue}
+            if($spacePending -and $out.Length -gt 0){[void]$out.Append(' ')}
+            [void]$out.Append($ch);$spacePending=$false
+        }
+        return $out.ToString()
     }catch{}
     return $s
 }
