@@ -2,10 +2,8 @@
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# Windows 7 Explorer's "Run with PowerShell" verb on this machine passes the
-# legacy execution-policy wrapper after -File. That makes an interactive TUI
-# run inside a short-lived Explorer-launched PowerShell host. Detect only that
-# exact signature and relaunch once in a persistent console.
+# Normalize the Windows 7 Explorer "Run with PowerShell" argument wrapper
+# before normal MIRA CLI argument parsing. No process relaunch is required.
 function Get-MiraCliArgs {
     param([object[]]$RawArgs)
 
