@@ -1733,6 +1733,7 @@ function Send-ProviderPayload($provider,$model,$payload){
         $script:LastRequestElapsedMs=[int]$sw.ElapsedMilliseconds
         $script:LastRequestFrame=$frames[[Math]::Max(0,$i-1) % $frames.Length]
 
+
         if($cancelled){
             try{$powershell.EndInvoke($asyncResult)|Out-Null}catch{}
             Write-Host ("`r" + (" " * 24) + "`r[Request cancelled]") -ForegroundColor Yellow
@@ -3000,7 +3001,8 @@ function End-MessageFrame(){
     if($script:MarkupFrameActive){
         $width=[Math]::Max(20,(Width))
         $boxWidth=$width-1
-        $bottom=[string]$script:MarkupTheme.MessageBottomLeft + ([string]$script:MarkupTheme.MessageHorizontal*[Math]::Max(0,$boxWidth-2)) + [string]$script:MarkupTheme.MessageBottomRight        Write-MiraFrameCells $bottom ([string]$script:MarkupTheme.MessageFrameRGB) ([ConsoleColor]$script:MarkupTheme.MessageFrameColor) $true
+        $bottom=[string]$script:MarkupTheme.MessageBottomLeft + ([string]$script:MarkupTheme.MessageHorizontal*[Math]::Max(0,$boxWidth-2)) + [string]$script:MarkupTheme.MessageBottomRight
+        Write-MiraFrameCells $bottom ([string]$script:MarkupTheme.MessageFrameRGB) ([ConsoleColor]$script:MarkupTheme.MessageFrameColor) $true
     }
 
     $script:MarkupFrameActive=$false
@@ -3999,7 +4001,8 @@ function Read-Line {
     $historyPos=$script:History.Count
     $draft=''
     $historySearch=$false
-    $historyPrefix=''    $historySearchPos=$script:History.Count
+    $historyPrefix=''
+    $historySearchPos=$script:History.Count
     $killRing=''
     $undoStack=New-Object System.Collections.Stack
     [Console]::Write((Get-TuiPrompt 0))
