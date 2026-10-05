@@ -2,6 +2,33 @@
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+function Test-MiraInteractiveConsole(){
+    try{
+        if([Console]::IsInputRedirected -or [Console]::IsOutputRedirected){return $false}
+        [void][Console]::WindowWidth
+        [void][Console]::WindowHeight
+        [void][Console]::CursorTop
+        return $true
+    }catch{return $false}
+}
+
+$script:MiraConsoleBootstrap=($args -contains '--mira-console')
+if(-not $script:MiraConsoleBootstrap -and -not (Test-MiraInteractiveConsole)){
+    $self=$PSCommandPath
+    if([string]::IsNullOrWhiteSpace($self)){$self=$MyInvocation.MyCommand.Path}
+    try{
+        $psExe=Join-Path $PSHOME 'powershell.exe'
+        $workDir=Split-Path -Parent $self
+        $argLine='-NoExit -File "'+($self -replace '"','\"')+'" --mira-console'
+        Start-Process -FilePath $psExe -ArgumentList $argLine -WorkingDirectory $workDir | Out-Null
+        exit 0
+    }catch{
+        $log=Join-Path $env:TEMP 'mira-startup-error.log'
+        try{ [IO.File]::WriteAllText($log,([string]$_.Exception)+'`r`n') }catch{}
+        throw
+    }
+}
+
 $script:MiraVersion = '0.1.0-beta.2'
 $script:MiraBuild = 'b90879230'
 
@@ -4428,6 +4455,9 @@ function Read-Line {
 $cliArgs=@($args | ForEach-Object {[string]$_})
 if($cliArgs.Count -gt 0){
     foreach($arg in $cliArgs){
+        if($arg -eq '--mira-console'){
+            continue
+        }
         if($arg -eq '-d' -or $arg -eq '--dry-run'){
             $script:DryRunMode=$true
             continue
