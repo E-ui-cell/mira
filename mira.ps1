@@ -4478,9 +4478,33 @@ function Read-Line {
         }
     }
 }
-$cliArgs=@($args | ForEach-Object {[string]$_})
+$rawCliArgs=@($args | ForEach-Object {[string]$_})
+
+# Windows 7 "Run with PowerShell" can invoke .ps1 with the legacy
+# association suffix:
+#   -File "%1" "-Command" "if((Get-ExecutionPolicy ) -ne AllSigned) { ... }"
+# With -File, those values become script arguments. They are Explorer's
+# execution-policy wrapper, not MIRA CLI arguments, so strip that exact
+# suffix before normal CLI parsing. Do not broadly swallow arbitrary
+# -Command arguments.
+$cliArgs=New-Object System.Collections.Generic.List[string]
+$i=0
+while($i -lt $rawCliArgs.Count){
+    $arg=$rawCliArgs[$i]
+    if(
+        $arg -eq '-Command' -and
+        ($i + 1) -lt $rawCliArgs.Count -and
+        [string]$rawCliArgs[$i + 1] -match '(?i)^if((Get-ExecutionPolicy\s*\)\s*-ne\s*AllSigned\)'
+    ){
+        $i+=2
+        continue
+    }
+    [void]$cliArgs.Add($arg)
+    ++$i
+}
+
 if($cliArgs.Count -gt 0){
-    foreach($arg in $cliArgs){
+    foreach($arg in @($cliArgs)){
         if($arg -eq '--mira-console'){
             continue
         }
