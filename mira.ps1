@@ -24,10 +24,10 @@ function Get-MiraCliArgs {
 }
 
 $cliArgs=Get-MiraCliArgs $args
-$script:MiraVersion = '0.1.0-beta.2'
+$script:MiraVersion = '0.1.0-beta.3'
 $script:MiraBuild = 'b90879230'
 
-# MIRA-TUI BETA 0.1.0-beta.2 / BUILD b90879230
+# MIRA-TUI BETA 0.1.0-beta.3 / BUILD b90879230
 # Own readline + fish-like history + completion + multiline + file/read/diff/image sending.
 # Native Gemini + built-in OpenAI-compatible providers. No provider JSON config.
 # No PSReadLine. No external modules.
