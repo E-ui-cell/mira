@@ -2527,10 +2527,10 @@ function Add-MarkupSegment([string]$Text,[ConsoleColor]$Color,[ConsoleColor]$Bac
     }
 }
 
-function End-MarkupLine(){
+function End-MarkupLine([ConsoleColor]$FillColor=[ConsoleColor]::Gray,[ConsoleColor]$FillBackground=[ConsoleColor]::Black){
     if($script:MarkupFrameActive){
         $remaining=[Math]::Max(0,$script:MarkupFrameWidth-$script:MarkupFrameUsed)
-        if($remaining -gt 0){Write-Host (' ' * $remaining) -NoNewline -ForegroundColor Gray}
+        if($remaining -gt 0){Write-Host (' ' * $remaining) -NoNewline -ForegroundColor $FillColor -BackgroundColor $FillBackground}
         Write-Host ''
     }else{
         Write-Host ''
@@ -2541,7 +2541,7 @@ function End-MarkupLine(){
 function Write-MarkupPlainLine([string]$Text,[ConsoleColor]$Color=[ConsoleColor]::Gray,[ConsoleColor]$Background=[ConsoleColor]::Black){
     Begin-MarkupLine
     Add-MarkupSegment ([string]$Text) $Color $Background
-    End-MarkupLine
+    End-MarkupLine $Color $Background
 }
 
 function Get-MessageFrameTop([string]$Status,[int]$WidthOverride=0){
@@ -2858,7 +2858,7 @@ function Write-CodeBlock([string[]]$lines,[string]$language='', [bool]$unfinishe
 
     Begin-MarkupLine
     Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$target) $frame $frameBg
-    End-MarkupLine
+    End-MarkupLine $frame $frameBg
 }
 
 function Write-MarkupTable([string[]]$lines){
