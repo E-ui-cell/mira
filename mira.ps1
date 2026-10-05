@@ -1907,7 +1907,6 @@ function Begin-MarkupLine(){
 }
 
 function Resolve-UiRenderColor([ConsoleColor]$Color){
-    if(-not $script:UiColorsEnabled){return [ConsoleColor]::Gray}
     return $Color
 }
 
@@ -2137,8 +2136,6 @@ function Convert-MiraRgbToConsoleColor([string]$Rgb,[ConsoleColor]$Fallback=[Con
 
 function Write-MiraCanvas($Canvas,[int]$X=0,[int]$Y=0){
     if($null -eq $Canvas){return}
-    $useAnsi=$script:UiColorsEnabled -and ($env:MIRA_TRUECOLOR -notin @('0','false','off')) -and ($env:WT_SESSION -or $env:TERM)
-    $esc=[char]27
     for($row=0;$row -lt [int]$Canvas.Height;++$row){
         if(-not (Cursor $X ($Y+$row))){continue}
         $runStart=0
@@ -2154,16 +2151,13 @@ function Write-MiraCanvas($Canvas,[int]$X=0,[int]$Y=0){
             $sb=New-Object System.Text.StringBuilder
             for($col=$runStart;$col -lt $runEnd;++$col){$cell=$Canvas.Cells[$row,$col];if(-not $cell.Continuation){[void]$sb.Append([string]$cell.Ch)}}
             if($sb.Length -gt 0){
-                if($script:UiColorsEnabled -and $useAnsi){[Console]::Write($esc+'['+(Get-MiraCanvasStyleCode $base)+'m'+$sb.ToString())}
-                elseif($script:UiColorsEnabled){
-                    $fg=Convert-MiraRgbToConsoleColor ([string]$base.Fg) ([ConsoleColor]::Gray);$bg=Convert-MiraRgbToConsoleColor ([string]$base.Bg) ([ConsoleColor]::Black)
-                    Write-Host $sb.ToString() -NoNewline -ForegroundColor $fg -BackgroundColor $bg
-                }else{[Console]::Write($sb.ToString())}
+                $fg=Convert-MiraRgbToConsoleColor ([string]$base.Fg) ([ConsoleColor]::Gray)
+                $bg=Convert-MiraRgbToConsoleColor ([string]$base.Bg) ([ConsoleColor]::Black)
+                Write-Host $sb.ToString() -NoNewline -ForegroundColor $fg -BackgroundColor $bg
             }
             $runStart=$runEnd
         }
-        if($script:UiColorsEnabled -and $useAnsi){[Console]::Write($esc+'[0m')}
-        elseif($script:UiColorsEnabled){try{[Console]::ForegroundColor=[ConsoleColor]::Gray;[Console]::BackgroundColor=[ConsoleColor]::Black}catch{}}
+        try{[Console]::ForegroundColor=[ConsoleColor]::Gray;[Console]::BackgroundColor=[ConsoleColor]::Black}catch{}
     }
 }
 
@@ -2832,13 +2826,6 @@ function Pad-MiraCells([string]$Text,[int]$TargetCells){
 }
 
 function Write-MiraRgb([string]$Text,[string]$Rgb,[ConsoleColor]$Fallback=[ConsoleColor]::DarkGray){
-    if(-not $script:UiColorsEnabled){Write-Host $Text;return}
-    $trueColor=($env:MIRA_TRUECOLOR -notin @('0','false','off')) -and ($env:WT_SESSION -or $env:TERM)
-    if($trueColor -and $Rgb -match '^(\d{1,3});(\d{1,3});(\d{1,3})$'){
-        $e=[char]27
-        Write-Host ($e+'[38;2;'+$Rgb+'m'+$Text+$e+'[39m')
-        return
-    }
     Write-Host $Text -ForegroundColor $Fallback
 }
 
@@ -2903,20 +2890,11 @@ function Get-MessageFrameTop([string]$Status,[int]$WidthOverride=0){
 }
 
 function Write-MiraFrameCells([string]$Text,[string]$Rgb,[ConsoleColor]$Fallback,[bool]$NewLine=$false){
-    $s=[string]$Text
     $oldFg=$null
     try{$oldFg=[Console]::ForegroundColor}catch{}
     try{
-        $useTrue=($script:UiColorsEnabled -and ($env:MIRA_TRUECOLOR -notin @('0','false','off')) -and
-                  ($env:WT_SESSION -or $env:TERM) -and
-                  $Rgb -match '^(\d{1,3});(\d{1,3});(\d{1,3})$')
-        if($useTrue){
-            $e=[char]27
-            [Console]::Write($e+'[38;2;'+$Rgb+'m'+$s+$e+'[39m')
-        }else{
-            [Console]::ForegroundColor=Resolve-UiRenderColor $Fallback
-            [Console]::Write($s)
-        }
+        [Console]::ForegroundColor=Resolve-UiRenderColor $Fallback
+        [Console]::Write([string]$Text)
         if($NewLine){[Console]::WriteLine('')}
     }finally{
         if($null -ne $oldFg){try{[Console]::ForegroundColor=$oldFg}catch{}}
@@ -2924,7 +2902,7 @@ function Write-MiraFrameCells([string]$Text,[string]$Rgb,[ConsoleColor]$Fallback
 }
 
 function Start-MessageFrameWait(){
-    if(-not [bool]$script:MarkupTheme.MessageFrameEnabled -or -not $script:UiRendererV2Enabled -or -not $script:UiRenderEnabled){return}
+    if(-not [bool]$script:MarkupTheme.MessageFrameEnabled -or -not $script:UiRenderEnabled){return}
     $script:ResponseFrameWaiting=$true
     try{$script:ResponseFrameLiveRow=[Console]::CursorTop}catch{$script:ResponseFrameLiveRow=(Row)}
     $script:ResponseFrameWidth=[Math]::Max(20,(Width))
@@ -3640,11 +3618,6 @@ function Invoke-Provider($text,$parts=$null){
     }
 
     try{
-        if($script:UiRendererV2Enabled -and $script:UiRenderEnabled -and
-           -not ($type -eq 'openai-compatible' -and $script:StreamResponses)){
-            Start-MessageFrameWait
-        }
-
         if($type -eq 'openai-compatible' -and $script:StreamResponses){
             try{
                 $result=Send-OpenAICompatibleStream $provider $script:CurrentModel $payload
@@ -3652,9 +3625,6 @@ function Invoke-Provider($text,$parts=$null){
                 W ('[stream error] '+$_.Exception.Message) Yellow
                 W '[stream fallback] retrying non-stream request...' DarkGray
                 $payload.stream=$false
-                if($script:UiRendererV2Enabled -and $script:UiRenderEnabled){
-                    Start-MessageFrameWait
-                }
                 $response=Send-ProviderPayload $provider $script:CurrentModel $payload
                 $result=Show-Response $response $type
             }
