@@ -6,20 +6,26 @@
 # legacy execution-policy wrapper after -File. That makes an interactive TUI
 # run inside a short-lived Explorer-launched PowerShell host. Detect only that
 # exact signature and relaunch once in a persistent console.
-$rawStartupArgs=@($args | ForEach-Object {[string]$_})
-$script:MiraExplorerLaunch=$false
-$script:MiraExplorerWrapperArgs=$false
-if($rawStartupArgs.Count -ge 2 -and $rawStartupArgs[0] -ieq '-Command'){
-    # Windows 7 Explorer passes this legacy execution-policy command after
-    # -File. It is not a MIRA CLI argument; ignore only this exact wrapper.
-    $explorerCommand=[string]$rawStartupArgs[1]
-    $normalizedExplorerCommand=$explorerCommand.Replace(' ','').Replace([string][char]9,'').Replace([string][char]13,'').Replace([string][char]10,'')
-    $expectedExplorerCommand='if((Get-ExecutionPolicy)-neAllSigned){Set-ExecutionPolicy-ScopeProcessBypass}'
-    if($normalizedExplorerCommand -ieq $expectedExplorerCommand){
-        $script:MiraExplorerLaunch=$true
-        $script:MiraExplorerWrapperArgs=$true
+function Get-MiraCliArgs {
+    param([object[]]$RawArgs)
+
+    $a=@($RawArgs | ForEach-Object {[string]$_})
+
+    # Windows 7 Explorer's 'Run with PowerShell' verb on this machine
+    # appends this legacy execution-policy command after -File.
+    # Strip only that exact association suffix; ordinary MIRA args pass through.
+    if($a.Count -ge 2 -and $a[0] -ieq '-Command'){
+        $cmd=([string]$a[1]).Replace(' ','').Replace([string][char]9,'').Replace([string][char]13,'').Replace([string][char]10,'')
+        $expected='if((Get-ExecutionPolicy)-neAllSigned){Set-ExecutionPolicy-ScopeProcessBypass}'
+        if($cmd -ieq $expected){
+            return @($a | Select-Object -Skip 2)
+        }
     }
+
+    return $a
 }
+
+$cliArgs=Get-MiraCliArgs $args
 $script:MiraVersion = '0.1.0-beta.2'
 $script:MiraBuild = 'b90879230'
 
@@ -4443,7 +4449,7 @@ function Read-Line {
         }
     }
 }
-$cliArgs=if($script:MiraExplorerWrapperArgs){@($rawStartupArgs | Select-Object -Skip 2)}else{@($args | ForEach-Object {[string]$_})}
+$cliArgs=@($cliArgs)
 if($cliArgs.Count -gt 0){
     foreach($arg in $cliArgs){
         if($arg -eq '--mira-console'){
