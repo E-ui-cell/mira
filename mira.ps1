@@ -2976,16 +2976,17 @@ function Begin-MessageFrame(){
     }
 
     $top=Get-MessageFrameTop $status $width
-    $row=[int]$script:ResponseFrameLiveRow
-    if(-not $script:ResponseFrameWaiting -or $row -lt 0){
-        try{$row=[Console]::CursorTop}catch{$row=(Row)}
-    }
 
-    # The live timer row is converted into the final top border on the same
-    # physical row. One newline advances to the body. No cursor-up/down.
+    # Normal v1 uses the proven CR repaint: replace the current
+    # animation/status row in place, then advance exactly one line.
+    # V2 retains its explicit captured-row path.
     try{
-        [Console]::SetCursorPosition(0,$row)
-        Write-MiraFrameCells $top ([string]$script:MarkupTheme.MessageFrameRGB) ([ConsoleColor]$script:MarkupTheme.MessageFrameColor) $true
+        if($script:ResponseFrameWaiting -and [int]$script:ResponseFrameLiveRow -ge 0){
+            [Console]::SetCursorPosition(0,[int]$script:ResponseFrameLiveRow)
+            Write-MiraFrameCells $top ([string]$script:MarkupTheme.MessageFrameRGB) ([ConsoleColor]$script:MarkupTheme.MessageFrameColor) $true
+        }else{
+            Write-Host ("`r" + (' ' * $width) + "`r" + $top) -ForegroundColor ([ConsoleColor]$script:MarkupTheme.MessageFrameColor)
+        }
     }catch{
         $script:MarkupFrameActive=$false
         Abort-MessageFrameWait
