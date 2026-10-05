@@ -2,6 +2,19 @@
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+function Write-MiraStartupTrace([string]$Text){
+    $stamp=(Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
+    $line=$stamp+' '+[string]$Text
+    $paths=New-Object System.Collections.Generic.List[string]
+    foreach($root in @($env:TEMP,$env:LOCALAPPDATA,(Split-Path -Parent $MyInvocation.MyCommand.Path))){
+        if(-not [string]::IsNullOrWhiteSpace([string]$root)){
+            $path=Join-Path ([string]$root) 'mira-startup.log'
+            if(-not $paths.Contains($path)){[void]$paths.Add($path)}
+        }
+    }
+    foreach($path in @($paths)){try{Add-Content -LiteralPath $path -Value $line -ErrorAction Stop}catch{}}
+}
+
 function Get-MiraParentProcessName(){
     try{
         $me=Get-WmiObject Win32_Process -Filter ('ProcessId='+[int]$PID) -ErrorAction Stop
@@ -12,22 +25,24 @@ function Get-MiraParentProcessName(){
     return ''
 }
 
-function Write-MiraStartupTrace([string]$Text){
-    try{
-        $root=$env:TEMP
-        if([string]::IsNullOrWhiteSpace($root)){$root=$env:LOCALAPPDATA}
-        if([string]::IsNullOrWhiteSpace($root)){$root=Split-Path -Parent $MyInvocation.MyCommand.Path}
-        $path=Join-Path $root 'mira-startup.log'
-        Add-Content -LiteralPath $path -Value ([string]$Text) -ErrorAction Stop
-    }catch{}
-}
-
 $script:MiraConsoleBootstrap=($args -contains '--mira-console')
 $script:MiraParentProcess=Get-MiraParentProcessName
+Write-MiraStartupTrace (
+    'pid='+$PID+
+    ' ps='+$PSVersionTable.PSVersion.ToString()+
+    ' host='+[string]$Host.Name+
+    ' interactive='+[string][Environment]::UserInteractive+
+    ' inputRedirected='+[string][Console]::IsInputRedirected+
+    ' outputRedirected='+[string][Console]::IsOutputRedirected+
+    ' parent='+$script:MiraParentProcess+
+    ' args='+(@($args) -join '|')+
+    ' cwd='+[string](Get-Location).Path+
+    ' script='+[string]$PSCommandPath
+)
 if(-not $script:MiraConsoleBootstrap -and $script:MiraParentProcess -ieq 'explorer.exe'){
     $self=$PSCommandPath
     if([string]::IsNullOrWhiteSpace($self)){$self=$MyInvocation.MyCommand.Path}
-    Write-MiraStartupTrace ('explorer launch detected; pid='+$PID+' parent='+$script:MiraParentProcess+' host='+$Host.Name)
+    Write-MiraStartupTrace ('explorer launch detected; relaunching with -NoExit')
     try{
         $psExe=Join-Path $PSHOME 'powershell.exe'
         $workDir=Split-Path -Parent $self
