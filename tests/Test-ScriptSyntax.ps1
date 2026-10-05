@@ -7,7 +7,7 @@ param(
 
 $resolved = (Resolve-Path -LiteralPath $ScriptPath -ErrorAction Stop).Path
 
-if ($PSVersionTable.PSVersion -ne [version]'5.1') {
+if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
     throw "This test requires Windows PowerShell 5.1. Detected: $($PSVersionTable.PSVersion)"
 }
 
