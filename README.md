@@ -11,7 +11,7 @@ MIRA takes its name from Mira (Omicron Ceti), the “wonderful” variable star 
 ## TL;DR
 
 ```text
-┌───  1.7s      ↑ 30  ↓ 353 ───────────────────────────────────────────────┐
+┌───  1.7s      ↑ 30  ↓ 353  ● ───────────────────────────────────────────┐
   Master Heading
 
   │ quoted text
@@ -33,10 +33,10 @@ Default mode is **one-shot**: each prompt is sent independently without persiste
 
 A RAM-only **session mode** can be enabled when conversational context is needed. The active session is indicated on the status line.
 
-The status line shows request time and token counts, for example:
+The status line shows request time and token counts. When a session is enabled, it also shows `●`, for example:
 
 ```text
-...  1.7s      ↑ 30  ↓ 353
+...  1.7s      ↑ 30  ↓ 353  ●
 ```
 
 Markdown-aware TUI renderer with code, math, tables, quotes and JSON.
