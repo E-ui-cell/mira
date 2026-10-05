@@ -3,6 +3,7 @@
 **An aichat alternative for Windows 7 / Windows PowerShell 5.1**, with a small set of compatible command concepts and a native console TUI.
 
 Minimal LLM TUI for **Windows 7 SP1 / Windows PowerShell 5.1**.
+AI Co-pilot: **GPT-5.6 Luna**, Git copilot.
 
 ## TL;DR
 
