@@ -2380,7 +2380,7 @@ function Parse-MiraInline([string]$Line){
             if($s.Substring($pos).StartsWith('<!--')){
                 $ce=$s.IndexOf('-->',$pos+4)
                 if($ce -ge 0){
-                    if($pos -gt $plainStart){&$emit $s.Substring($plainStart,$pos-$plainStart) $state.Fg $state.Bg $state.Attr $state.Mode}
+                    if($pos -gt $plainStart){& $emit ($s.Substring($plainStart,$pos-$plainStart)) $state.Fg $state.Bg $state.Attr $state.Mode}
                     $pos=$ce+3;$plainStart=$pos;continue
                 }
             }
@@ -2414,7 +2414,7 @@ function Parse-MiraInline([string]$Line){
             $mid=$s.IndexOf('](',$pos+1);if($mid -gt $pos+1){$q=$s.IndexOf(')',$mid+2);if($q -gt $mid+2){$kind='link';$end=$q+1;$value=$s.Substring($pos+1,$mid-$pos-1)}}
         }
         if($kind -ne ''){
-            if($pos -gt $plainStart){&$emit $s.Substring($plainStart,$pos-$plainStart) $state.Fg $state.Bg $state.Attr $state.Mode}
+            if($pos -gt $plainStart){& $emit ($s.Substring($plainStart,$pos-$plainStart)) $state.Fg $state.Bg $state.Attr $state.Mode}
             switch($kind){
                 'code'   {&$emit $value ([string]$script:MarkupTheme.InlineCodeRGB) ([string]$script:MarkupTheme.InlineCodeBG) 0 ''}
                 'math'   {&$emit (Convert-LatexToUnicode $value) ([string]$script:MarkupTheme.MathTextColor) $state.Bg $state.Attr $state.Mode}
@@ -2457,7 +2457,7 @@ function Parse-MiraInline([string]$Line){
         }
         ++$pos
     }
-    if($plainStart -lt $s.Length){&$emit $s.Substring($plainStart) $state.Fg $state.Bg $state.Attr $state.Mode}
+    if($plainStart -lt $s.Length){& $emit ($s.Substring($plainStart)) $state.Fg $state.Bg $state.Attr $state.Mode}
     return @($out)
 }
 
