@@ -4,7 +4,9 @@
 
 Minimal LLM TUI for **Windows 7 SP1 / Windows PowerShell 5.1**.
 
-  AI Co-pilot: **GPT-5.6 Luna**, Git copilot.
+AI Co-pilot: **GPT-5.6 Luna**, Git copilot.
+
+MIRA takes its name from Mira (Omicron Ceti), the “wonderful” variable star in Cetus.
 
 ## TL;DR
 
@@ -493,9 +495,8 @@ MIRA does not currently implement the full aichat CLI surface or a persistent se
 
 ## Release
 
-Releases are created automatically from version tags such as `0.1.0-beta.3`.
+Releases are created automatically from version tags such as `v0.1.0-beta.3`.
 
-MIRA takes its name from Mira (Omicron Ceti), the “wonderful” variable star in Cetus
 
 ## License
 
