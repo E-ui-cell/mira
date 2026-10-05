@@ -8,12 +8,15 @@
 # exact signature and relaunch once in a persistent console.
 $rawStartupArgs=@($args | ForEach-Object {[string]$_})
 $script:MiraExplorerLaunch=$false
-if(
-    $rawStartupArgs.Count -ge 2 -and
-    $rawStartupArgs[0] -ieq '-Command' -and
-    $rawStartupArgs[1] -match '(?is)^\s*if\(\(Get-ExecutionPolicy\s*\)\s*-ne\s*AllSigned\s*\)\s*\{\s*Set-ExecutionPolicy\s*-Scope\s+Process\s+Bypass\s*\}\s*$'
-){
-    $script:MiraExplorerLaunch=$true
+if($rawStartupArgs.Count -ge 2 -and $rawStartupArgs[0] -ieq '-Command'){
+    # Match the exact Windows 7 Explorer execution-policy wrapper without
+    # using regex. Whitespace is irrelevant to this fixed command signature.
+    $explorerCommand=[string]$rawStartupArgs[1]
+    $normalizedExplorerCommand=$explorerCommand.Replace(' ','').Replace([string][char]9,'').Replace([string][char]13,'').Replace([string][char]10,'')
+    $expectedExplorerCommand='if((Get-ExecutionPolicy)-neAllSigned){Set-ExecutionPolicy-ScopeProcessBypass}'
+    if($normalizedExplorerCommand -ieq $expectedExplorerCommand){
+        $script:MiraExplorerLaunch=$true
+    }
 }
 
 if($script:MiraExplorerLaunch){
