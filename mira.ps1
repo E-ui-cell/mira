@@ -120,13 +120,13 @@ $script:MarkupTheme = [pscustomobject]@{
     # -------------------------------------------------------------------------
     # CODE BLOCK THEME -- short U+2219 separator, about 25% of terminal width.
     # -------------------------------------------------------------------------
-    CodeFrameColor       = 'DarkGray'       # fallback separator color
-    CodeFrameRGB          = '96;100;110'     # slightly more visible than the outer frame
-    CodeLanguageColor    = 'Red'            # language label color
-    CodeTextColor        = 'Gray'           # code text color
-    CodeHeaderPrefix     = '∙∙ '            # two U+2219 bullets + space
-    CodeLanguageGap      = ' '              # one space after language
-    CodeRuleChar         = '∙'              # U+2219 BULLET OPERATOR
+    CodeFrameColor       = 'DarkGray'       # legacy alias
+    CodeFrameRGB          = '96;100;110'     # legacy alias
+    CodeLanguageColor    = 'Red'            # legacy alias
+    CodeTextColor        = 'Gray'           # legacy alias
+    CodeHeaderPrefix     = '∙∙ '            # legacy alias
+    CodeLanguageGap      = ' '              # legacy alias
+    CodeRuleChar         = '∙'              # legacy alias
     CodeRulePercent      = 0.25             # about 25% of terminal width
     CodeRuleMinWidth     = 18               # minimum readable rule
     CodeShowLanguage     = $true
@@ -2598,10 +2598,22 @@ function Write-MarkupInline([string]$line,[bool]$ContinueLine=$false){
     if($null -eq $line){$line=''}
     if(-not $ContinueLine){Begin-MarkupLine}
     try{
+        $pending=New-Object System.Text.StringBuilder
+        $currentFg=[ConsoleColor]::Gray;$currentBg=$null;$haveStyle=$false
         foreach($span in @(Parse-MiraInline $line)){
             $fg=Convert-MiraRgbToConsoleColor ([string]$span.Fg) ([ConsoleColor]::Gray)
-            Add-MarkupSegment ([string]$span.Text) $fg
+            $bg=$null
+            if(-not [string]::IsNullOrWhiteSpace([string]$span.Bg)){$bg=Convert-MiraRgbToConsoleColor ([string]$span.Bg) ([ConsoleColor]::Black)}
+            $styleChanged=$haveStyle -and ($fg -ne $currentFg -or $bg -ne $currentBg)
+            if($styleChanged){
+                Add-MarkupSegment $pending.ToString() $currentFg $currentBg
+                [void]$pending.Clear()
+            }
+            if(-not $haveStyle){$currentFg=$fg;$currentBg=$bg;$haveStyle=$true}
+            elseif($styleChanged){$currentFg=$fg;$currentBg=$bg}
+            [void]$pending.Append([string]$span.Text)
         }
+        if($pending.Length -gt 0){Add-MarkupSegment $pending.ToString() $currentFg $currentBg}
     }catch{Add-MarkupSegment ([string]$line) ([ConsoleColor]::Gray)}
     if(-not $ContinueLine){End-MarkupLine}
 }
@@ -2713,20 +2725,24 @@ function Convert-LatexToUnicode([string]$Expression){
             @('\rho','ρ'),@('\varepsilon','ε'),@('\epsilon','ε'),@('\phi','φ'),@('\psi','ψ'),@('\omega','ω'),
             @('\alpha','α'),@('\beta','β'),@('\gamma','γ'),@('\delta','δ'),@('\theta','θ'),
             @('\leq','≤'),@('\geq','≥'),@('\neq','≠'),@('\approx','≈'),@('\times','×'),
-            @('\cdot','·'),@('\rightarrow','→'),@('\to','→'),@('\hbar','ℏ'),@('\hat',''),@('\bar',''),@('\langle','⟨'),@('\rangle','⟩'),@('\mid','│'),@('\vert','│'),@('\hatH','Ĥ'),
+            @('\cdot','·'),@('\rightarrow','→'),@('\to','→'),@('\hbar','ℏ'),@('\langle','⟨'),@('\rangle','⟩'),@('\mid','│'),@('\vert','│'),@('\hatH','Ĥ'),
             @('\{','{'),@('\}','}'),@('\,',' '),@('\;',' ')
         )
         foreach($pair in $replacements){$s=$s.Replace([string]$pair[0],[string]$pair[1])}
         $s=$s.Replace('&','  ').Replace('\\','    ')
 
         # Simple named wrappers: keep their contents, discard the TeX wrapper.
-        foreach($name in @('\mathbf','\mathcal','\bar')){
+        foreach($name in @('\mathbf','\mathcal','\bar','\hat')){
             while(($p=$s.IndexOf($name)) -ge 0){
                 $o=$p+$name.Length
                 while($o -lt $s.Length -and [char]::IsWhiteSpace($s[$o])){++$o}
                 if($o -ge $s.Length -or $s[$o] -ne '{'){break}
                 $g=Get-MiraLatexGroup $s $o;if($null -eq $g){break}
-                $s=$s.Substring(0,$p)+[string]$g.Text+$s.Substring($g.End+1)
+                $inner=[string]$g.Text
+                if($name -eq '\hat'){
+                    switch($inner){'H'{$inner='Ĥ'}'h'{$inner='ĥ'}'A'{$inner='Â'}'E'{$inner='Ê'}'I'{$inner='Î'}'O'{$inner='Ô'}'U'{$inner='Û'}}
+                }
+                $s=$s.Substring(0,$p)+$inner+$s.Substring($g.End+1)
             }
         }
 
