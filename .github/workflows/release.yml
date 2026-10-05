@@ -36,7 +36,15 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $version = $env:RELEASE_VERSION.Trim()
           if ($version.StartsWith('v')) { $version = $version.Substring(1) }
-          if ($version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { throw 'Version must look like 1.2.3 or 1.2.3-beta.1.' }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value ('version=' + $version)
+          Add-Content -Path $env:GITHUB_OUTPUT -Value ('tag=v' + $version)
+
+      - name: Prepare release package
+        shell: powershell
+        env:
+          RELEASE_VERSION: ${{ steps.release_meta.outputs.version }}
+        run: |
           $ErrorActionPreference = 'Stop'
           $version = $env:RELEASE_VERSION.Trim()
           $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
@@ -77,58 +85,5 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             dist/mira_v${{ steps.release_meta.outputs.version }}.zip
-            dist/SHA256SUMS.txt
-            mira.ps1
-) { throw 'Version must look like 1.2.3 or 1.2.3-beta.1.' }
-          Add-Content -Path $env:GITHUB_OUTPUT -Value ('version=' + $version)
-          Add-Content -Path $env:GITHUB_OUTPUT -Value ('tag=v' + $version)
-
-      - name: Prepare release package
-        shell: powershell
-        env:
-          RELEASE_VERSION: ${{ steps.release_meta.outputs.version }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $version = $env:RELEASE_VERSION.Trim()
-          if ($version.StartsWith('v')) { $version = $version.Substring(1) }
-          if ($version -notmatch '^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') { throw 'Version must look like 1.2.3 or 1.2.3-beta.1.' }
-          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
-          $stage = Join-Path $dist 'mira'
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item .\mira.ps1 $stage\mira.ps1 -Force
-          Copy-Item .\README.md $stage\README.md -Force
-          $zip = Join-Path $dist ('mira_v' + $version + '.zip')
-          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
-          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          Set-Content -Path (Join-Path $dist 'SHA256SUMS.txt') -Value ($hash + '  ' + (Split-Path -Leaf $zip)) -Encoding UTF8
-
-      - name: Verify release package
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $dist = Join-Path $env:GITHUB_WORKSPACE 'dist'
-          $zip = Get-ChildItem $dist -Filter 'mira_v*.zip' | Select-Object -First 1
-          if ($null -eq $zip) { throw 'Release ZIP was not created.' }
-          $verify = Join-Path $env:RUNNER_TEMP 'mira-release-verify'
-          if (Test-Path $verify) { Remove-Item $verify -Recurse -Force }
-          Expand-Archive -Path $zip.FullName -DestinationPath $verify -Force
-          if (-not (Test-Path (Join-Path $verify 'mira.ps1'))) { throw 'mira.ps1 missing from release ZIP.' }
-          if (-not (Test-Path (Join-Path $verify 'README.md'))) { throw 'README.md missing from release ZIP.' }
-          $expected = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-          $line = Get-Content (Join-Path $dist 'SHA256SUMS.txt') | Select-Object -First 1
-          if (-not $line.StartsWith($expected + '  ')) { throw 'SHA256SUMS.txt does not match the release ZIP.' }
-
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ inputs.version }}
-          target_commitish: ${{ github.sha }}
-          name: MIRA v${{ inputs.version }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: |
-            dist/mira_v${{ inputs.version }}.zip
             dist/SHA256SUMS.txt
             mira.ps1
