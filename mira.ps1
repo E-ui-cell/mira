@@ -2405,23 +2405,11 @@ function Parse-MiraInline([string]$Line){
         if($kind -eq '' -and $s[$pos] -eq '$' -and ($pos+1 -ge $s.Length -or $s[$pos+1] -ne '$')){
             $q=$s.IndexOf('$',$pos+1);if($q -gt $pos+1){$kind='math';$end=$q+1;$value=$s.Substring($pos+1,$q-$pos-1)}
         }
-        if($kind -eq '' -and ($s.Substring($pos).StartsWith('**') -or $s.Substring($pos).StartsWith('__'))){
-            $d=$s.Substring($pos,2);$q=$s.IndexOf($d,$pos+2);if($q -gt $pos+2){$kind='bold';$end=$q+2;$value=$s.Substring($pos+2,$q-$pos-2)}
-        }
-        if($kind -eq '' -and $s.Substring($pos).StartsWith('~~')){
-            $q=$s.IndexOf('~~',$pos+2);if($q -gt $pos+2){$kind='strike';$end=$q+2;$value=$s.Substring($pos+2,$q-$pos-2)}
-        }
-        if($kind -eq '' -and ($s[$pos] -eq '*' -or $s[$pos] -eq '_')){
-            $d=[string]$s[$pos];$open=($pos+1 -lt $s.Length -and -not [char]::IsWhiteSpace($s[$pos+1]))
-            if($d -eq '_' -and $pos -gt 0 -and [char]::IsLetterOrDigit($s[$pos-1])){$open=$false}
-            if($open){$q=$s.IndexOf($d,$pos+1);if($q -gt $pos+1){$close=($q+1 -ge $s.Length -or -not [char]::IsLetterOrDigit($s[$q+1]));if($close){$kind='italic';$end=$q+1;$value=$s.Substring($pos+1,$q-$pos-1)}}}
-        }
-        if($kind -eq '' -and $s[$pos] -eq '['){
-            $mid=$s.IndexOf('](',$pos+1);if($mid -gt $pos+1){$q=$s.IndexOf(')',$mid+2);if($q -gt $mid+2){$kind='link';$end=$q+1;$value=$s.Substring($pos+1,$mid-$pos-1)}}
-        }
+        if($kind -eq '' -and ($s.Substring($pos).StartsWith('**') -or $s.Substring($pos).StartsWith('__'))){,            $d=$s.Substring($pos,2),            if($stack.Count -gt 0 -and [string]$stack.Peek().Tag -eq $d){,                $kind='mdclose';$end=$pos+2;$tag=$d,            }else{,                $q=$s.IndexOf($d,$pos+2),                if($q -gt $pos+2){$kind='mdopen';$end=$pos+2;$tag=$d},            },        },        if($kind -eq '' -and $s.Substring($pos).StartsWith('~~')){,            if($stack.Count -gt 0 -and [string]$stack.Peek().Tag -eq '~~'){,                $kind='mdclose';$end=$pos+2;$tag='~~',            }else{,                $q=$s.IndexOf('~~',$pos+2),                if($q -gt $pos+2){$kind='mdopen';$end=$pos+2;$tag='~~'},            },        },        if($kind -eq '' -and ($s[$pos] -eq '*' -or $s[$pos] -eq '_')){,            $d=[string]$s[$pos],            if($stack.Count -gt 0 -and [string]$stack.Peek().Tag -eq $d){,                $kind='mdclose';$end=$pos+1;$tag=$d,            }else{,                $open=($pos+1 -lt $s.Length -and -not [char]::IsWhiteSpace($s[$pos+1])),                if($d -eq '_' -and $pos -gt 0 -and [char]::IsLetterOrDigit($s[$pos-1])){$open=$false},                if($open){,                    $q=$s.IndexOf($d,$pos+1),                    if($q -gt $pos+1){,                        $close=($q+1 -ge $s.Length -or -not [char]::IsLetterOrDigit($s[$q+1])),                        if($close){$kind='mdopen';$end=$pos+1;$tag=$d},                    },                },            },        }
         if($kind -ne ''){
             if($pos -gt $plainStart){& $emit ($s.Substring($plainStart,$pos-$plainStart)) $state.Fg $state.Bg $state.Attr $state.Mode}
             switch($kind){
+                'mdopen' {,                    [void]$stack.Push([pscustomobject]@{Tag=$tag;State=$state}),                    $next=Get-MiraInlineState $state.Fg $state.Bg $state.Attr $state.Mode,                    switch($tag){,                        '**' {$next.Fg=$script:MarkupTheme.InlineBoldRGB;$next.Attr=$next.Attr-bor 1},                        '__' {$next.Fg=$script:MarkupTheme.InlineBoldRGB;$next.Attr=$next.Attr-bor 1},                        '~~' {$next.Fg=$script:MarkupTheme.InlineStrikeRGB;$next.Attr=$next.Attr-bor 9},                        '*'  {$next.Fg=$script:MarkupTheme.InlineItalicRGB;$next.Attr=$next.Attr-bor 3},                        '_'  {$next.Fg=$script:MarkupTheme.InlineItalicRGB;$next.Attr=$next.Attr-bor 3},                    },                    $state=$next,                },                'mdclose' {,                    if($stack.Count -gt 0){$e=$stack.Pop();$state=$e.State},                }
                 'code'   {&$emit $value ([string]$script:MarkupTheme.InlineCodeRGB) ([string]$script:MarkupTheme.InlineCodeBG) 0 ''}
                 'math'   {&$emit (Convert-LatexToUnicode $value) ([string]$script:MarkupTheme.MathTextColor) $state.Bg $state.Attr $state.Mode}
                 'bold'   {&$emit $value ([string]$script:MarkupTheme.InlineBoldRGB) $state.Bg ($state.Attr -bor 1) $state.Mode}
