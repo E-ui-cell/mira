@@ -130,6 +130,16 @@ $script:MarkupTheme = [pscustomobject]@{
     CodeRulePercent      = 0.25             # about 25% of terminal width
     CodeRuleMinWidth     = 18               # minimum readable rule
     CodeShowLanguage     = $true
+    # Direct Win7 ConsoleColor controls for fenced code blocks.
+    CodeFenceChar         = '∙'       # replacement glyph for the ``` fence
+    CodeFencePrefix       = '∙∙ '     # prefix before the language label
+    CodeFenceGap          = ' '
+    CodeFenceFg           = 'DarkGray'
+    CodeFenceBg           = 'Black'
+    CodeLanguageFg        = 'Red'
+    CodeLanguageBg        = 'Black'
+    CodeTextFg            = 'Gray'
+    CodeTextBg            = 'Black'
     InlineTextRGB              = '205;207;212'
     InlineBoldRGB              = '245;245;248'
     InlineItalicRGB            = '205;215;225'
@@ -2494,35 +2504,26 @@ function Pad-MiraCells([string]$Text,[int]$TargetCells){
 
 
 
-function Add-MarkupSegment([string]$Text,[ConsoleColor]$Color){
+function Add-MarkupSegment([string]$Text,[ConsoleColor]$Color,[ConsoleColor]$Background=[ConsoleColor]::Black){
     if($null -eq $Text -or $Text.Length -eq 0){return}
-
-    # Width here means terminal display cells, not UTF-16 code units.
     while($Text.Length -gt 0){
         if(-not $script:MarkupFrameActive){
-            Write-Host $Text -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color)
+            Write-Host $Text -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color) -BackgroundColor $Background
             return
         }
-
         $room=$script:MarkupFrameWidth-$script:MarkupFrameUsed
         if($room -le 0){
             Write-Host ''
             Begin-MarkupLine
             $room=$script:MarkupFrameWidth-$script:MarkupFrameUsed
         }
-
         $takeChars=Get-MiraCellPrefixLength $Text $room
         if($takeChars -le 0){break}
-
         $part=$Text.Substring(0,$takeChars)
-        Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color)
+        Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color) -BackgroundColor $Background
         $script:MarkupFrameUsed += Get-MiraCellWidth $part
         $Text=$Text.Substring($takeChars)
-
-        if($Text.Length -gt 0){
-            Write-Host ''
-            Begin-MarkupLine
-        }
+        if($Text.Length -gt 0){Write-Host '';Begin-MarkupLine}
     }
 }
 
@@ -2537,9 +2538,9 @@ function End-MarkupLine(){
     $script:MarkupFrameUsed=0
 }
 
-function Write-MarkupPlainLine([string]$Text,[ConsoleColor]$Color=[ConsoleColor]::Gray){
+function Write-MarkupPlainLine([string]$Text,[ConsoleColor]$Color=[ConsoleColor]::Gray,[ConsoleColor]$Background=[ConsoleColor]::Black){
     Begin-MarkupLine
-    Add-MarkupSegment ([string]$Text) $Color
+    Add-MarkupSegment ([string]$Text) $Color $Background
     End-MarkupLine
 }
 
@@ -2723,7 +2724,7 @@ function Convert-LatexToUnicode([string]$Expression){
             @('\rho','ρ'),@('\varepsilon','ε'),@('\epsilon','ε'),@('\phi','φ'),@('\psi','ψ'),@('\omega','ω'),
             @('\alpha','α'),@('\beta','β'),@('\gamma','γ'),@('\delta','δ'),@('\theta','θ'),
             @('\leq','≤'),@('\geq','≥'),@('\neq','≠'),@('\approx','≈'),@('\times','×'),
-            @('\cdot','·'),@('\rightarrow','→'),@('\to','→'),
+            @('\cdot','·'),@('\rightarrow','→'),@('\to','→'),@('\hbar','ℏ'),@('\hat',''),@('\bar',''),@('\langle','⟨'),@('\rangle','⟩'),@('\mid','│'),@('\vert','│'),@('\hatH','Ĥ'),
             @('\{','{'),@('\}','}'),@('\,',' '),@('\;',' ')
         )
         foreach($pair in $replacements){$s=$s.Replace([string]$pair[0],[string]$pair[1])}
@@ -2824,9 +2825,12 @@ function Write-MathBlock([string[]]$lines,[bool]$unfinished=$false){
 
 function Write-CodeBlock([string[]]$lines,[string]$language='', [bool]$unfinished=$false){
     $lines=Normalize-CodeBlockLines $lines
-    $frame=[ConsoleColor]$script:MarkupTheme.CodeFrameColor
-    $langFg=[ConsoleColor]$script:MarkupTheme.CodeLanguageColor
-    $textFg=[ConsoleColor]$script:MarkupTheme.CodeTextColor
+    $frame=[ConsoleColor]$script:MarkupTheme.CodeFenceFg
+    $frameBg=[ConsoleColor]$script:MarkupTheme.CodeFenceBg
+    $langFg=[ConsoleColor]$script:MarkupTheme.CodeLanguageFg
+    $langBg=[ConsoleColor]$script:MarkupTheme.CodeLanguageBg
+    $textFg=[ConsoleColor]$script:MarkupTheme.CodeTextFg
+    $textBg=[ConsoleColor]$script:MarkupTheme.CodeTextBg
 
     $langRaw=''+$language
     if(-not [bool]$script:MarkupTheme.CodeShowLanguage){$langRaw=''}
@@ -2838,24 +2842,22 @@ function Write-CodeBlock([string[]]$lines,[string]$language='', [bool]$unfinishe
     if([string]::IsNullOrWhiteSpace($lang)){$lang='Code'}
     $lang=$lang.ToUpperInvariant()
 
-    # IMPORTANT: the graphic has ONE exact width. The bottom rule uses that
-    # same total width, so its right edge always matches the header's right edge.
     $target=Get-MarkupGraphicWidth ([double]$script:MarkupTheme.CodeRulePercent) ([int]$script:MarkupTheme.CodeRuleMinWidth)
-    $prefix=[string]$script:MarkupTheme.CodeHeaderPrefix + $lang + [string]$script:MarkupTheme.CodeLanguageGap
+    $prefix=[string]$script:MarkupTheme.CodeFencePrefix+$lang+([string]$script:MarkupTheme.CodeFenceGap)
     if((Get-MiraCellWidth $prefix) -ge $target){$prefix=$prefix.Substring(0,[Math]::Min($prefix.Length,(Get-MiraCellPrefixLength $prefix ([Math]::Max(0,$target-1)))))}
     $ruleWidth=[Math]::Max(0,$target-(Get-MiraCellWidth $prefix))
 
     Begin-MarkupLine
-    Add-MarkupSegment ([string]$script:MarkupTheme.CodeHeaderPrefix) $frame
-    if(-not [string]::IsNullOrWhiteSpace($lang)){Add-MarkupSegment $lang $langFg}
-    Add-MarkupSegment ([string]$script:MarkupTheme.CodeLanguageGap) $frame
-    if($ruleWidth -gt 0){Add-MarkupSegment (([string]$script:MarkupTheme.CodeRuleChar)*$ruleWidth) $frame}
+    Add-MarkupSegment ([string]$script:MarkupTheme.CodeFencePrefix) $frame $frameBg
+    if(-not [string]::IsNullOrWhiteSpace($lang)){Add-MarkupSegment $lang $langFg $langBg}
+    Add-MarkupSegment ([string]$script:MarkupTheme.CodeFenceGap) $frame $frameBg
+    if($ruleWidth -gt 0){Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$ruleWidth) $frame $frameBg}
     End-MarkupLine
 
-    foreach($line in @($lines)){Write-MarkupPlainLine ([string]$line) $textFg}
+    foreach($line in @($lines)){Write-MarkupPlainLine ([string]$line) $textFg $textBg}
 
     Begin-MarkupLine
-    Add-MarkupSegment (([string]$script:MarkupTheme.CodeRuleChar)*$target) $frame
+    Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$target) $frame $frameBg
     End-MarkupLine
 }
 
