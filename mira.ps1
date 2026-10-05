@@ -71,11 +71,6 @@ $script:CliArgsNotImplemented = @('-m, --model <name>','-e, --execute','-h, --he
 # These affect only the visual renderer. Raw .copy/.grab/.save data is unchanged.
 # -----------------------------------------------------------------------------
 $script:UiRenderEnabled = $true
-$script:ResponseFrameWaiting = $false
-$script:ResponseFrameLiveRow = -1
-$script:ResponseFrameWidth = 0
-$script:ResponseFrameCursorCaptured = $false
-$script:ResponseFrameCursorVisible = $true
 $script:CompressThreshold = if($env:MIRA_COMPRESS_THRESHOLD){[int]$env:MIRA_COMPRESS_THRESHOLD}else{4000}
 $script:OpenRouterApiKey = 'PASTE_OPENROUTER_KEY_HERE'
 $script:StreamResponses = $false
@@ -2467,334 +2462,6 @@ function Flush-MiraParagraphNode($Nodes,$Paragraph){
     $Paragraph.Clear()
 }
 
-function Parse-MiraMarkdown([string]$Text){
-    if($null -eq $Text){return @()}
-    $lines=@([regex]::Split([string]$Text,"\r?\n"))
-    $nodes=New-Object System.Collections.Generic.List[object]
-    $paragraph=New-Object System.Collections.Generic.List[string]
-    $code=New-Object System.Collections.Generic.List[string]
-    $math=New-Object System.Collections.Generic.List[string]
-    $inCode=$false;$inMath=$false;$codeLanguage=''
-
-    for($i=0;$i -lt $lines.Count;++$i){
-        $line=[string]$lines[$i];$trim=$line.Trim()
-        if($inCode){
-            if($line -match ('^[ \t]*\x60\x60\x60[^\r\n]*[ \t]*$')){
-                [void]$nodes.Add((New-MiraCodeNode @($code) $codeLanguage));$code.Clear();$codeLanguage='';$inCode=$false
-            }else{[void]$code.Add($line)}
-            continue
-        }
-        if($inMath){
-            $close=$line.IndexOf('$$')
-            if($line.Trim() -eq '\]'){
-                [void]$nodes.Add((New-MiraMathNode @($math) $true));$math.Clear();$inMath=$false
-            }elseif($close -ge 0){
-                $before=$line.Substring(0,$close)
-                if(-not [string]::IsNullOrWhiteSpace($before)){[void]$math.Add($before)}
-                [void]$nodes.Add((New-MiraMathNode @($math) $true));$math.Clear();$inMath=$false
-                $after=$line.Substring($close+2)
-                if(-not [string]::IsNullOrWhiteSpace($after)){[void]$paragraph.Add($after.Trim())}
-            }else{[void]$math.Add($line)}
-            continue
-        }
-        if($line -match ('^[ \t]*\x60\x60\x60([^\r\n]*)[ \t]*$')){
-            Flush-MiraParagraphNode $nodes $paragraph;$inCode=$true;$codeLanguage=$Matches[1].Trim().ToLowerInvariant();continue
-        }
-        if($line -match '^[ \t]*\$\$(.*)$'){
-            Flush-MiraParagraphNode $nodes $paragraph
-            $rest=[string]$Matches[1];$close=$rest.IndexOf('$$')
-            if($close -ge 0){
-                [void]$nodes.Add((New-MiraMathNode @($rest.Substring(0,$close)) $true))
-                $after=$rest.Substring($close+2)
-                if(-not [string]::IsNullOrWhiteSpace($after)){[void]$paragraph.Add($after.Trim())}
-            }else{
-                $inMath=$true
-                if(-not [string]::IsNullOrWhiteSpace($rest)){[void]$math.Add($rest)}
-            }
-            continue
-        }
-        if($line -match '^[ \t]*\\\[(.*)$'){
-            Flush-MiraParagraphNode $nodes $paragraph
-            $rest=[string]$Matches[1]
-            if($rest -match '^(.*)\\\](.*)$'){
-                [void]$nodes.Add((New-MiraMathNode @([string]$Matches[1]) $true))
-                if(-not [string]::IsNullOrWhiteSpace([string]$Matches[2])){[void]$paragraph.Add([string]$Matches[2].Trim())}
-            }else{
-                $inMath=$true
-                if(-not [string]::IsNullOrWhiteSpace($rest)){[void]$math.Add($rest)}
-            }
-            continue
-        }
-        if([string]::IsNullOrWhiteSpace($trim)){Flush-MiraParagraphNode $nodes $paragraph;continue}
-        if($trim -match '^(#{1,6})[ \t]+(.*)$'){
-            Flush-MiraParagraphNode $nodes $paragraph
-            [void]$nodes.Add((New-MiraHeadingNode $Matches[1].Length (Parse-MiraInline ([string]$Matches[2]))));continue
-        }
-        if($trim -match '^([-*_])([ \t]*\1){2,}[ \t]*$'){
-            Flush-MiraParagraphNode $nodes $paragraph;[void]$nodes.Add((New-MiraRuleNode));continue
-        }
-        if(($i+1) -lt $lines.Count -and (Test-MiraTableSeparator $lines[$i+1]) -and $trim -match '^\|?.+\|.+\|?$'){
-            Flush-MiraParagraphNode $nodes $paragraph
-            $rows=New-Object System.Collections.Generic.List[object];[void]$rows.Add((Split-MiraTableRow $line));++$i
-            while($i -lt $lines.Count -and -not [string]::IsNullOrWhiteSpace([string]$lines[$i])){
-                $candidate=[string]$lines[$i]
-                if($candidate -notmatch '\|'){break}
-                if(Test-MiraTableSeparator $candidate){++$i;continue}
-                [void]$rows.Add((Split-MiraTableRow $candidate));++$i
-            }
-            --$i;[void]$nodes.Add((New-MiraTableNode @($rows)));continue
-        }
-        $content=$trim
-        if($content -match '^[-*+][ \t]+(.+)$'){$content='• '+[string]$Matches[1]}
-        elseif($content -match '^\d+[.)][ \t]+(.+)$'){$content='• '+[string]$Matches[1]}
-        elseif($content -match '^>[ \t]?(.*)$'){$content='│ '+[string]$Matches[1]}
-        [void]$paragraph.Add($content)
-    }
-    if($inCode){[void]$nodes.Add((New-MiraCodeNode @($code) $codeLanguage))}
-    if($inMath){[void]$nodes.Add((New-MiraMathNode @($math) $true))}
-    Flush-MiraParagraphNode $nodes $paragraph
-    return @($nodes)
-}
-
-# -----------------------------------------------------------------------------
-# DOCUMENT LAYOUT / V2 WRITER
-# Semantic nodes are measured and placed on the shared cell canvas.
-# -----------------------------------------------------------------------------
-
-function Wrap-MiraSpans($Spans,[int]$MaxWidth){
-    $limit=[Math]::Max(1,[int]$MaxWidth)
-    $lines=New-Object System.Collections.Generic.List[object]
-    $current=New-Object System.Collections.Generic.List[object]
-    $used=0
-
-    foreach($span in @($Spans)){
-        $text=[string]$span.Text
-        if($text.Length -eq 0){continue}
-        $tokens=@([regex]::Matches($text,'\s+|\S+') | ForEach-Object {[string]$_.Value})
-        foreach($token in $tokens){
-            $tw=Measure-MiraText $token
-            $tokenWidth=[int]$tw.Width
-            $isSpace=[string]::IsNullOrWhiteSpace($token)
-
-            if($isSpace -and $current.Count -eq 0){continue}
-
-            if($tokenWidth -le $limit - $used){
-                [void]$current.Add((New-MiraInlineSpan $token ([string]$span.Fg) ([string]$span.Bg) ([int]$span.Attr)))
-                $used += $tokenWidth
-                continue
-            }
-
-            if($current.Count -gt 0){
-                [void]$lines.Add(@($current))
-                $current=New-Object System.Collections.Generic.List[object]
-                $used=0
-            }
-            if($isSpace){continue}
-
-            if($tokenWidth -le $limit){
-                [void]$current.Add((New-MiraInlineSpan $token ([string]$span.Fg) ([string]$span.Bg) ([int]$span.Attr)))
-                $used=$tokenWidth
-                continue
-            }
-
-            $piece=New-Object System.Text.StringBuilder
-            $pieceWidth=0
-            for($ci=0;$ci -lt $token.Length;){
-                $cp=[char]::ConvertToUtf32($token,$ci)
-                $units=if($cp -gt 0xFFFF){2}else{1}
-                $ch=[string]::Copy($token,$ci,$units)
-                $cw=Get-MiraCellWidth $ch
-                if($cw -gt 0){
-                    if($pieceWidth+$cw -gt $limit){
-                        if($piece.Length -gt 0){
-                            [void]$lines.Add(@((New-MiraInlineSpan $piece.ToString() ([string]$span.Fg) ([string]$span.Bg) ([int]$span.Attr))))
-                        }
-                        [void]$piece.Clear();$pieceWidth=0
-                    }
-                    [void]$piece.Append($ch);$pieceWidth += $cw
-                }
-                $ci += $units
-            }
-            if($piece.Length -gt 0){
-                [void]$current.Add((New-MiraInlineSpan $piece.ToString() ([string]$span.Fg) ([string]$span.Bg) ([int]$span.Attr)))
-                $used=$pieceWidth
-            }
-        }
-    }
-
-    if($current.Count -gt 0 -or $lines.Count -eq 0){[void]$lines.Add(@($current))}
-    return @($lines)
-}
-
-function Measure-MiraDocumentNodeV2([object]$Node,[int]$MaxWidth){
-    if($null -eq $Node){return [pscustomobject]@{Width=0;Height=0}}
-    switch([string]$Node.Kind){
-        'Paragraph' {
-            $wrapped=@(Wrap-MiraSpans $Node.Spans $MaxWidth)
-            $w=0
-            foreach($line in $wrapped){$w=[Math]::Max($w,(Get-MiraSpanWidth $line))}
-            return [pscustomobject]@{Width=[int]$w;Height=[int][Math]::Max(1,$wrapped.Count)}
-        }
-        'Heading' {
-            $wrapped=@(Wrap-MiraSpans $Node.Spans $MaxWidth)
-            $w=0
-            foreach($line in $wrapped){$w=[Math]::Max($w,(Get-MiraSpanWidth $line))}
-            return [pscustomobject]@{Width=[int]$w;Height=[int][Math]::Max(1,$wrapped.Count)}
-        }
-        'Code' {
-            $h=[Math]::Max(1,@($Node.Lines).Count+2)
-            $w=(Measure-MiraText (('∙∙ '+$(if([string]::IsNullOrWhiteSpace([string]$Node.Language)){'CODE'}else{[string]$Node.Language}))).Width)
-            foreach($line in @($Node.Lines)){$w=[Math]::Max($w,(Measure-MiraText ([string]$line)).Width)}
-            return [pscustomobject]@{Width=[int][Math]::Min($w,$MaxWidth);Height=[int]$h}
-        }
-        'Math' {
-            $h=[Math]::Max(1,@($Node.Lines).Count+2);$w=6
-            foreach($line in @($Node.Lines)){$w=[Math]::Max($w,(Measure-MiraText (Convert-LatexToUnicode ([string]$line))).Width)}
-            return [pscustomobject]@{Width=[int][Math]::Min($w,$MaxWidth);Height=[int]$h}
-        }
-        'Rule' {return [pscustomobject]@{Width=[int]$MaxWidth;Height=1}}
-        'Table' {
-            $cols=0
-            foreach($row in @($Node.Rows)){$cols=[Math]::Max($cols,@($row).Count)}
-            if($cols -eq 0){return [pscustomobject]@{Width=0;Height=0}}
-            $widths=New-Object int[] $cols
-            foreach($row in @($Node.Rows)){
-                for($j=0;$j -lt @($row).Count;++$j){$widths[$j]=[Math]::Max($widths[$j],[Math]::Min(30,(Measure-MiraText ([string]$row[$j])).Width))}
-            }
-            $total=1;foreach($cw in $widths){$total += $cw+3}
-            return [pscustomobject]@{Width=[int][Math]::Min($total,$MaxWidth);Height=[int][Math]::Max(1,@($Node.Rows).Count*2-1)}
-        }
-        default {return [pscustomobject]@{Width=0;Height=0}}
-    }
-}
-
-function Place-MiraDocumentNodeV2($Canvas,$Node,[int]$X,[int]$Y,[int]$MaxWidth){
-    if($null -eq $Canvas -or $null -eq $Node){return [int]$Y}
-    switch([string]$Node.Kind){
-        'Paragraph' {
-            foreach($line in @(Wrap-MiraSpans $Node.Spans $MaxWidth)){Set-MiraSpans $Canvas $X $Y $line $MaxWidth;++$Y}
-            return [int]$Y
-        }
-        'Heading' {
-            $glyph=switch([int]$Node.Level){1{'◆'}2{'◇'}3{'▸'}4{'›'}default{'·'}}
-            foreach($line in @(Wrap-MiraSpans $Node.Spans ([Math]::Max(1,$MaxWidth-3)))){
-                Set-MiraCanvasText $Canvas $X $Y ($glyph+' ') '175;185;200' '' 0 2
-                foreach($span in @($line)){$span.Fg=[string]$script:MarkupTheme.InlineBoldRGB;$span.Attr=$span.Attr -bor 1}
-                Set-MiraSpans $Canvas ($X+2) $Y $line ([Math]::Max(1,$MaxWidth-2));++$Y
-            }
-            return [int]$Y
-        }
-        'Code' {
-            $label=if([string]::IsNullOrWhiteSpace([string]$Node.Language)){'CODE'}else{'CODE '+([string]$Node.Language).ToUpperInvariant()}
-            Fill-MiraCanvasRow $Canvas $X $Y $MaxWidth ([string]$script:MarkupTheme.CodeHeaderRGB) ([string]$script:MarkupTheme.CodeHeaderBG) 1
-            Set-MiraCanvasText $Canvas $X $Y ('∙∙ '+$label) ([string]$script:MarkupTheme.CodeHeaderRGB) ([string]$script:MarkupTheme.CodeHeaderBG) 1 $MaxWidth;++$Y
-            foreach($line in @($Node.Lines)){
-                Fill-MiraCanvasRow $Canvas $X $Y $MaxWidth ([string]$script:MarkupTheme.CodePanelRGB) ([string]$script:MarkupTheme.CodePanelBG)
-                Set-MiraCanvasText $Canvas $X $Y ([string]$line) ([string]$script:MarkupTheme.CodePanelRGB) ([string]$script:MarkupTheme.CodePanelBG) 0 $MaxWidth;++$Y
-            }
-            Fill-MiraCanvasRow $Canvas $X $Y $MaxWidth ([string]$script:MarkupTheme.CodePanelRGB) ([string]$script:MarkupTheme.CodePanelBG)
-            Set-MiraCanvasText $Canvas $X $Y ('─'*[Math]::Min(18,$MaxWidth)) '120;125;135' ([string]$script:MarkupTheme.CodePanelBG) 0 $MaxWidth
-            return [int]$Y+1
-        }
-        'Math' {
-            Set-MiraCanvasText $Canvas $X $Y '∙∙ MATH' '100;180;210' '' 0 $MaxWidth;++$Y
-            foreach($line in @($Node.Lines)){Set-MiraCanvasText $Canvas $X $Y (Convert-LatexToUnicode ([string]$line)) '185;185;190' '' 0 $MaxWidth;++$Y}
-            Set-MiraCanvasText $Canvas $X $Y ('∙'*[Math]::Max(1,[Math]::Min(18,$MaxWidth))) '120;125;135' '' 0 $MaxWidth
-            return [int]$Y+1
-        }
-        'Rule' {Set-MiraCanvasText $Canvas $X $Y ('─'*[Math]::Max(1,$MaxWidth)) '80;84;92' '' 0 $MaxWidth;return [int]$Y+1}
-        'Table' {
-            $rows=@($Node.Rows);$cols=0
-            foreach($row in $rows){$cols=[Math]::Max($cols,@($row).Count)}
-            if($cols -le 0){return [int]$Y}
-            $widths=New-Object int[] $cols
-            foreach($row in $rows){for($j=0;$j -lt @($row).Count;++$j){$widths[$j]=[Math]::Max($widths[$j],[Math]::Min(30,(Measure-MiraText ([string]$row[$j])).Width))}}
-            for($ri=0;$ri -lt $rows.Count;++$ri){
-                $row=$rows[$ri];$parts=New-Object System.Collections.Generic.List[string]
-                for($j=0;$j -lt $cols;++$j){$v=if($j -lt @($row).Count){[string]$row[$j]}else{''};[void]$parts.Add(' '+(Pad-MiraCells $v $widths[$j])+' ')}
-                if($ri -eq 0){Fill-MiraCanvasRow $Canvas $X $Y $MaxWidth ([string]$script:MarkupTheme.TableHeaderRGB) ([string]$script:MarkupTheme.TableHeaderBG) 1}
-                $fg=if($ri -eq 0){[string]$script:MarkupTheme.TableHeaderRGB}else{'175;175;180'}
-                $bg=if($ri -eq 0){[string]$script:MarkupTheme.TableHeaderBG}else{''}
-                $attr=if($ri -eq 0){1}else{0}
-                Set-MiraCanvasText $Canvas $X $Y ('|'+($parts -join '|')+'|') $fg $bg $attr $MaxWidth;++$Y
-                if($ri -lt $rows.Count-1){
-                    $pieces=@($widths|ForEach-Object{('-' * ($_+2))})
-                    Set-MiraCanvasText $Canvas $X $Y ('+'+($pieces -join '+')+'+') '100;105;115' '' 0 $MaxWidth;++$Y
-                }
-            }
-            return [int]$Y
-        }
-        default {return [int]$Y}
-    }
-}
-
-function Render-MiraDocumentV2([string]$Text){
-    if($null -eq $Text){return}
-    if(-not $script:MarkupFrameActive){Begin-MessageFrame}
-    try{
-        try{
-            $nodes=@(Parse-MiraMarkdown $Text)
-        }catch{
-            # Parser failure must never destroy Mira's response surface.
-            $nodes=@((New-MiraParagraphNode (Parse-MiraInline ([string]$Text))))
-        }
-
-        $available=[Math]::Max(10,(Width)-4)
-        $height=0
-        foreach($node in $nodes){
-            try{
-                $height += [int](Measure-MiraDocumentNodeV2 $node $available).Height+1
-            }catch{
-                $height += [Math]::Max(1,([string]$Text -split "
-?
-").Count)+1
-            }
-        }
-        $height=[Math]::Max(1,$height)
-        $canvas=New-MiraCanvas $available $height
-        $y=0
-
-        foreach($node in $nodes){
-            try{
-                $y=Place-MiraDocumentNodeV2 $canvas $node 2 $y ($available-2)
-            }catch{
-                # A broken node is rendered as plain text on the same canvas.
-                $fallback=[string]$Text
-                $fallbackLines=@($fallback -split "
-?
-",-1)
-                foreach($fl in $fallbackLines){
-                    if($y -ge $canvas.Height){break}
-                    Set-MiraCanvasText $canvas 2 $y ([string]$fl) ([string]$script:MarkupTheme.InlineTextRGB) '' 0 ($available-2)
-                    ++$y
-                }
-                break
-            }
-            ++$y
-        }
-
-        $canvasTop=(Row)
-        Write-MiraCanvas $canvas 0 $canvasTop
-        [void](Cursor 0 ($canvasTop+$canvas.Height))
-    }catch{
-        # Last-resort surface: keep the frame/status visible and expose the
-        # renderer error instead of silently losing the response.
-        try{
-            $msg=[string]$_.Exception.Message
-            $w=[Math]::Max(20,(Width))
-            Write-Host ('  [v2 renderer: '+$msg+')') -ForegroundColor Yellow
-            foreach($line in @(([string]$Text -split "
-?
-",-1))){
-                Write-Host ('  '+[string]$line) -ForegroundColor Gray
-            }
-        }catch{
-            try{Write-Host ([string]$Text) -ForegroundColor Gray}catch{}
-        }
-    }finally{
-        End-MessageFrame
-    }
-}
 function Get-MiraCellPrefixLength([string]$Text,[int]$MaxCells){
     if([string]::IsNullOrEmpty($Text) -or $MaxCells -le 0){return 0}
     $used=0
@@ -2825,9 +2492,7 @@ function Pad-MiraCells([string]$Text,[int]$TargetCells){
     return $s + (' '*$pad)
 }
 
-function Write-MiraRgb([string]$Text,[string]$Rgb,[ConsoleColor]$Fallback=[ConsoleColor]::DarkGray){
-    Write-Host $Text -ForegroundColor $Fallback
-}
+
 
 function Add-MarkupSegment([string]$Text,[ConsoleColor]$Color){
     if($null -eq $Text -or $Text.Length -eq 0){return}
@@ -2901,74 +2566,6 @@ function Write-MiraFrameCells([string]$Text,[string]$Rgb,[ConsoleColor]$Fallback
     }
 }
 
-function Start-MessageFrameWait(){
-    if(-not [bool]$script:MarkupTheme.MessageFrameEnabled -or -not $script:UiRenderEnabled){return}
-    $script:ResponseFrameWaiting=$true
-    try{$script:ResponseFrameLiveRow=[Console]::CursorTop}catch{$script:ResponseFrameLiveRow=(Row)}
-    $script:ResponseFrameWidth=[Math]::Max(20,(Width))
-    $script:ResponseFrameCursorCaptured=$false
-
-    try{
-        $script:ResponseFrameCursorVisible=[Console]::CursorVisible
-        $script:ResponseFrameCursorCaptured=$true
-        # Animation may hide the cursor, but its original state is restored
-        # exactly when the response surface is finished or aborted.
-        [Console]::CursorVisible=$false
-    }catch{}
-
-    Write-MessageFrameStatus '...  0.0s'
-}
-
-function Write-MessageFrameStatus([string]$Status){
-    if(-not $script:ResponseFrameWaiting){return}
-    $width=[Math]::Max(20,[int]$script:ResponseFrameWidth)
-    $writeWidth=[Math]::Max(1,$width-1)
-    $line=[string]$Status
-    if([string]::IsNullOrWhiteSpace($line)){$line='...  0.0s'}
-    if((Get-MiraCellWidth $line) -gt $writeWidth){
-        $n=Get-MiraCellPrefixLength $line $writeWidth
-        $line=$line.Substring(0,$n)
-    }
-    $line=$line.PadRight($writeWidth)
-
-    try{
-        # This is intentionally the old known-good live renderer:
-        # repaint the current physical row with CR, never move vertically.
-        # We leave one terminal column unwritten so the line cannot wrap.
-        [Console]::Write("`r")
-        Write-MiraFrameCells $line ([string]$script:MarkupTheme.MessageFrameRGB) ([ConsoleColor]$script:MarkupTheme.MessageFrameColor) $false
-        [Console]::Write("`r")
-        try{[Console]::Out.Flush()}catch{}
-    }catch{
-        # Animation failure must never produce another physical row.
-    }
-}
-
-function Restore-MessageFrameCursor(){
-    if($script:ResponseFrameCursorCaptured){
-        try{[Console]::CursorVisible=$script:ResponseFrameCursorVisible}catch{}
-    }
-    $script:ResponseFrameCursorCaptured=$false
-}
-
-function Abort-MessageFrameWait(){
-    if(-not $script:ResponseFrameWaiting){return}
-    $width=[Math]::Max(20,[int]$script:ResponseFrameWidth)
-    $writeWidth=[Math]::Max(1,$width-1)
-    try{
-        # The live row is also the current row. Clear it without vertical
-        # cursor movement, exactly like the old stable animation path.
-        [Console]::Write("`r")
-        [Console]::Write(' '*$writeWidth)
-        [Console]::Write("`r")
-        try{[Console]::Out.Flush()}catch{}
-    }catch{}
-    $script:ResponseFrameWaiting=$false
-    Restore-MessageFrameCursor
-    $script:ResponseFrameLiveRow=-1
-    $script:ResponseFrameWidth=0
-}
-
 function Begin-MessageFrame(){
     if(-not [bool]$script:MarkupTheme.MessageFrameEnabled){$script:MarkupFrameActive=$false;return}
     if($script:MarkupFrameActive){return}
@@ -2986,26 +2583,12 @@ function Begin-MessageFrame(){
     }
 
     $top=Get-MessageFrameTop $status $width
-
-    # Normal v1 uses the proven CR repaint: replace the current
-    # animation/status row in place, then advance exactly one line.
-    # V2 retains its explicit captured-row path.
     try{
-        if($script:ResponseFrameWaiting -and [int]$script:ResponseFrameLiveRow -ge 0){
-            [Console]::SetCursorPosition(0,[int]$script:ResponseFrameLiveRow)
-            Write-MiraFrameCells $top ([string]$script:MarkupTheme.MessageFrameRGB) ([ConsoleColor]$script:MarkupTheme.MessageFrameColor) $true
-        }else{
-            Write-Host ("`r" + (' ' * $width) + "`r" + $top) -ForegroundColor ([ConsoleColor]$script:MarkupTheme.MessageFrameColor)
-        }
+        Write-Host ("`r" + (' ' * $width) + "`r" + $top) -ForegroundColor ([ConsoleColor]$script:MarkupTheme.MessageFrameColor)
     }catch{
         $script:MarkupFrameActive=$false
-        Abort-MessageFrameWait
         return
     }
-
-    $script:ResponseFrameWaiting=$false
-    $script:ResponseFrameLiveRow=-1
-    $script:ResponseFrameWidth=0
 }
 
 function End-MessageFrame(){
@@ -3019,7 +2602,6 @@ function End-MessageFrame(){
     $script:MarkupFrameActive=$false
     $script:MarkupFrameUsed=0
     $script:MarkupFrameWidth=0
-    Restore-MessageFrameCursor
 }
 
 function Write-MarkupInline([string]$line,[bool]$ContinueLine=$false){
@@ -3704,7 +3286,6 @@ function Invoke-Provider($text,$parts=$null){
         }
     }catch{
         $msg=$_.Exception.Message
-        Abort-MessageFrameWait
         if($msg -eq 'Request cancelled.'){return $false}
         if($_.ErrorDetails -and $_.ErrorDetails.Message){$msg+=[Environment]::NewLine+$_.ErrorDetails.Message}
         W ('[API error] '+$msg) Red
@@ -3739,7 +3320,6 @@ function Invoke-Provider($text,$parts=$null){
         }catch{
             try{ W '[markup warning] raw response fallback' Yellow }catch{}
             try{ Write-Host ([string]$result.Text) -ForegroundColor Gray }catch{}
-            if($script:ResponseFrameWaiting){Abort-MessageFrameWait}
         }
     }
 
