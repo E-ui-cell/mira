@@ -52,6 +52,7 @@ $script:LastStatusHasBullet = $false
 $script:Running = $true
 $script:LastText = ''
 $script:LastRequest = ''
+$script:ResponseAnchorRow = -1
 $script:Conversation = New-Object System.Collections.Generic.List[object]
 $script:Providers = @()
 $script:CurrentProviderName = 'gemini'
@@ -128,11 +129,11 @@ $script:MarkupTheme = [pscustomobject]@{
     CodeFencePrefix       = '∙∙ '     # prefix before the language label
     CodeFenceGap          = ' '
     CodeFenceFg           = 'DarkGray'
-    CodeFenceBg           = 'Black'
-    CodeLanguageFg        = 'Red'
-    CodeLanguageBg        = 'Black'
-    CodeTextFg            = 'Gray'
-    CodeTextBg            = 'Black'
+    CodeFenceBg           = $null
+    CodeLanguageFg        = 'DarkGray'
+    CodeLanguageBg        = $null
+    CodeTextFg            = 'DarkGray'
+    CodeTextBg            = $null
     InlineTextRGB              = '205;207;212'
     InlineBoldRGB              = '245;245;248'
     InlineItalicRGB            = '205;215;225'
@@ -2365,21 +2366,19 @@ function Parse-MiraInline([string]$Line){
     $s=[string]$Line;$out=New-Object System.Collections.Generic.List[object]
     $state=Get-MiraInlineState ([string]$script:MarkupTheme.InlineTextRGB) '' 0 ''
     $stack=New-Object System.Collections.Generic.Stack[object]
-    $emit={param([string]$Text,[string]$Fg,[string]$Bg,[int]$Attr,[string]$Mode)
-        if([string]::IsNullOrEmpty($Text)){return}
-        $v=[string]$Text
-        if($Mode -eq 'sup'){$v=Convert-MiraSuperscript $v}elseif($Mode -eq 'sub'){$v=Convert-MiraSubscript $v}
-        [void]$out.Add((New-MiraInlineSpan $v $Fg $Bg $Attr))
-    }
     $tags=@('b','strong','i','em','u','s','strike','del','code','mark','kbd','sup','sub','small','a','br','hr','img')
     $pos=0;$plainStart=0
     while($pos -lt $s.Length){
         $kind='';$end=$pos;$value='';$tagClosing=$false;$tag=''
         if($s[$pos] -eq '<'){
-            if($s.Substring($pos).StartsWith('<!--')){
+            if($pos+3 -lt $s.Length -and $s[$pos+1] -eq '!' -and $s[$pos+2] -eq '-' -and $s[$pos+3] -eq '-'){
                 $ce=$s.IndexOf('-->',$pos+4)
                 if($ce -ge 0){
-                    if($pos -gt $plainStart){& $emit ($s.Substring($plainStart,$pos-$plainStart)) $state.Fg $state.Bg $state.Attr $state.Mode}
+                    if($pos -gt $plainStart){
+                        $v=$s.Substring($plainStart,$pos-$plainStart)
+                        if($state.Mode -eq 'sup'){$v=Convert-MiraSuperscript $v}elseif($state.Mode -eq 'sub'){$v=Convert-MiraSubscript $v}
+                        [void]$out.Add((New-MiraInlineSpan $v $state.Fg $state.Bg $state.Attr))
+                    }
                     $pos=$ce+3;$plainStart=$pos;continue
                 }
             }
@@ -2398,7 +2397,7 @@ function Parse-MiraInline([string]$Line){
         if($kind -eq '' -and $s[$pos] -eq '$' -and ($pos+1 -ge $s.Length -or $s[$pos+1] -ne '$')){
             $q=$s.IndexOf('$',$pos+1);if($q -gt $pos+1){$kind='math';$end=$q+1;$value=$s.Substring($pos+1,$q-$pos-1)}
         }
-        if($kind -eq '' -and ($s.Substring($pos).StartsWith('**') -or $s.Substring($pos).StartsWith('__'))){
+        if($kind -eq '' -and $pos+1 -lt $s.Length -and (($s[$pos] -eq '*' -and $s[$pos+1] -eq '*') -or ($s[$pos] -eq '_' -and $s[$pos+1] -eq '_'))){
             $d=$s.Substring($pos,2)
             if($stack.Count -gt 0 -and [string]$stack.Peek().Tag -eq $d){
                 $kind='mdclose';$end=$pos+2;$tag=$d
@@ -2407,7 +2406,7 @@ function Parse-MiraInline([string]$Line){
                 if($q -gt $pos+2){$kind='mdopen';$end=$pos+2;$tag=$d}
             }
         }
-        if($kind -eq '' -and $s.Substring($pos).StartsWith('~~')){
+        if($kind -eq '' -and $pos+1 -lt $s.Length -and $s[$pos] -eq '~' -and $s[$pos+1] -eq '~'){
             if($stack.Count -gt 0 -and [string]$stack.Peek().Tag -eq '~~'){
                 $kind='mdclose';$end=$pos+2;$tag='~~'
             }else{
@@ -2432,7 +2431,11 @@ function Parse-MiraInline([string]$Line){
             }
         }
         if($kind -ne ''){
-            if($pos -gt $plainStart){& $emit ($s.Substring($plainStart,$pos-$plainStart)) $state.Fg $state.Bg $state.Attr $state.Mode}
+            if($pos -gt $plainStart){
+                $v=$s.Substring($plainStart,$pos-$plainStart)
+                if($state.Mode -eq 'sup'){$v=Convert-MiraSuperscript $v}elseif($state.Mode -eq 'sub'){$v=Convert-MiraSubscript $v}
+                [void]$out.Add((New-MiraInlineSpan $v $state.Fg $state.Bg $state.Attr))
+            }
             switch($kind){
                 'mdopen' {
                     [void]$stack.Push([pscustomobject]@{Tag=$tag;State=$state})
@@ -2455,7 +2458,9 @@ function Parse-MiraInline([string]$Line){
                     }elseif($tag -in @('br','hr','img')){
                         $glyph=if($tag -eq 'br'){'↵'}elseif($tag -eq 'hr'){'─'}else{'[image]'}
                         $fg=if($tag -eq 'hr'){$script:MarkupTheme.MathFrameRGB}else{$script:MarkupTheme.InlineTagRGB}
-                        &$emit $glyph ([string]$fg) $state.Bg $state.Attr $state.Mode
+                        $v=[string]$glyph
+                        if($state.Mode -eq 'sup'){$v=Convert-MiraSuperscript $v}elseif($state.Mode -eq 'sub'){$v=Convert-MiraSubscript $v}
+                        [void]$out.Add((New-MiraInlineSpan $v ([string]$fg) $state.Bg $state.Attr))
                     }else{
                         [void]$stack.Push([pscustomobject]@{Tag=$tag;State=$state})
                         $next=Get-MiraInlineState $state.Fg $state.Bg $state.Attr $state.Mode
@@ -2484,7 +2489,11 @@ function Parse-MiraInline([string]$Line){
         }
         ++$pos
     }
-    if($plainStart -lt $s.Length){& $emit ($s.Substring($plainStart)) $state.Fg $state.Bg $state.Attr $state.Mode}
+    if($plainStart -lt $s.Length){
+        $v=$s.Substring($plainStart)
+        if($state.Mode -eq 'sup'){$v=Convert-MiraSuperscript $v}elseif($state.Mode -eq 'sub'){$v=Convert-MiraSubscript $v}
+        [void]$out.Add((New-MiraInlineSpan $v $state.Fg $state.Bg $state.Attr))
+    }
     return @($out)
 }
 
@@ -2549,14 +2558,14 @@ function Add-MarkupSegment([string]$Text,[ConsoleColor]$Color,[object]$Backgroun
 }
 
 function End-MarkupLine([object]$FillColor=[ConsoleColor]::Gray,[object]$FillBackground=$null){
-    if($script:MarkupFrameActive){
+    # Full-row padding is intentionally disabled. It is expensive on the Win7
+    # console and provides no visual value because response rows have no side wall.
+    # A background fill remains opt-in for callers that explicitly request one.
+    if($script:MarkupFrameActive -and $null -ne $FillBackground){
         $remaining=[Math]::Max(0,$script:MarkupFrameWidth-$script:MarkupFrameUsed)
-        if($remaining -gt 0){
-            if($null -eq $FillBackground){Write-Host (' ' * $remaining) -NoNewline -ForegroundColor ([ConsoleColor]$FillColor)}
-            else{Write-Host (' ' * $remaining) -NoNewline -ForegroundColor ([ConsoleColor]$FillColor) -BackgroundColor ([ConsoleColor]$FillBackground)}
-        }
-        Write-Host ''
-    }else{Write-Host ''}
+        if($remaining -gt 0){Write-Host (' ' * $remaining) -NoNewline -ForegroundColor ([ConsoleColor]$FillColor) -BackgroundColor ([ConsoleColor]$FillBackground)}
+    }
+    Write-Host ''
     $script:MarkupFrameUsed=0
 }
 
@@ -2864,11 +2873,11 @@ function Write-MathBlock([string[]]$lines,[bool]$unfinished=$false){
 function Write-CodeBlock([string[]]$lines,[string]$language='', [bool]$unfinished=$false){
     $lines=Normalize-CodeBlockLines $lines
     $frame=[ConsoleColor]$script:MarkupTheme.CodeFenceFg
-    $frameBg=[ConsoleColor]$script:MarkupTheme.CodeFenceBg
+    $frameBg=$script:MarkupTheme.CodeFenceBg
     $langFg=[ConsoleColor]$script:MarkupTheme.CodeLanguageFg
-    $langBg=[ConsoleColor]$script:MarkupTheme.CodeLanguageBg
+    $langBg=$script:MarkupTheme.CodeLanguageBg
     $textFg=[ConsoleColor]$script:MarkupTheme.CodeTextFg
-    $textBg=[ConsoleColor]$script:MarkupTheme.CodeTextBg
+    $textBg=$script:MarkupTheme.CodeTextBg
 
     $langRaw=''+$language
     if(-not [bool]$script:MarkupTheme.CodeShowLanguage){$langRaw=''}
@@ -2999,6 +3008,10 @@ function Test-MiraRuleLine([string]$Text){
 function Write-MarkupText([string]$Text){
     # Rendering is non-critical UI. It must never terminate the REPL.
     if([string]::IsNullOrEmpty($Text)){return}
+    if($script:ResponseAnchorRow -ge 0){
+        try{[void](Cursor 0 $script:ResponseAnchorRow)}catch{}
+        $script:ResponseAnchorRow=-1
+    }
     if(-not $script:UiRenderEnabled){
         Write-Host $Text
         return
@@ -4098,7 +4111,13 @@ function Read-Line {
             $historyPos=$script:History.Count;$draft=$buffer
             Redraw $buffer $cursor $PromptRow;continue
         }
-        if($key.Key -eq [ConsoleKey]::Enter){$enterRow=[Console]::CursorTop;Clear-Menu;[void](Cursor 0 ($enterRow+1));return $buffer}
+        if($key.Key -eq [ConsoleKey]::Enter){
+            $enterRow=[Console]::CursorTop
+            $script:ResponseAnchorRow=$enterRow+1
+            Clear-Menu
+            [void](Cursor 0 $script:ResponseAnchorRow)
+            return $buffer
+        }
 
         if(-not [Char]::IsControl($key.KeyChar)){
             $oldBuffer=$buffer; $oldCursor=$cursor; & $SaveUndo $oldBuffer $oldCursor
