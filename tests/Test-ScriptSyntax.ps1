@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)]
-    [string]$ScriptPath = (Join-Path $PSScriptRoot '..\mira-tui.b3.ps1')
+    [string]$ScriptPath = (Join-Path $PSScriptRoot '..\mira.ps1')
 )
 
 $resolved = (Resolve-Path -LiteralPath $ScriptPath -ErrorAction Stop).Path
