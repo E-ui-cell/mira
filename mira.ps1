@@ -71,8 +71,6 @@ $script:CliArgsNotImplemented = @('-m, --model <name>','-e, --execute','-h, --he
 # These affect only the visual renderer. Raw .copy/.grab/.save data is unchanged.
 # -----------------------------------------------------------------------------
 $script:UiRenderEnabled = $true
-$script:UiColorsEnabled = $true
-$script:UiRendererV2Enabled = $false
 $script:ResponseFrameWaiting = $false
 $script:ResponseFrameLiveRow = -1
 $script:ResponseFrameWidth = 0
@@ -97,7 +95,7 @@ $script:ModelMenuIndex = 0
 $script:ModelMenuTyped = ''
 
 $script:Commands = @(
-    '.help','.clear','.clear history','.history','.history persist on','.history persist off','.file','.read','.diff','.shot','.model','.models','.models test','.providers','.request','.request json','.save','.copy','.grab','.ui','.ui render','.ui colors','.ui-render','.stream','.reasoning','.session','.empty session','.compress session','.delete session','.q',':q',':wq'
+    '.help','.clear','.clear history','.history','.history persist on','.history persist off','.file','.read','.diff','.shot','.model','.models','.models test','.providers','.request','.request json','.save','.copy','.grab','.ui','.stream','.reasoning','.session','.empty session','.compress session','.delete session','.q',':q',':wq'
 )
 
 # -----------------------------------------------------------------------------
@@ -3698,7 +3696,7 @@ function Help(){
     W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
     W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
     Show-ApiKeyStatus
-    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <Tab>              refresh only providers with a non-empty API key env' DarkGray; W '  .models test               pre-filter fetched models, probe API, learn successful text models into used.list' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .session [name]            begin RAM-only context session' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui render on|off          enable/disable Markdown/graphics renderer' DarkGray; W '  .ui colors on|off          enable/disable renderer colors' DarkGray; W '  .ui / .ui-render           show current UI state' DarkGray; W '  .stream / .stream on|off  live OpenAI-compatible streaming' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
+    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <Tab>              refresh only providers with a non-empty API key env' DarkGray; W '  .models test               pre-filter fetched models, probe API, learn successful text models into used.list' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .session [name]            begin RAM-only context session' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live OpenAI-compatible streaming' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
 }
 
 function Add-Message($role,$text,$reasoningDetails=$null,$parts=$null){
@@ -3936,44 +3934,16 @@ function Send-ShotToProvider([string]$path=''){
     }catch{W ('[shot send error] '+$_.Exception.Message) Red}
 }
 
-function Show-UiSettings(){
-    $render=if($script:UiRenderEnabled){'on'}else{'off'}
-    $colors=if($script:UiColorsEnabled){'on'}else{'off'}
-    $renderer=if($script:UiRendererV2Enabled){'v2'}else{'v1'}
-    W ('[ui] render='+$render+'  renderer='+$renderer+'  colors='+$colors) Cyan
-    W '  .ui render on|off' DarkGray
-    W '  .ui colors on|off' DarkGray
-    W '  .ui / .ui-render      show current UI state' DarkGray
-}
-
 function Handle-UiCommand([string]$t){
-    $x=$t.Trim()
-    if($x -in @('.ui','.ui-render')){Show-UiSettings;return $true}
-    if($x -match '^\.ui-render\s+(.+)$'){
-        $arg=$Matches[1].Trim().ToLowerInvariant()
-        if($arg -in @('on','off')){$script:UiRenderEnabled=($arg -eq 'on');W ('[ui render '+$arg+']') Cyan;return $true}
-        if($arg -eq 'colors'){$script:UiColorsEnabled=$true;W '[ui colors on]' Cyan;return $true}
-        return $false
+    $x=$t.Trim().ToLowerInvariant()
+    if($x -eq '.ui'){
+        W ('[ui] '+$(if($script:UiRenderEnabled){'on'}else{'off'})) Cyan
+        return $true
     }
-    if($x -match '^\.ui\s+(.+)$'){
-        $parts=$Matches[1].Trim() -split '\s+',2
-        $group=$parts[0].ToLowerInvariant()
-        $arg=if($parts.Count -gt 1){$parts[1].Trim().ToLowerInvariant()}else{''}
-        if($group -eq 'render' -and $arg -in @('on','off','v1','v2')){
-            if($arg -eq 'v2'){$script:UiRendererV2Enabled=$true;$script:UiRenderEnabled=$true}
-            elseif($arg -eq 'v1'){$script:UiRendererV2Enabled=$false;$script:UiRenderEnabled=$true}
-            else{$script:UiRenderEnabled=($arg -eq 'on')}
-            W ('[ui render '+$arg+']') Cyan
-            return $true
-        }
-        if($group -eq 'colors' -and $arg -in @('on','off')){
-            $script:UiColorsEnabled=($arg -eq 'on')
-            W ('[ui colors '+$arg+']') Cyan
-            return $true
-        }
-        if($group -eq 'render' -and [string]::IsNullOrEmpty($arg)){Show-UiSettings;return $true}
-        if($group -eq 'colors' -and [string]::IsNullOrEmpty($arg)){Show-UiSettings;return $true}
-        return $false
+    if($x -eq '.ui on' -or $x -eq '.ui off'){
+        $script:UiRenderEnabled=($x -eq '.ui on')
+        W ('[ui '+$(if($script:UiRenderEnabled){'on]'}else{'off]'})) Cyan
+        return $true
     }
     return $false
 }
@@ -3996,7 +3966,7 @@ function Handle($line){
     if($t -eq '.models test'){Test-CachedModels;return}
     if($t -eq '.models'){Show-Models;return}
     if($t -eq '.providers'){Show-Providers;return}
-    if($t -eq '.ui' -or $t.StartsWith('.ui ') -or $t -eq '.ui-render' -or $t.StartsWith('.ui-render ')){
+    if($t -eq '.ui' -or $t -eq '.ui on' -or $t -eq '.ui off'){
         if(Handle-UiCommand $t){return}
     }
     if($t -eq '.request'){Show-Request;return}
