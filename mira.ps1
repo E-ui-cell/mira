@@ -1900,12 +1900,13 @@ $script:MarkupFrameActive = $false
 $script:MarkupFrameWidth = 0
 $script:MarkupFrameUsed = 0
 
-function Begin-MarkupLine(){
+function Begin-MarkupLine([ConsoleColor]$Color=[ConsoleColor]::Gray,[object]$Background=$null){
     $script:MarkupFrameUsed=0
     if($script:MarkupFrameActive){
         $pad=[string]$script:MarkupTheme.MessageLeftPadding
         if($pad.Length -gt 0){
-            Write-Host $pad -NoNewline -ForegroundColor Gray
+            if($null -eq $Background){Write-Host $pad -NoNewline -ForegroundColor $Color}
+            else{Write-Host $pad -NoNewline -ForegroundColor $Color -BackgroundColor ([ConsoleColor]$Background)}
             $script:MarkupFrameUsed=Get-MiraCellWidth $pad
         }
     }
@@ -2353,7 +2354,7 @@ function Get-MiraInlineState([string]$Fg,[string]$Bg,[int]$Attr,[string]$Mode=''
 }
 
 function Convert-MiraSuperscript([string]$Text){
-    $map=@{'0'='⁰';'1'='¹';'2'='²';'3'='₃';'4'='⁴';'5'='⁵';'6'='⁶';'7'='⁷';'8'='⁸';'9'='⁹';'+'='⁺';'-'='⁻';'='='⁼';'('='⁽';')'='⁾';'a'='ᵃ';'b'='ᵇ';'c'='ᶜ';'d'='ᵈ';'e'='ᵉ';'f'='ᶠ';'g'='ᵍ';'h'='ʰ';'i'='ⁱ';'j'='ʲ';'k'='ᵏ';'l'='ˡ';'m'='ᵐ';'n'='ⁿ';'o'='ᵒ';'p'='ᵖ';'r'='ʳ';'s'='ˢ';'t'='ᵗ';'u'='ᵘ';'v'='ᵛ';'w'='ʷ';'x'='ˣ';'y'='ʸ';'z'='ᶻ'}
+    $map=@{'0'='⁰';'1'='¹';'2'='²';'3'='³';'4'='⁴';'5'='⁵';'6'='⁶';'7'='⁷';'8'='⁸';'9'='⁹';'+'='⁺';'-'='⁻';'='='⁼';'('='⁽';')'='⁾';'a'='ᵃ';'b'='ᵇ';'c'='ᶜ';'d'='ᵈ';'e'='ᵉ';'f'='ᶠ';'g'='ᵍ';'h'='ʰ';'i'='ⁱ';'j'='ʲ';'k'='ᵏ';'l'='ˡ';'m'='ᵐ';'n'='ⁿ';'o'='ᵒ';'p'='ᵖ';'r'='ʳ';'s'='ˢ';'t'='ᵗ';'u'='ᵘ';'v'='ᵛ';'w'='ʷ';'x'='ˣ';'y'='ʸ';'z'='ᶻ'}
     $out=New-Object System.Text.StringBuilder
     foreach($ch in ([string]$Text).ToCharArray()){if($map.ContainsKey([string]$ch)){[void]$out.Append($map[[string]$ch])}else{[void]$out.Append($ch)}}
     return $out.ToString()
@@ -2504,42 +2505,42 @@ function Pad-MiraCells([string]$Text,[int]$TargetCells){
 
 
 
-function Add-MarkupSegment([string]$Text,[ConsoleColor]$Color,[ConsoleColor]$Background=[ConsoleColor]::Black){
+function Add-MarkupSegment([string]$Text,[ConsoleColor]$Color,[object]$Background=$null){
     if($null -eq $Text -or $Text.Length -eq 0){return}
     while($Text.Length -gt 0){
+        $bg=$null;if($null -ne $Background){$bg=[ConsoleColor]$Background}
         if(-not $script:MarkupFrameActive){
-            Write-Host $Text -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color) -BackgroundColor $Background
+            if($null -eq $bg){Write-Host $Text -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color)}
+            else{Write-Host $Text -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color) -BackgroundColor $bg}
             return
         }
         $room=$script:MarkupFrameWidth-$script:MarkupFrameUsed
-        if($room -le 0){
-            Write-Host ''
-            Begin-MarkupLine
-            $room=$script:MarkupFrameWidth-$script:MarkupFrameUsed
-        }
+        if($room -le 0){Write-Host '';Begin-MarkupLine;$room=$script:MarkupFrameWidth-$script:MarkupFrameUsed}
         $takeChars=Get-MiraCellPrefixLength $Text $room
         if($takeChars -le 0){break}
         $part=$Text.Substring(0,$takeChars)
-        Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color) -BackgroundColor $Background
+        if($null -eq $bg){Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color)}
+        else{Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color) -BackgroundColor $bg}
         $script:MarkupFrameUsed += Get-MiraCellWidth $part
         $Text=$Text.Substring($takeChars)
-        if($Text.Length -gt 0){Write-Host '';Begin-MarkupLine}
+        if($Text.Length -gt 0){Write-Host '';Begin-MarkupLine $Color $bg}
     }
 }
 
-function End-MarkupLine([ConsoleColor]$FillColor=[ConsoleColor]::Gray,[ConsoleColor]$FillBackground=[ConsoleColor]::Black){
+function End-MarkupLine([object]$FillColor=[ConsoleColor]::Gray,[object]$FillBackground=$null){
     if($script:MarkupFrameActive){
         $remaining=[Math]::Max(0,$script:MarkupFrameWidth-$script:MarkupFrameUsed)
-        if($remaining -gt 0){Write-Host (' ' * $remaining) -NoNewline -ForegroundColor $FillColor -BackgroundColor $FillBackground}
+        if($remaining -gt 0){
+            if($null -eq $FillBackground){Write-Host (' ' * $remaining) -NoNewline -ForegroundColor ([ConsoleColor]$FillColor)}
+            else{Write-Host (' ' * $remaining) -NoNewline -ForegroundColor ([ConsoleColor]$FillColor) -BackgroundColor ([ConsoleColor]$FillBackground)}
+        }
         Write-Host ''
-    }else{
-        Write-Host ''
-    }
+    }else{Write-Host ''}
     $script:MarkupFrameUsed=0
 }
 
-function Write-MarkupPlainLine([string]$Text,[ConsoleColor]$Color=[ConsoleColor]::Gray,[ConsoleColor]$Background=[ConsoleColor]::Black){
-    Begin-MarkupLine
+function Write-MarkupPlainLine([string]$Text,[ConsoleColor]$Color=[ConsoleColor]::Gray,[object]$Background=$null){
+    Begin-MarkupLine $Color $Background
     Add-MarkupSegment ([string]$Text) $Color $Background
     End-MarkupLine $Color $Background
 }
@@ -2847,16 +2848,16 @@ function Write-CodeBlock([string[]]$lines,[string]$language='', [bool]$unfinishe
     if((Get-MiraCellWidth $prefix) -ge $target){$prefix=$prefix.Substring(0,[Math]::Min($prefix.Length,(Get-MiraCellPrefixLength $prefix ([Math]::Max(0,$target-1)))))}
     $ruleWidth=[Math]::Max(0,$target-(Get-MiraCellWidth $prefix))
 
-    Begin-MarkupLine
+    Begin-MarkupLine $frame $frameBg
     Add-MarkupSegment ([string]$script:MarkupTheme.CodeFencePrefix) $frame $frameBg
     if(-not [string]::IsNullOrWhiteSpace($lang)){Add-MarkupSegment $lang $langFg $langBg}
     Add-MarkupSegment ([string]$script:MarkupTheme.CodeFenceGap) $frame $frameBg
     if($ruleWidth -gt 0){Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$ruleWidth) $frame $frameBg}
-    End-MarkupLine
+    End-MarkupLine $frame $frameBg
 
     foreach($line in @($lines)){Write-MarkupPlainLine ([string]$line) $textFg $textBg}
 
-    Begin-MarkupLine
+    Begin-MarkupLine $frame $frameBg
     Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$target) $frame $frameBg
     End-MarkupLine $frame $frameBg
 }
@@ -2968,6 +2969,10 @@ function Write-MarkupText([string]$Text){
     Begin-MessageFrame
     try{
         $lines=@(([string]$Text).Replace("`r",'').Split([char]10))
+        $first=0
+        while($first -lt $lines.Count -and [string]::IsNullOrWhiteSpace([string]$lines[$first])){++$first}
+        if($first -gt 0 -and $first -lt $lines.Count){$lines=@($lines[$first..($lines.Count-1)])}
+        elseif($first -ge $lines.Count){$lines=@('')}
         $inCode=$false
         $codeLang=''
         $codeBuffer=New-Object System.Collections.Generic.List[string]
@@ -4056,7 +4061,7 @@ function Read-Line {
             $historyPos=$script:History.Count;$draft=$buffer
             Redraw $buffer $cursor $PromptRow;continue
         }
-        if($key.Key -eq [ConsoleKey]::Enter){Clear-Menu;[Console]::Write("`r`n");return $buffer}
+        if($key.Key -eq [ConsoleKey]::Enter){$enterRow=[Console]::CursorTop;Clear-Menu;[void](Cursor 0 ($enterRow+1));return $buffer}
 
         if(-not [Char]::IsControl($key.KeyChar)){
             $oldBuffer=$buffer; $oldCursor=$cursor; & $SaveUndo $oldBuffer $oldCursor
