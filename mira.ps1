@@ -3284,6 +3284,53 @@ function Write-MarkupTable([string[]]$lines){
     }
 }
 
+function Get-MiraHeadingBody([string]$Text){
+    if($null -eq $Text){return $null}
+    $s=[string]$Text;$i=0
+    while($i -lt $s.Length -and $s[$i] -eq '#'){$i++}
+    if($i -lt 1 -or $i -gt 6 -or $i -ge $s.Length){return $null}
+    if(-not [char]::IsWhiteSpace($s[$i])){return $null}
+    return $s.Substring($i).TrimStart()
+}
+
+function Get-MiraListParts([string]$Text){
+    if($null -eq $Text){return $null}
+    $s=[string]$Text;$i=0
+    while($i -lt $s.Length -and [char]::IsWhiteSpace($s[$i])){++$i}
+    $indent=$s.Substring(0,$i);$markerStart=$i
+    if($i -lt $s.Length -and ($s[$i] -eq '-' -or $s[$i] -eq '*' -or $s[$i] -eq '+')){
+        ++$i
+        if($i -lt $s.Length -and [char]::IsWhiteSpace($s[$i])){
+            while($i -lt $s.Length -and [char]::IsWhiteSpace($s[$i])){++$i}
+            return [pscustomobject]@{Indent=$indent;Marker=$s.Substring($markerStart,$i-$markerStart);Body=$s.Substring($i)}
+        }
+        return $null
+    }
+    $digitsStart=$i
+    while($i -lt $s.Length -and [char]::IsDigit($s[$i])){++$i}
+    if($i -gt $digitsStart -and $i -lt $s.Length -and ($s[$i] -eq '.' -or $s[$i] -eq ')')){
+        ++$i
+        if($i -lt $s.Length -and [char]::IsWhiteSpace($s[$i])){
+            while($i -lt $s.Length -and [char]::IsWhiteSpace($s[$i])){++$i}
+            return [pscustomobject]@{Indent=$indent;Marker=$s.Substring($markerStart,$i-$markerStart);Body=$s.Substring($i)}
+        }
+    }
+    return $null
+}
+
+function Test-MiraRuleLine([string]$Text){
+    if($null -eq $Text){return $false}
+    $s=([string]$Text).Trim();if($s.Length -lt 3){return $false}
+    $glyph='';$count=0
+    foreach($ch in $s.ToCharArray()){
+        if([char]::IsWhiteSpace($ch)){continue}
+        if($glyph -eq ''){$glyph=[string]$ch}
+        if([string]$ch -ne $glyph){return $false}
+        ++$count
+    }
+    return ($count -ge 3 -and ($glyph -eq '-' -or $glyph -eq '*' -or $glyph -eq '_'))
+}
+
 function Write-MarkupText([string]$Text){
     # Rendering is non-critical UI. It must never terminate the REPL.
     if([string]::IsNullOrEmpty($Text)){return}
@@ -3291,14 +3338,9 @@ function Write-MarkupText([string]$Text){
         Write-Host $Text
         return
     }
-    if($script:UiRendererV2Enabled){
-        Render-MiraDocumentV2 $Text
-        return
-    }
-
     Begin-MessageFrame
     try{
-        $lines=@($Text -split "`r?`n",-1)
+        $lines=@(([string]$Text).Replace("`r",'').Split([char]10))
         $inCode=$false
         $codeLang=''
         $codeBuffer=New-Object System.Collections.Generic.List[string]
@@ -3314,7 +3356,7 @@ function Write-MarkupText([string]$Text){
                 # CODE BLOCK STATE COMES FIRST. A literal $$ inside source code
                 # must remain source code and can never open/close a math block.
                 if($inCode){
-                    if($safeLine -match '^[ \t]*```[^\r\n`]*[ \t]*$'){
+                    if($safeLine.Trim().StartsWith('```')){
                         try{Write-CodeBlock @($codeBuffer) $codeLang $false}catch{foreach($t in @($codeBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
                         $codeBuffer.Clear()
                         $inCode=$false
@@ -3329,7 +3371,7 @@ function Write-MarkupText([string]$Text){
                 # LaTeX \\[ ... \\], which models commonly emit.
                 if($inMath){
                     # Display math may close with $$ or \] on the same line as content.
-                    if($safeLine -match '^[ 	]*\\\][ 	]*$'){
+                    if($safeLine.Trim() -eq '\]'){
                         try{Write-MathBlock @($mathBuffer) $false}catch{foreach($t in @($mathBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
                         $mathBuffer.Clear()
                         $inMath=$false
@@ -3359,13 +3401,13 @@ function Write-MarkupText([string]$Text){
                 # close on a later line. This covers:
                 # $$E = mc^2$$
                 # $$A = \begin{pmatrix ... \end{pmatrix}$$
-                if($safeLine -match '^[ 	]*\$\$(.*)$'){
+                if($safeLine.TrimStart().StartsWith('$')){
                     if($tableBuffer.Count -gt 0){
                         try{Write-MarkupTable @($tableBuffer)}catch{foreach($t in @($tableBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
                         $tableBuffer.Clear()
                     }
 
-                    $rest=[string]$Matches[1]
+                    $rest=[string]$safeLine.TrimStart().Substring(2)
                     $close=$rest.IndexOf('$$')
                     if($close -ge 0){
                         $inside=$rest.Substring(0,$close)
@@ -3387,16 +3429,17 @@ function Write-MarkupText([string]$Text){
                 }
 
                 # \[ ... \] display math, including content on the opening line.
-                if($safeLine -match '^[ 	]*\\\[(.*)$'){
+                if($safeLine.TrimStart().StartsWith('\[')){
                     if($tableBuffer.Count -gt 0){
                         try{Write-MarkupTable @($tableBuffer)}catch{foreach($t in @($tableBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
                         $tableBuffer.Clear()
                     }
 
-                    $rest=[string]$Matches[1]
-                    if($rest -match '^(.*)\\\](.*)$'){
-                        try{Write-MathBlock @([string]$Matches[1]) $false}catch{Write-MarkupPlainLine $safeLine ([ConsoleColor]::Gray)}
-                        $after=[string]$Matches[2]
+                    $rest=[string]$safeLine.TrimStart().Substring(2)
+                    $close=$rest.IndexOf('\]')
+                    if($close -ge 0){
+                        try{Write-MathBlock @([string]$rest.Substring(0,$close)) $false}catch{Write-MarkupPlainLine $safeLine ([ConsoleColor]::Gray)}
+                        $after=[string]$rest.Substring($close+2)
                         if(-not [string]::IsNullOrWhiteSpace($after)){
                             try{Write-MarkupInline $after}catch{Write-MarkupPlainLine $after ([ConsoleColor]::Gray)}
                         }
@@ -3410,7 +3453,7 @@ function Write-MarkupText([string]$Text){
 
                 # Markdown code fence MUST be a standalone line. This is the
                 # highest-priority renderer rule when not already inside math.
-                if($safeLine -match '^[ \t]*```[^\r\n`]*[ \t]*$'){
+                if($safeLine.Trim().StartsWith('```')){
                     if($tableBuffer.Count -gt 0){
                         try{Write-MarkupTable @($tableBuffer)}catch{foreach($t in @($tableBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
                         $tableBuffer.Clear()
@@ -3428,7 +3471,7 @@ function Write-MarkupText([string]$Text){
                     continue
                 }
 
-                if($trim -match '^\|.*\|$'){
+                if($trim.StartsWith('|') -and $trim.EndsWith('|')){
                     [void]$tableBuffer.Add($safeLine)
                     continue
                 }
@@ -3437,21 +3480,22 @@ function Write-MarkupText([string]$Text){
                     $tableBuffer.Clear()
                 }
 
-                if($trim -match '^#{1,6}\s+'){
-                    try{Write-MarkupPlainLine ($trim -replace '^#{1,6}\s+','') ([ConsoleColor]::Magenta)}catch{Write-MarkupPlainLine $safeLine ([ConsoleColor]::Gray)}
+                $heading=Get-MiraHeadingBody $trim
+                if($null -ne $heading){
+                    try{Write-MarkupPlainLine $heading ([ConsoleColor]::Magenta)}catch{Write-MarkupPlainLine $safeLine ([ConsoleColor]::Gray)}
                     continue
                 }
 
                 # Unordered / ordered lists: convert only the Markdown marker.
                 # The actual text and all Unicode punctuation stay untouched.
-                $listMatch=[regex]::Match($safeLine,'^(\s*)([-*+]\s+|\d+[.)]\s+)(.*)$')
-                if($listMatch.Success){
+                $listMatch=Get-MiraListParts $safeLine
+                if($null -ne $listMatch){
                     try{
-                        $indent=$listMatch.Groups[1].Value
-                        $marker=$listMatch.Groups[2].Value
-                        $body=$listMatch.Groups[3].Value
+                        $indent=[string]$listMatch.Indent
+                        $marker=[string]$listMatch.Marker
+                        $body=[string]$listMatch.Body
                         Begin-MarkupLine
-                        if($marker -match '^[-*+]'){
+                        if($marker.Length -gt 0 -and ($marker[0] -eq '-' -or $marker[0] -eq '*' -or $marker[0] -eq '+')){
                             Add-MarkupSegment ($indent+'• ') ([ConsoleColor]::Yellow)
                         }else{
                             Add-MarkupSegment ($indent+$marker) ([ConsoleColor]::Yellow)
@@ -3465,9 +3509,8 @@ function Write-MarkupText([string]$Text){
                     try{
                         $quote=$trim.Substring(1).TrimStart()
                         Begin-MarkupLine
-                        Add-MarkupSegment '« ' ([ConsoleColor]::DarkGray)
-                        Add-MarkupSegment $quote ([ConsoleColor]::Gray)
-                        Add-MarkupSegment ' »' ([ConsoleColor]::DarkGray)
+                        Add-MarkupSegment '│ ' ([ConsoleColor]::DarkGray)
+                        Write-MarkupInline $quote $true
                         End-MarkupLine
                     }catch{Write-MarkupPlainLine $safeLine ([ConsoleColor]::Gray)}
                     continue
@@ -3496,7 +3539,7 @@ function Write-MarkupText([string]$Text){
         }
     }catch{
         try{
-            foreach($fallbackLine in @($Text -split "`r?`n",-1)){Write-MarkupPlainLine ([string]$fallbackLine) ([ConsoleColor]::Gray)}
+            foreach($fallbackLine in @(([string]$Text).Replace("`r",'').Split([char]10))){Write-MarkupPlainLine ([string]$fallbackLine) ([ConsoleColor]::Gray)}
         }catch{}
     }finally{
         End-MessageFrame
