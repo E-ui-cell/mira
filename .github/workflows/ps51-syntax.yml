@@ -13,4 +13,4 @@ jobs:
 
       - name: Parse with Windows PowerShell 5.1
         shell: powershell
-        run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\mira-tui.b3.ps1
+        run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\mira.ps1
