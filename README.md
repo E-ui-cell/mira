@@ -440,10 +440,28 @@ The following aichat-style CLI options are not currently implemented:
 
 ```text
 -m, --model
--e, --execute
 -h, --help
 --
 ```
+
+### Execute mode
+
+Generate a command for the current Windows shell and execute it after confirmation:
+
+```powershell
+.\mira.ps1 -e "find all .log files under the current directory"
+```
+
+MIRA detects whether it was launched from `cmd.exe` or PowerShell and tells the LLM the detected OS and shell. The generated command is shown before execution and must be confirmed with `Y`.
+
+For an explicit shell override:
+
+```powershell
+$env:MIRA_SHELL="cmd"
+.\mira.ps1 -e "list files sorted by size"
+```
+
+Supported values are `cmd` and `powershell`.
 
 ## Configuration
 
