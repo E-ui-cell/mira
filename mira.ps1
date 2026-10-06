@@ -108,64 +108,115 @@ $script:MarkupTheme = [pscustomobject]@{
     # WHOLE MESSAGE FRAME -- quiet full-width top/bottom frame around the reply.
     # The final status line is embedded into the TOP border.
     # -------------------------------------------------------------------------
+    # tunable: enable/disable the outer response frame.
     MessageFrameEnabled  = $true
+    # tunable: fallback ConsoleColor for the outer frame.
     MessageFrameColor    = 'DarkGray'      # fallback only when truecolor is unavailable
+    # tunable: RGB/truecolor value for the outer response frame.
     MessageFrameRGB       = '50;52;58'      # intentionally fades into a dark terminal
+    # tunable: top-left frame glyph.
     MessageTopLeft       = [char]0x250C     # ┌
+    # tunable: top-right frame glyph.
     MessageTopRight      = [char]0x2510     # ┐
+    # tunable: bottom-left frame glyph.
     MessageBottomLeft    = [char]0x2514     # └
+    # tunable: bottom-right frame glyph.
     MessageBottomRight   = [char]0x2518     # ┘
+    # tunable: horizontal frame glyph.
     MessageHorizontal    = [char]0x2500     # ─
+    # tunable: prefix before the top status.
     MessageTopPrefix     = '───'            # after ┌, before status
+    # tunable: left indentation of response text.
     MessageLeftPadding   = '  '             # response text indent
 
     # -------------------------------------------------------------------------
     # CODE BLOCK THEME -- short U+2219 separator, about 25% of terminal width.
     # -------------------------------------------------------------------------
+    # tunable: code-block rule width as a fraction of terminal width.
     CodeRulePercent      = 0.25             # about 25% of terminal width
+    # tunable: minimum code-block rule width.
     CodeRuleMinWidth     = 18               # minimum readable rule
+    # tunable: show/hide the language label.
     CodeShowLanguage     = $true
     # Direct Win7 ConsoleColor controls for fenced code blocks.
+    # tunable: glyph used for code-block decoration.
     CodeFenceChar         = '∙'       # replacement glyph for the ``` fence
+    # tunable: prefix before the language label.
     CodeFencePrefix       = '∙∙ '     # prefix before the language label
+    # tunable: spacing after the language label.
     CodeFenceGap          = ' '
+    # tunable: legacy code-fence foreground; unused on the fast hot path.
     CodeFenceFg           = 'DarkGray'
+    # tunable: legacy code-fence background; unused on the fast hot path.
     CodeFenceBg           = $null
+    # tunable: legacy language foreground; unused on the fast hot path.
     CodeLanguageFg        = 'DarkGray'
+    # tunable: legacy language background; unused on the fast hot path.
     CodeLanguageBg        = $null
+    # tunable: code-text foreground; retained for compatibility/fallback paths.
     CodeTextFg            = 'DarkGray'
+    # tunable: code-text background; retained for compatibility/fallback paths.
     CodeTextBg            = $null
+    # tunable: base inline text RGB.
     InlineTextRGB              = '205;207;212'
+    # tunable: bold text RGB.
     InlineBoldRGB              = '245;245;248'
+    # tunable: italic text RGB.
     InlineItalicRGB            = '205;215;225'
+    # tunable: underlined text RGB.
     InlineUnderlineRGB         = '100;190;235'
+    # tunable: strikethrough text RGB.
     InlineStrikeRGB            = '145;148;155'
+    # tunable: inline-code foreground RGB.
     InlineCodeRGB              = '235;235;220'
+    # tunable: inline-code background RGB.
     InlineCodeBG               = '38;41;48'
+    # tunable: marked-text foreground RGB.
     InlineMarkRGB              = '245;235;205'
+    # tunable: marked-text background RGB.
     InlineMarkBG               = '86;74;38'
+    # tunable: keyboard-key foreground RGB.
     InlineKbdRGB               = '245;245;245'
+    # tunable: keyboard-key background RGB.
     InlineKbdBG                = '55;58;66'
+    # tunable: link text RGB.
     InlineLinkRGB              = '100;190;240'
+    # tunable: quote text RGB.
     InlineQuoteRGB             = '120;160;185'
+    # tunable: inline tag RGB.
     InlineTagRGB               = '145;150;160'
+    # tunable: code-panel RGB.
     CodePanelRGB               = '180;182;188'
+    # tunable: code-panel background RGB.
     CodePanelBG                = '30;33;39'
+    # tunable: code-header RGB.
     CodeHeaderRGB              = '210;212;218'
+    # tunable: code-header background RGB.
     CodeHeaderBG               = '42;45;53'
+    # tunable: table-header RGB.
     TableHeaderRGB             = '225;230;235'
+    # tunable: table-header background RGB.
     TableHeaderBG              = '42;48;58'
 
 
     # ---- MATH BLOCK THEME ---------------------------------------------------
+    # tunable: fallback ConsoleColor for math frame/rules.
     MathFrameColor       = 'DarkGray'       # fallback separator color
+    # tunable: math frame/rule RGB.
     MathFrameRGB          = '96;100;110'     # slightly more visible than the outer frame
+    # tunable: MATH label ConsoleColor.
     MathLanguageColor    = 'Cyan'           # optional MATH label color
+    # tunable: rendered formula ConsoleColor.
     MathTextColor        = 'Gray'           # rendered formula color
+    # tunable: prefix before the MATH label.
     MathHeaderPrefix     = '∙∙ '            # U+2219 U+2219 + space
+    # tunable: spacing after the MATH label.
     MathLanguageGap      = ' '              # one space after MATH
+    # tunable: glyph used for math rules.
     MathRuleChar         = '∙'              # U+2219 BULLET OPERATOR
+    # tunable: math rule width as a fraction of terminal width.
     MathRulePercent      = 0.25             # same graphic width as code blocks
+    # tunable: minimum math rule width.
     MathRuleMinWidth     = 18
 
     # ---- language labels ----------------------------------------------------
