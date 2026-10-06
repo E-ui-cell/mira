@@ -64,8 +64,8 @@ $script:LastPromptTokens = 0
 $script:LastRequestElapsedMs = 0
 $script:LastRequestFrame = '... '
 $script:DryRunMode = $false
-$script:CliArgsImplemented = @('-d','--dry-run')
-$script:CliArgsNotImplemented = @('-m, --model <name>','-e, --execute','-h, --help','--')
+$script:CliArgsImplemented = @('-d','--dry-run','-e','--execute')
+$script:CliArgsNotImplemented = @('-m, --model <name>','-h, --help','--')
 
 # -----------------------------------------------------------------------------
 # UI RUNTIME SWITCHES
@@ -4234,8 +4234,16 @@ function Read-Line {
         }
     }
 }
-$cliArgs=@($cliArgs)
-if($cliArgs.Count -gt 0){
+
+function Get-MiraExecuteShell {
+    $shell='powershell'
+    try{
+        $p=Get-WmiObject Win32_Process -Filter ('ProcessId='+$PID) -ErrorAction Stop
+        $ppid=[int]$p.ParentProcessId
+        $parent=Get-Process -Id $ppid -ErrorAction Stop
+        if($parent.ProcessName -ieq 'cmd'){$shell='cmd'}
+    }catch{}
+    if($env:MIRA_SHELL -match '^(cmd|powershell)
     foreach($arg in $cliArgs){
         if($arg -eq '--mira-console'){
             continue
@@ -4244,6 +4252,182 @@ if($cliArgs.Count -gt 0){
             $script:DryRunMode=$true
             continue
         }
+        Write-Host ('[cli] argument not implemented: '+$arg) -ForegroundColor Red
+        Write-Host ''
+        Show-CliArgumentStatus
+        exit 2
+    }
+}
+
+Clear-Host
+Load-Providers
+Load-TuiHistory
+W 'MIRA-TUI / SLIM PROVIDERS' Cyan
+W ('Own readline • no PSReadLine • Tab • history • multiline • attachments • model: ' + $script:CurrentProviderName + ':' + $script:CurrentModel) DarkGray
+W ('Session: off (one-shot requests) • .enable-session enables RAM context • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
+W ('History persistence: ' + $(if($script:PersistHistory){$script:HistoryFile}else{'OFF (RAM only)'}) + ' • loaded last ' + $script:HistoryLoadLimit + ' entries • .history persist on/off') DarkGray
+W ('OpenAI-compatible stream: ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning: ' + $(if($script:ShowReasoning){'on'}else{'off'})) DarkGray
+W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
+W ('Used models: ' + $script:UsedModelsCacheFile + ' • learned from successful text replies/probes') DarkGray
+W ''
+$script:MiraConsoleInputConfigured=$false
+try{
+    try{
+        if($Host.Name -ne 'Windows PowerShell ISE Host'){
+            [Console]::TreatControlCAsInput=$true
+            $script:MiraConsoleInputConfigured=$true
+        }
+    }catch{}
+    while($script:Running){
+        Reset-TuiHistorySearch;Clear-Menu
+        $line=Read-Line (Row)
+        if([string]::IsNullOrEmpty($line)){continue}
+        Add-TuiHistory $line;Save-TuiHistory
+        try{ Handle $line }catch{
+            try{ W ('[command error] '+$_.Exception.Message) Red }catch{}
+        }finally{
+            $script:ResponseAnchorRow=-1
+        }
+    }
+}finally{
+    Save-TuiHistory
+    if($script:MiraConsoleInputConfigured){
+        try{[Console]::TreatControlCAsInput=$false}catch{}
+    }
+}){$shell=$env:MIRA_SHELL.ToLowerInvariant()}
+    return $shell
+}
+function Get-MiraExecuteOs {
+    try{
+        $v=[Environment]::OSVersion.Version;$name='Windows'
+        if($v.Major -eq 6 -and $v.Minor -eq 1){$name='Windows 7'}
+        elseif($v.Major -eq 6 -and $v.Minor -eq 2){$name='Windows 8'}
+        elseif($v.Major -eq 6 -and $v.Minor -eq 3){$name='Windows 8.1'}
+        elseif($v.Major -ge 10){$name='Windows 10/11'}
+        return ($name+' '+$v.ToString())
+    }catch{return 'Windows'}
+}
+function Get-MiraExecuteCommand([string]$text) {
+    $raw=[string]$script:LastText
+    if([string]::IsNullOrWhiteSpace($raw)){throw 'LLM returned an empty command.'}
+    $m=[regex]::Match($raw,'(?s)\x60{3}(?:[A-Za-z0-9_+-]+)?\s*\r?\n?(.*?)\x60{3}')
+    if($m.Success){$raw=$m.Groups[1].Value}
+    $lines=@($raw -split '\r?\n' | ForEach-Object {$_.TrimEnd()})
+    while($lines.Count -gt 0 -and [string]::IsNullOrWhiteSpace($lines[0])){$lines=@($lines | Select-Object -Skip 1)}
+    while($lines.Count -gt 0 -and [string]::IsNullOrWhiteSpace($lines[-1])){$lines=@($lines | Select-Object -SkipLast 1)}
+    if($lines.Count -eq 0){throw 'LLM returned an empty command.'}
+    if($lines.Count -gt 1){$raw=($lines -join [Environment]::NewLine)}else{$raw=$lines[0].Trim()}
+    if($raw -match '^(?i)(here|sure|command|run this|you can|use this)\b'){throw 'LLM did not return a bare command.'}
+    return $raw
+}
+function Invoke-MiraExecute([string]$text) {
+    $shell=Get-MiraExecuteShell;$os=Get-MiraExecuteOs
+    $shellName=if($shell -eq 'cmd'){'cmd.exe'}else{'Windows PowerShell 5.1'}
+    $prompt=@"
+You are MIRA's shell-command generator.
+The user wants to accomplish this task:
+$text
+
+Execution environment:
+OS: $os
+Shell: $shellName
+
+Return EXACTLY ONE executable command for this environment.
+Rules:
+- Output the command only.
+- No Markdown fences.
+- No explanation.
+- Do not provide commands for another OS or shell.
+- Use syntax native to $shellName.
+- If the task needs multiple operations, combine them into one executable command using the shell's native command separator.
+"@
+    W ('[execute] '+$shellName+' / '+$os) DarkGray
+    [void](Invoke-Provider $prompt)
+    try{$command=Get-MiraExecuteCommand $script:LastText}catch{W ('[execute error] '+$_.Exception.Message) Red;return $false}
+    W '';W '[command]' Cyan;W $command Gray;W ''
+    $answer=Read-Host 'Execute this command? [Y/N]'
+    if($answer -notmatch '^(?i)y(es)?
+    foreach($arg in $cliArgs){
+        if($arg -eq '--mira-console'){
+            continue
+        }
+        if($arg -eq '-d' -or $arg -eq '--dry-run'){
+            $script:DryRunMode=$true
+            continue
+        }
+        Write-Host ('[cli] argument not implemented: '+$arg) -ForegroundColor Red
+        Write-Host ''
+        Show-CliArgumentStatus
+        exit 2
+    }
+}
+
+Clear-Host
+Load-Providers
+Load-TuiHistory
+W 'MIRA-TUI / SLIM PROVIDERS' Cyan
+W ('Own readline • no PSReadLine • Tab • history • multiline • attachments • model: ' + $script:CurrentProviderName + ':' + $script:CurrentModel) DarkGray
+W ('Session: off (one-shot requests) • .enable-session enables RAM context • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
+W ('History persistence: ' + $(if($script:PersistHistory){$script:HistoryFile}else{'OFF (RAM only)'}) + ' • loaded last ' + $script:HistoryLoadLimit + ' entries • .history persist on/off') DarkGray
+W ('OpenAI-compatible stream: ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning: ' + $(if($script:ShowReasoning){'on'}else{'off'})) DarkGray
+W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
+W ('Used models: ' + $script:UsedModelsCacheFile + ' • learned from successful text replies/probes') DarkGray
+W ''
+$script:MiraConsoleInputConfigured=$false
+try{
+    try{
+        if($Host.Name -ne 'Windows PowerShell ISE Host'){
+            [Console]::TreatControlCAsInput=$true
+            $script:MiraConsoleInputConfigured=$true
+        }
+    }catch{}
+    while($script:Running){
+        Reset-TuiHistorySearch;Clear-Menu
+        $line=Read-Line (Row)
+        if([string]::IsNullOrEmpty($line)){continue}
+        Add-TuiHistory $line;Save-TuiHistory
+        try{ Handle $line }catch{
+            try{ W ('[command error] '+$_.Exception.Message) Red }catch{}
+        }finally{
+            $script:ResponseAnchorRow=-1
+        }
+    }
+}finally{
+    Save-TuiHistory
+    if($script:MiraConsoleInputConfigured){
+        try{[Console]::TreatControlCAsInput=$false}catch{}
+    }
+}){W '[execute cancelled]' Yellow;return $false}
+    W '[executing]' DarkGray
+    try{
+        if($shell -eq 'cmd'){
+            $output=& $env:ComSpec /d /c $command 2>&1 | Out-String -Width 4096;$exitCode=$LASTEXITCODE
+        }else{
+            $output=Invoke-Expression $command 2>&1 | Out-String -Width 4096;$exitCode=if($?){0}else{1}
+        }
+        if(-not [string]::IsNullOrWhiteSpace($output)){W $output.TrimEnd() Gray}
+        W ('[exit code] '+$exitCode) $(if($exitCode -eq 0){'Green'}else{'Red'})
+        return ($exitCode -eq 0)
+    }catch{W ('[execute error] '+$_.Exception.Message) Red;return $false}
+}
+$cliArgs=@($cliArgs)
+$executeMode=$false
+$executeParts=New-Object System.Collections.Generic.List[string]
+if($cliArgs.Count -gt 0){
+    foreach($arg in $cliArgs){
+        if($arg -eq '--mira-console'){continue}
+        if($arg -eq '-d' -or $arg -eq '--dry-run'){$script:DryRunMode=$true;continue}
+        if($arg -eq '-e' -or $arg -eq '--execute'){$executeMode=$true;continue}
+        [void]$executeParts.Add([string]$arg)
+    }
+    if($executeMode){
+        if($executeParts.Count -eq 0){Write-Host '[cli] -e requires a task description.' -ForegroundColor Yellow;exit 2}
+        Load-Providers
+        $task=($executeParts.ToArray() -join ' ')
+        [void](Invoke-MiraExecute $task)
+        exit 0
+    }
+    foreach($arg in $executeParts){
         Write-Host ('[cli] argument not implemented: '+$arg) -ForegroundColor Red
         Write-Host ''
         Show-CliArgumentStatus
