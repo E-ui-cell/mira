@@ -253,6 +253,25 @@ function Cursor($x,$y) {
     }
 }
 
+function Clear-MiraVisibleScreen {
+    # Linux Ctrl+L semantics: blank only the current viewport.
+    # The scrollback buffer above WindowTop is untouched; do not use Clear-Host.
+    try {
+        $raw=$Host.UI.RawUI
+        $w=[int]$raw.WindowSize.Width
+        $h=[int]$raw.WindowSize.Height
+        $top=[int]$raw.WindowPosition.Y
+        $left=[int]$raw.WindowPosition.X
+        $rect=New-Object Management.Automation.Host.Rectangle($left,$top,$left+$w-1,$top+$h-1)
+        $cell=New-Object Management.Automation.Host.BufferCell(' ',[ConsoleColor]::Gray,[ConsoleColor]::Black,[Management.Automation.Host.BufferCellType]::Complete)
+        $raw.SetBufferContents($rect,$cell)
+        $raw.CursorPosition=New-Object Management.Automation.Host.Coordinates($left,$top+$h-1)
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Row() {
     try { return [Console]::CursorTop } catch { try { return $Host.UI.RawUI.CursorPosition.Y } catch { return 0 } }
 }
@@ -4368,7 +4387,7 @@ function Read-Line {
                 }
                 ([ConsoleKey]::L){
                     Clear-Menu
-                    [void](Refresh-TuiWindow)
+                    [void](Clear-MiraVisibleScreen)
                     Redraw $buffer $cursor $PromptRow
                     continue
                 }
