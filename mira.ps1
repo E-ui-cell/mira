@@ -1737,11 +1737,6 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
 
         try{$responseStream.ReadTimeout=500}catch{}
         $reader=New-Object IO.StreamReader($responseStream,[Text.Encoding]::UTF8)
-        $readWatch=[Diagnostics.Stopwatch]::StartNew()
-        $answer=New-Object Text.StringBuilder;$reasoning=New-Object Text.StringBuilder
-        $reasoningDetails=New-Object System.Collections.Generic.List[object]
-        $finish='';$tokensIn=0;$tokensOut=0;$reasoningTokens=0;$showThought=$false
-
         # Read SSE lines asynchronously. StreamReader.ReadLine() blocks the main
         # thread even when ReadTimeout is set, which freezes the request spinner.
         # ReadLineAsync() lets the UI/cancellation loop keep running between chunks.
