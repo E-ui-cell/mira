@@ -1742,24 +1742,18 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
         $reasoningDetails=New-Object System.Collections.Generic.List[object]
         $finish='';$tokensIn=0;$tokensOut=0;$reasoningTokens=0;$showThought=$false
 
+        # Read SSE lines asynchronously. StreamReader.ReadLine() blocks the main
+        # thread even when ReadTimeout is set, which freezes the request spinner.
+        # ReadLineAsync() lets the UI/cancellation loop keep running between chunks.
+        $readWatch=[Diagnostics.Stopwatch]::StartNew()
+        $answer=New-Object Text.StringBuilder;$reasoning=New-Object Text.StringBuilder
+        $reasoningDetails=New-Object System.Collections.Generic.List[object]
+        $finish='';$tokensIn=0;$tokensOut=0;$reasoningTokens=0;$showThought=$false
+        $lineTask=$reader.ReadLineAsync()
+
         while($true){
-            try{$line=$reader.ReadLine()}catch [IO.IOException]{
-                if($readWatch.ElapsedMilliseconds -ge 120000){throw 'Streaming response timed out while waiting for data.'}
-                Update-MiraRequestUi
-                try{
-                    if([Console]::KeyAvailable){
-                        while([Console]::KeyAvailable){
-                            $key=[Console]::ReadKey($true)
-                            if($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)){
-                                $cancelled=$true;try{$request.Abort()}catch{};break
-                            }
-                        }
-                    }
-                }catch{}
-                if($cancelled){throw 'Request cancelled.'}
-                continue
-            }
-            if($null -eq $line){break}
+            Update-MiraRequestUi
+
             try{
                 if([Console]::KeyAvailable){
                     while([Console]::KeyAvailable){
@@ -1771,21 +1765,52 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
                 }
             }catch{}
             if($cancelled){throw 'Request cancelled.'}
-            if(-not $line.StartsWith('data:')){continue}
+
+            if(-not $lineTask.IsCompleted){
+                if($readWatch.ElapsedMilliseconds -ge 120000){
+                    try{$request.Abort()}catch{}
+                    throw 'Streaming response timed out while waiting for data.'
+                }
+                Start-Sleep -Milliseconds 50
+                continue
+            }
+
+            try{
+                $line=$lineTask.GetAwaiter().GetResult()
+            }catch{
+                if($cancelled){throw 'Request cancelled.'}
+                throw $_.Exception
+            }
+            if($null -eq $line){break}
+            $readWatch.Restart()
+
+            if(-not $line.StartsWith('data:')){
+                $lineTask=$reader.ReadLineAsync()
+                continue
+            }
             $data=$line.Substring(5).Trim()
             if($data -eq '[DONE]'){break}
-            if([string]::IsNullOrWhiteSpace($data)){continue}
-            try{$chunk=$data|ConvertFrom-Json -ErrorAction Stop}catch{continue}
-            if($null -eq $chunk){continue}
+            if([string]::IsNullOrWhiteSpace($data)){
+                $lineTask=$reader.ReadLineAsync()
+                continue
+            }
+            try{$chunk=$data|ConvertFrom-Json -ErrorAction Stop}catch{
+                $lineTask=$reader.ReadLineAsync()
+                continue
+            }
+            if($null -eq $chunk){
+                $lineTask=$reader.ReadLineAsync()
+                continue
+            }
 
             if($null -ne $chunk.usage){
                 if($null -ne $chunk.usage.prompt_tokens){$tokensIn=[int]$chunk.usage.prompt_tokens}
                 if($null -ne $chunk.usage.completion_tokens){$tokensOut=[int]$chunk.usage.completion_tokens}
                 if($null -ne $chunk.usage.completion_tokens_details -and $null -ne $chunk.usage.completion_tokens_details.reasoning_tokens){$reasoningTokens=[int]$chunk.usage.completion_tokens_details.reasoning_tokens}
             }
-            $choices=@($chunk.choices);if($choices.Count -eq 0){continue}
+            $choices=@($chunk.choices);if($choices.Count -eq 0){$lineTask=$reader.ReadLineAsync();continue}
             $choice=$choices[0];$delta=$choice.delta;$finish=[string]$choice.finish_reason
-            if($null -eq $delta){continue}
+            if($null -eq $delta){$lineTask=$reader.ReadLineAsync();continue}
 
             if($null -ne $delta.reasoning -and -not [string]::IsNullOrEmpty([string]$delta.reasoning)){
                 $rText=[string]$delta.reasoning;[void]$reasoning.Append($rText)
@@ -1806,6 +1831,8 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
                     [void]$answer.Append($c);[Console]::Write($c)
                 }
             }
+
+            $lineTask=$reader.ReadLineAsync()
         }
 
         $readWatch.Stop()
