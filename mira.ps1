@@ -1839,87 +1839,63 @@ function Send-ProviderPayload($provider,$model,$payload){
         $url=$base.TrimEnd('/')+'/models/'+$model+':generateContent'
         if(-not [string]::IsNullOrWhiteSpace($apiKey)){$url += '?key='+[uri]::EscapeDataString($apiKey)}
         $headers=@{}
-    }
-    elseif($type -eq 'openai-compatible'){
+    }elseif($type -eq 'openai-compatible'){
         $url=([string]$provider.api_base).TrimEnd('/')+'/chat/completions'
         $headers=@{}
         if(-not [string]::IsNullOrWhiteSpace($apiKey)){$headers['Authorization']='Bearer '+$apiKey}
-        if($null -ne $provider.headers){
-            foreach($prop in $provider.headers.PSObject.Properties){$headers[[string]$prop.Name]=[string]$prop.Value}
-        }
-    }
-    else{ throw ('unsupported provider type: '+$type) }
+        if($null -ne $provider.headers){foreach($prop in $provider.headers.PSObject.Properties){$headers[[string]$prop.Name]=[string]$prop.Value}}
+    }else{throw ('unsupported provider type: '+$type)}
 
     $json=$payload | ConvertTo-Json -Depth 30
     $bytes=[Text.Encoding]::UTF8.GetBytes($json)
     $params=@{Uri=$url;Method='Post';ContentType='application/json';Body=$bytes;TimeoutSec=120;ErrorAction='Stop'}
     if($headers.Count -gt 0){$params.Headers=$headers}
 
-    # Request UI owns the stopwatch/cursor lifecycle.
-    Start-MiraRequestUi
-    $asyncResult=$powershell.BeginInvoke()
-    while(-not $asyncResult.IsCompleted){
-        try{
-            if([Console]::KeyAvailable){
-                while([Console]::KeyAvailable){
-                    $key=[Console]::ReadKey($true)
-                    if($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)){
-                        $cancelled=$true;try{$powershell.Stop()}catch{};break
+    $oldTreatControlCAsInput=$null;$runspace=$null;$powershell=$null;$asyncResult=$null;$cancelled=$false
+    try{
+        try{$oldTreatControlCAsInput=[Console]::TreatControlCAsInput;[Console]::TreatControlCAsInput=$true}catch{}
+        $runspace=[Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace();$runspace.Open()
+        $powershell=[Management.Automation.PowerShell]::Create();$powershell.Runspace=$runspace
+        [void]$powershell.AddScript({param($p) Invoke-RestMethod @p}).AddArgument($params)
+        Start-MiraRequestUi
+        $asyncResult=$powershell.BeginInvoke()
+        while(-not $asyncResult.IsCompleted){
+            try{
+                if([Console]::KeyAvailable){
+                    while([Console]::KeyAvailable){
+                        $key=[Console]::ReadKey($true)
+                        if($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)){$cancelled=$true;try{$powershell.Stop()}catch{};break}
                     }
                 }
-            }
-        }catch{}
-        if($cancelled){break}
-        Update-MiraRequestUi
-        Start-Sleep -Milliseconds 100
-    }
-    if($cancelled){
-        try{$powershell.EndInvoke($asyncResult)|Out-Null}catch{}
-        Stop-MiraRequestUi 0 0
-        W '[Request cancelled]' Yellow
-        throw 'Request cancelled.'
-    }
-
+            }catch{}
+            if($cancelled){break}
+            Update-MiraRequestUi
+            Start-Sleep -Milliseconds 100
+        }
+        if($cancelled){
+            try{$powershell.EndInvoke($asyncResult)|Out-Null}catch{}
+            Stop-MiraRequestUi 0 0
+            W '[Request cancelled]' Yellow
+            throw 'Request cancelled.'
+        }
         $response=@($powershell.EndInvoke($asyncResult))
         $runspaceErrors=@($powershell.Streams.Error)
         if($runspaceErrors.Count -gt 0){
-            $err=$runspaceErrors[0]
-            $webResp=$err.Exception.Response
+            $err=$runspaceErrors[0];$webResp=$err.Exception.Response
             if($null -ne $webResp){
-                $status=[int]$webResp.StatusCode
-                $statusText=[string]$webResp.StatusDescription
-                $body=''
-                try{
-                    $stream=$webResp.GetResponseStream()
-                    if($stream){
-                        $reader=New-Object System.IO.StreamReader($stream)
-                        try{$body=$reader.ReadToEnd()}finally{$reader.Dispose();$stream.Dispose()}
-                    }
-                }catch{}
-                if($body){throw "HTTP $status $statusText`n$body"}
-                throw "HTTP $status $statusText"
+                $status=[int]$webResp.StatusCode;$statusText=[string]$webResp.StatusDescription;$body=''
+                try{$stream=$webResp.GetResponseStream();if($stream){$reader=New-Object System.IO.StreamReader($stream);try{$body=$reader.ReadToEnd()}finally{$reader.Dispose();$stream.Dispose()}}}catch{}
+                if($body){throw ('HTTP '+$status+' '+$statusText+[Environment]::NewLine+$body)}
+                throw ('HTTP '+$status+' '+$statusText)
             }
             throw [string]$err.Exception.Message
         }
         if($response.Count -eq 0 -or $null -eq $response[0]){throw 'The provider returned an empty response.'}
-
-        $final=$response[0]
-        $tokensIn=0
-        $tokensOut=0
+        $final=$response[0];$tokensIn=0;$tokensOut=0
         try{
-            if($type -eq 'gemini'){
-                if($null -ne $final.usageMetadata){
-                    if($null -ne $final.usageMetadata.promptTokenCount){$tokensIn=[int]$final.usageMetadata.promptTokenCount}
-                    if($null -ne $final.usageMetadata.candidatesTokenCount){$tokensOut=[int]$final.usageMetadata.candidatesTokenCount}
-                }
-            }else{
-                if($null -ne $final.usage){
-                    if($null -ne $final.usage.prompt_tokens){$tokensIn=[int]$final.usage.prompt_tokens}
-                    if($null -ne $final.usage.completion_tokens){$tokensOut=[int]$final.usage.completion_tokens}
-                }
-            }
+            if($type -eq 'gemini'){if($null -ne $final.usageMetadata){if($null -ne $final.usageMetadata.promptTokenCount){$tokensIn=[int]$final.usageMetadata.promptTokenCount};if($null -ne $final.usageMetadata.candidatesTokenCount){$tokensOut=[int]$final.usageMetadata.candidatesTokenCount}}}
+            else{if($null -ne $final.usage){if($null -ne $final.usage.prompt_tokens){$tokensIn=[int]$final.usage.prompt_tokens};if($null -ne $final.usage.completion_tokens){$tokensOut=[int]$final.usage.completion_tokens}}}
         }catch{}
-
         Stop-MiraRequestUi $tokensIn $tokensOut
         return $final
     }finally{
@@ -1929,7 +1905,6 @@ function Send-ProviderPayload($provider,$model,$payload){
         if($null -ne $runspace){try{$runspace.Dispose()}catch{}}
     }
 }
-
 function Compress-Session(){
     if(-not $script:SessionActive){W '[no active session]' Yellow;return $false}
     if($script:Conversation.Count -lt 6){W '[session too short to compress]' DarkGray;return $false}
