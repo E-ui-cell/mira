@@ -1623,9 +1623,10 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
             if($null -ne $we.Response){$errReader=New-Object IO.StreamReader($we.Response.GetResponseStream());try{$errBody=$errReader.ReadToEnd()}finally{$errReader.Dispose()};if($errBody){$detail+="`n"+$errBody}}
             throw $detail
         }
-        $reader=New-Object IO.StreamReader($resp.GetResponseStream(),[Text.Encoding]::UTF8)
+        $responseStream=$resp.GetResponseStream()
         $contentType=[string]$resp.ContentType
         if($contentType -and $contentType -notlike 'text/event-stream*'){
+            $reader=New-Object IO.StreamReader($responseStream,[Text.Encoding]::UTF8)
             $body=$reader.ReadToEnd()
             if([string]::IsNullOrWhiteSpace($body)){throw 'Streaming provider returned an empty response.'}
             $full=$body|ConvertFrom-Json -ErrorAction Stop
@@ -1633,12 +1634,31 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
             return [pscustomobject]@{Text=[string]$r.Text;Reasoning=[string]$r.Reasoning;ReasoningDetails=@($r.ReasoningDetails);Display=[string]$r.Display;FinishReason=[string]$r.FinishReason;PromptTokens=0;CompletionTokens=0;ReasoningTokens=0}
         }
 
+        # Keep the foreground thread interruptible while SSE is idle.
+        try{$responseStream.ReadTimeout=500}catch{}
+        $reader=New-Object IO.StreamReader($responseStream,[Text.Encoding]::UTF8)
+        $readWatch=[Diagnostics.Stopwatch]::StartNew()
         $answer=New-Object Text.StringBuilder
         $reasoning=New-Object Text.StringBuilder
         $reasoningDetails=New-Object System.Collections.Generic.List[object]
         $finish='';$tokensIn=0;$tokensOut=0;$reasoningTokens=0;$showThought=$false
 
-        while(($line=$reader.ReadLine()) -ne $null){
+        while($true){
+            try{$line=$reader.ReadLine()}
+            catch [IO.IOException]{
+                if($readWatch.ElapsedMilliseconds -ge 120000){throw 'Streaming response timed out while waiting for data.'}
+                continue
+            }
+            if($null -eq $line){break}
+            if([Console]::KeyAvailable){
+                while([Console]::KeyAvailable){
+                    $key=[Console]::ReadKey($true)
+                    if($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)){
+                        try{$request.Abort()}catch{}
+                        throw 'Request cancelled.'
+                    }
+                }
+            }
             if(-not $line.StartsWith('data:')){continue}
             $data=$line.Substring(5).Trim()
             if($data -eq '[DONE]'){break}
@@ -1671,7 +1691,7 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
         [Console]::Write("`r`n")
         $tokenString="[Tokens: $tokensIn in, $tokensOut out]";if($reasoningTokens -gt 0){$tokenString+=" [Reasoning: $reasoningTokens]"};W $tokenString DarkCyan
         if([string]::IsNullOrWhiteSpace($finish)){$finish='stop'}
-        return [pscustomobject]@{Text=[string]$answer.ToString();Reasoning=[string]$reasoning.ToString();ReasoningDetails=@($reasoningDetails);Display=$tokenString;FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut;ReasoningTokens=$reasoningTokens}
+        return [pscustomobject]@{Text=[string]$answer.ToString();Reasoning=[string]$reasoning.ToString();ReasoningDetails=$reasoningDetails.ToArray();Display=$tokenString;FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut;ReasoningTokens=$reasoningTokens}
     }
     finally{if($null -ne $reader){$reader.Dispose()};if($null -ne $resp){$resp.Dispose()};if($null -ne $reqStream){$reqStream.Dispose()}}
 }
@@ -1744,7 +1764,11 @@ function Send-ProviderPayload($provider,$model,$payload){
             $elapsed=[int]$sw.ElapsedMilliseconds
             $bullet=if($script:SessionActive){'  ●'}else{''}
             $status="$frame  $([math]::Round($elapsed/1000,1))s      $bullet"
-            Write-Host ("`r" + (" " * [Math]::Max(1,((Width)-1))) + "`r" + $status) -NoNewline -ForegroundColor DarkGray
+            # Repaint in place without blanking the entire row first.
+            $statusWidth=[Math]::Max(1,(Width)-1)
+            $drawStatus=$status.PadRight($statusWidth)
+            if($drawStatus.Length -gt $statusWidth){$drawStatus=$drawStatus.Substring(0,$statusWidth)}
+            Write-Host ("`r" + $drawStatus) -NoNewline -ForegroundColor DarkGray
             Start-Sleep -Milliseconds 150
             ++$i
         }
