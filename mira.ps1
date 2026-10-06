@@ -1705,7 +1705,12 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
             Update-MiraRequestUi
             Start-Sleep -Milliseconds 100
         }
-        if($cancelled){try{$request.Abort()}catch{};throw 'Request cancelled.'}
+        if($cancelled){
+            try{$request.Abort()}catch{}
+            Stop-MiraRequestUi 0 0
+            W '[Request cancelled]' Yellow
+            throw 'Request cancelled.'
+        }
 
         try{$resp=$request.EndGetResponse($responseAsync)}catch [Net.WebException]{
             $we=$_.Exception
@@ -1871,6 +1876,7 @@ function Send-ProviderPayload($provider,$model,$payload){
     if($cancelled){
         try{$powershell.EndInvoke($asyncResult)|Out-Null}catch{}
         Stop-MiraRequestUi 0 0
+        W '[Request cancelled]' Yellow
         throw 'Request cancelled.'
     }
 
