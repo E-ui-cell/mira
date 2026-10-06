@@ -3827,8 +3827,7 @@ function Grab-LastMessage([string]$Text,[string]$Name=''){
 }
 function Show-CliArgumentStatus(){
     W '[CLI arguments]' Cyan
-    W '  implemented      -d, --dry-run' Gray
-    W '  not implemented  -m, --model <name>  •  -e, --execute  •  -h, --help  •  --' DarkGray
+    W '  implemented      -d, --dry-run  •  -e, --execute  •  -m, --model <name>  •  -h, --help  •  --' Gray
 }
 
 function Show-Request([switch]$Raw){
@@ -4553,19 +4552,70 @@ Rules:
 $cliArgs=@($cliArgs)
 $executeMode=$false
 $executeParts=New-Object System.Collections.Generic.List[string]
+$cliModelSpec=''
+$cliPromptParts=New-Object System.Collections.Generic.List[string]
+$cliOptionParsing=$true
 
 if($cliArgs.Count -gt 0){
-    foreach($arg in $cliArgs){
-        if($arg -eq '--mira-console'){continue}
-        if($arg -eq '-d' -or $arg -eq '--dry-run'){
+    for($i=0;$i -lt $cliArgs.Count;++$i){
+        $arg=[string]$cliArgs[$i]
+
+        if($cliOptionParsing -and $arg -eq '--'){
+            $cliOptionParsing=$false
+            continue
+        }
+
+        if($cliOptionParsing -and $arg -eq '--mira-console'){continue}
+
+        if($cliOptionParsing -and ($arg -eq '-d' -or $arg -eq '--dry-run')){
             $script:DryRunMode=$true
             continue
         }
-        if($arg -eq '-e' -or $arg -eq '--execute'){
+
+        if($cliOptionParsing -and ($arg -eq '-e' -or $arg -eq '--execute')){
             $executeMode=$true
             continue
         }
-        [void]$executeParts.Add([string]$arg)
+
+        if($cliOptionParsing -and ($arg -eq '-h' -or $arg -eq '--help')){
+            Show-CliArgumentStatus
+            W ''
+            W 'Usage: .\mira.ps1 [OPTIONS] [TEXT...]' Cyan
+            W ''
+            W '  -m, --model <provider:model>   select provider/model' Gray
+            W '  -e, --execute                  generate and execute a shell command' Gray
+            W '  -d, --dry-run                 show request JSON without sending' Gray
+            W '  -h, --help                    show this help' Gray
+            W '  --                            stop option parsing; remaining args are prompt text' Gray
+            W ''
+            W 'Examples:' Cyan
+            W '  .\mira.ps1 hello' Gray
+            W '  .\mira.ps1 -m gemini:gemini-flash-lite-latest hello' Gray
+            W '  .\mira.ps1 --model openrouter:some/model hello' Gray
+            W '  .\mira.ps1 -e find all .log files' Gray
+            exit 0
+        }
+
+        if($cliOptionParsing -and ($arg -eq '-m' -or $arg -eq '--model')){
+            if($i+1 -ge $cliArgs.Count){
+                W '[cli] -m/--model requires a model name.' Red
+                exit 2
+            }
+            ++$i
+            $cliModelSpec=[string]$cliArgs[$i]
+            continue
+        }
+
+        if($cliOptionParsing -and $arg -match '^--model=(.+)$'){
+            $cliModelSpec=$Matches[1]
+            continue
+        }
+
+        if($executeMode){
+            [void]$executeParts.Add($arg)
+        }else{
+            [void]$cliPromptParts.Add($arg)
+        }
     }
 
     if($executeMode){
@@ -4574,9 +4624,22 @@ if($cliArgs.Count -gt 0){
             exit 2
         }
         Load-Providers
+        if(-not [string]::IsNullOrWhiteSpace($cliModelSpec)){[void](Set-ModelSelection $cliModelSpec)}
         $task=($executeParts.ToArray() -join ' ')
         [void](Invoke-MiraExecute $task)
         exit 0
+    }
+
+    if($cliPromptParts.Count -gt 0 -or -not [string]::IsNullOrWhiteSpace($cliModelSpec)){
+        Load-Providers
+        if(-not [string]::IsNullOrWhiteSpace($cliModelSpec)){
+            if(-not (Set-ModelSelection $cliModelSpec)){exit 2}
+        }
+        if($cliPromptParts.Count -gt 0){
+            $prompt=($cliPromptParts.ToArray() -join ' ')
+            [void](Invoke-Provider $prompt)
+            exit 0
+        }
     }
 
     foreach($arg in $executeParts){
