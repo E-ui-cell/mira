@@ -2300,20 +2300,2251 @@ function Get-MiraCanvasStyleCode($Cell){
 
 function Convert-MiraRgbToConsoleColor([string]$Rgb,[ConsoleColor]$Fallback=[ConsoleColor]::Gray){
     if([string]::IsNullOrEmpty($Rgb)){return $Fallback}
-    $m=[regex]::Match($Rgb,'^(\d{1,3});(\d{1,3});(\d{1,3})$')
+    if($null -eq $script:MiraConsoleColorCache){$script:MiraConsoleColorCache=@{}}
+    $cacheKey=$Rgb+'|'+[string]$Fallback
+    if($script:MiraConsoleColorCache.ContainsKey($cacheKey)){return [ConsoleColor]$script:MiraConsoleColorCache[$cacheKey]}
+
+    $m=[regex]::Match($Rgb,'^(\d{1,3});(\d{1,3});(\d{1,3})
+
+function Write-MiraCanvas($Canvas,[int]$X=0,[int]$Y=0){
+    if($null -eq $Canvas){return}
+    for($row=0;$row -lt [int]$Canvas.Height;++$row){
+        if(-not (Cursor $X ($Y+$row))){continue}
+        $runStart=0
+        while($runStart -lt [int]$Canvas.Width){
+            $base=$Canvas.Cells[$row,$runStart]
+            $key=([string]$base.Fg)+'|'+([string]$base.Bg)+'|'+([int]$base.Attr)
+            $runEnd=$runStart+1
+            while($runEnd -lt [int]$Canvas.Width){
+                $n=$Canvas.Cells[$row,$runEnd];$nk=([string]$n.Fg)+'|'+([string]$n.Bg)+'|'+([int]$n.Attr)
+                if($nk -ne $key){break}
+                ++$runEnd
+            }
+            $sb=New-Object System.Text.StringBuilder
+            for($col=$runStart;$col -lt $runEnd;++$col){$cell=$Canvas.Cells[$row,$col];if(-not $cell.Continuation){[void]$sb.Append([string]$cell.Ch)}}
+            if($sb.Length -gt 0){
+                $fg=Convert-MiraRgbToConsoleColor ([string]$base.Fg) ([ConsoleColor]::Gray)
+                $bg=Convert-MiraRgbToConsoleColor ([string]$base.Bg) ([ConsoleColor]::Black)
+                Write-Host $sb.ToString() -NoNewline -ForegroundColor $fg -BackgroundColor $bg
+            }
+            $runStart=$runEnd
+        }
+        try{[Console]::ForegroundColor=[ConsoleColor]::Gray;[Console]::BackgroundColor=[ConsoleColor]::Black}catch{}
+    }
+}
+
+function Fill-MiraCanvasRow($Canvas,[int]$X,[int]$Y,[int]$Width,[string]$Fg='',[string]$Bg='',[int]$Attr=0){
+    if($null -eq $Canvas -or $Y -lt 0 -or $Y -ge [int]$Canvas.Height){return}
+    $x0=[Math]::Max(0,$X);$x1=[Math]::Min([int]$Canvas.Width,$x0+[Math]::Max(0,$Width))
+    for($x=$x0;$x -lt $x1;++$x){Set-MiraCanvasCell $Canvas $x $Y ' ' $Fg $Bg $Attr $false}
+}
+
+# -----------------------------------------------------------------------------
+# FLOW LAYOUT# -----------------------------------------------------------------------------
+# FLOW LAYOUT
+# Blocks become layout nodes first. Parsers will create these nodes later;
+# this layer knows nothing about Markdown or TeX.
+# -----------------------------------------------------------------------------
+
+function New-MiraLayoutTextNode([string]$Text,[string]$Fg='', [string]$Bg='', [int]$Attr=0, [int]$MaxWidth=0){
+    return [pscustomobject]@{
+        Kind='Text'
+        Text=if($null -eq $Text){''}else{[string]$Text}
+        Fg=[string]$Fg
+        Bg=[string]$Bg
+        Attr=[int]$Attr
+        MaxWidth=[int]$MaxWidth
+    }
+}
+
+function New-MiraLayoutRuleNode([string]$Char='─',[string]$Fg='', [string]$Bg='', [int]$Attr=0, [int]$Width=0){
+    return [pscustomobject]@{
+        Kind='Rule'
+        Char=if([string]::IsNullOrEmpty($Char)){'─'}else{[string]$Char}
+        Fg=[string]$Fg
+        Bg=[string]$Bg
+        Attr=[int]$Attr
+        Width=[int]$Width
+    }
+}
+
+function New-MiraLayoutGroupNode($Children,[int]$Gap=0,[int]$PaddingLeft=0,[int]$PaddingRight=0){
+    return [pscustomobject]@{
+        Kind='Group'
+        Children=@($Children)
+        Gap=[Math]::Max(0,[int]$Gap)
+        PaddingLeft=[Math]::Max(0,[int]$PaddingLeft)
+        PaddingRight=[Math]::Max(0,[int]$PaddingRight)
+    }
+}
+
+function Measure-MiraLayoutNode($Node,[int]$MaxWidth=0){
+    if($null -eq $Node){return [pscustomobject]@{Width=0;Height=0}}
+    $kind=[string]$Node.Kind
+    switch($kind){
+        'Text' {
+            $limit=[int]$MaxWidth
+            if([int]$Node.MaxWidth -gt 0){
+                $limit=if($limit -gt 0){[Math]::Min($limit,[int]$Node.MaxWidth)}else{[int]$Node.MaxWidth}
+            }
+            $lines=if($limit -gt 0){@(Wrap-MiraText ([string]$Node.Text) $limit)}else{([string]$Node.Text).Split([char]10)}
+            $width=0
+            foreach($line in $lines){
+                $mw=(Measure-MiraText ([string]$line)).Width
+                if($mw -gt $width){$width=$mw}
+            }
+            return [pscustomobject]@{
+                Width=[int]$width
+                Height=[int]([Math]::Max(1,$lines.Count))
+            }
+        }
+        'Rule' {
+            $width=[int]$Node.Width
+            if($width -le 0){$width=if($MaxWidth -gt 0){$MaxWidth}else{1}}
+            if($MaxWidth -gt 0){$width=[Math]::Min($width,$MaxWidth)}
+            return [pscustomobject]@{Width=[int][Math]::Max(1,$width);Height=1}
+        }
+        'Group' {
+            $inner=[Math]::Max(0,$MaxWidth-[int]$Node.PaddingLeft-[int]$Node.PaddingRight)
+            $width=0
+            $height=0
+            $hasChild=$false
+            foreach($child in @($Node.Children)){
+                $m=Measure-MiraLayoutNode $child $inner
+                if($m.Width -gt $width){$width=$m.Width}
+                if($hasChild){$height += [int]$Node.Gap}
+                $height += [int]$m.Height
+                $hasChild=$true
+            }
+            $width += [int]$Node.PaddingLeft+[int]$Node.PaddingRight
+            return [pscustomobject]@{Width=[int]$width;Height=[int]$height}
+        }
+        default {
+            return [pscustomobject]@{Width=0;Height=0}
+        }
+    }
+}
+
+function Place-MiraLayoutNode($Canvas,$Node,[int]$X,[int]$Y,[int]$MaxWidth){
+    if($null -eq $Canvas -or $null -eq $Node){return [int]$Y}
+    switch([string]$Node.Kind){
+        'Text' {
+            $limit=[int]$MaxWidth
+            if([int]$Node.MaxWidth -gt 0){
+                $limit=if($limit -gt 0){[Math]::Min($limit,[int]$Node.MaxWidth)}else{[int]$Node.MaxWidth}
+            }
+            $lines=if($limit -gt 0){@(Wrap-MiraText ([string]$Node.Text) $limit)}else{([string]$Node.Text).Split([char]10)}
+            $row=[int]$Y
+            foreach($line in $lines){
+                Set-MiraCanvasText $Canvas $X $row ([string]$line) ([string]$Node.Fg) ([string]$Node.Bg) ([int]$Node.Attr) $limit
+                ++$row
+            }
+            return $row
+        }
+        'Rule' {
+            $width=[int]$Node.Width
+            if($width -le 0){$width=$MaxWidth}
+            if($MaxWidth -gt 0){$width=[Math]::Min($width,$MaxWidth)}
+            $width=[Math]::Max(1,$width)
+            $text=([string]$Node.Char)[0].ToString()
+            $repeat=New-Object System.Text.StringBuilder
+            for($i=0;$i -lt $width;++$i){[void]$repeat.Append($text)}
+            Set-MiraCanvasText $Canvas $X $Y $repeat.ToString() ([string]$Node.Fg) ([string]$Node.Bg) ([int]$Node.Attr) $width
+            return [int]$Y+1
+        }
+        'Group' {
+            $inner=[Math]::Max(0,$MaxWidth-[int]$Node.PaddingLeft-[int]$Node.PaddingRight)
+            $row=[int]$Y
+            $first=$true
+            foreach($child in @($Node.Children)){
+                if(-not $first){$row += [int]$Node.Gap}
+                $row=Place-MiraLayoutNode $Canvas $child ($X+[int]$Node.PaddingLeft) $row $inner
+                $first=$false
+            }
+            return $row
+        }
+        default {
+            return [int]$Y
+        }
+    }
+}
+
+function Render-MiraLayout($Node,[int]$Width=0,[int]$X=0,[int]$Y=0){
+    if($Width -le 0){$Width=[Math]::Max(1,(Width)-$X-1)}
+    $measure=Measure-MiraLayoutNode $Node $Width
+    $canvas=New-MiraCanvas $Width ([Math]::Max(1,[int]$measure.Height))
+    Place-MiraLayoutNode $canvas $Node 0 0 $Width | Out-Null
+    Write-MiraCanvas $canvas $X $Y
+    return $canvas
+}
+
+# -----------------------------------------------------------------------------
+# DOCUMENT NODES / MARKDOWN PARSER BRIDGE
+# Semantic layer only: parse response text into nodes. No terminal writes here.
+# -----------------------------------------------------------------------------
+
+function New-MiraInlineSpan([string]$Text,[string]$Fg='', [string]$Bg='', [int]$Attr=0){
+    return [pscustomobject]@{Kind='Span';Text=if($null -eq $Text){''}else{[string]$Text};Fg=[string]$Fg;Bg=[string]$Bg;Attr=[int]$Attr}
+}
+
+function New-MiraParagraphNode($Spans){return [pscustomobject]@{Kind='Paragraph';Spans=@($Spans)}}
+function New-MiraHeadingNode([int]$Level,$Spans){return [pscustomobject]@{Kind='Heading';Level=[Math]::Max(1,[Math]::Min(6,[int]$Level));Spans=@($Spans)}}
+function New-MiraCodeNode([string[]]$Lines,[string]$Language=''){return [pscustomobject]@{Kind='Code';Lines=@($Lines);Language=[string]$Language}}
+function New-MiraMathNode([string[]]$Lines,[bool]$Display=$true){return [pscustomobject]@{Kind='Math';Lines=@($Lines);Display=[bool]$Display}}
+function New-MiraRuleNode(){return [pscustomobject]@{Kind='Rule'}}
+function New-MiraTableNode($Rows){return [pscustomobject]@{Kind='Table';Rows=@($Rows)}}
+
+function Split-MiraTableRow([string]$Line){
+    if($null -eq $Line){return @()}
+    $s=[string]$Line.Trim()
+    if($s.StartsWith('|')){$s=$s.Substring(1)}
+    if($s.EndsWith('|') -and $s.Length -gt 0){$s=$s.Substring(0,$s.Length-1)}
+    return @($s.Split('|') | ForEach-Object {[string]$_.Trim()})
+}
+
+function Test-MiraTableSeparator([string]$Line){
+    $cells=@(Split-MiraTableRow $Line)
+    if($cells.Count -eq 0){return $false}
+    foreach($cell in $cells){if([string]$cell -notmatch '^:?-{3,}:?$'){return $false}}
+    return $true
+}
+
+function Get-MiraSpanWidth($Spans){
+    $n=0
+    foreach($span in @($Spans)){$n += Get-MiraCellWidth ([string]$span.Text)}
+    return [int]$n
+}
+
+function Get-MiraInlineState([string]$Fg,[string]$Bg,[int]$Attr,[string]$Mode=''){
+    return [pscustomobject]@{Fg=[string]$Fg;Bg=[string]$Bg;Attr=[int]$Attr;Mode=[string]$Mode}
+}
+
+function Convert-MiraSuperscript([string]$Text){
+    $map=@{'0'='⁰';'1'='¹';'2'='²';'3'='³';'4'='⁴';'5'='⁵';'6'='⁶';'7'='⁷';'8'='⁸';'9'='⁹';'+'='⁺';'-'='⁻';'='='⁼';'('='⁽';')'='⁾';'a'='ᵃ';'b'='ᵇ';'c'='ᶜ';'d'='ᵈ';'e'='ᵉ';'f'='ᶠ';'g'='ᵍ';'h'='ʰ';'i'='ⁱ';'j'='ʲ';'k'='ᵏ';'l'='ˡ';'m'='ᵐ';'n'='ⁿ';'o'='ᵒ';'p'='ᵖ';'r'='ʳ';'s'='ˢ';'t'='ᵗ';'u'='ᵘ';'v'='ᵛ';'w'='ʷ';'x'='ˣ';'y'='ʸ';'z'='ᶻ'}
+    $out=New-Object System.Text.StringBuilder
+    foreach($ch in ([string]$Text).ToCharArray()){if($map.ContainsKey([string]$ch)){[void]$out.Append($map[[string]$ch])}else{[void]$out.Append($ch)}}
+    return $out.ToString()
+}
+
+function Convert-MiraSubscript([string]$Text){
+    $map=@{'0'='₀';'1'='₁';'2'='₂';'3'='₃';'4'='₄';'5'='₅';'6'='₆';'7'='₇';'8'='₈';'9'='₉';'+'='₊';'-'='₋';'='='₌';'('='₍';')'='₎';'a'='ₐ';'e'='ₑ';'h'='ₕ';'i'='ᵢ';'j'='ⱼ';'k'='ₖ';'l'='ₗ';'m'='ₘ';'n'='ₙ';'o'='ₒ';'p'='ₚ';'r'='ᵣ';'s'='ₛ';'t'='ₜ';'u'='ᵤ';'v'='ᵥ';'x'='ₓ'}
+    $out=New-Object System.Text.StringBuilder
+    foreach($ch in ([string]$Text).ToCharArray()){if($map.ContainsKey([string]$ch)){[void]$out.Append($map[[string]$ch])}else{[void]$out.Append($ch)}}
+    return $out.ToString()
+}
+
+function Parse-MiraInline([string]$Line){
+    if($null -eq $Line){return @()}
+    $s=[string]$Line;$out=New-Object System.Collections.Generic.List[object]
+    $state=Get-MiraInlineState ([string]$script:MarkupTheme.InlineTextRGB) '' 0 ''
+    $stack=New-Object System.Collections.Generic.Stack[object]
+    $tags=@('b','strong','i','em','u','s','strike','del','code','mark','kbd','sup','sub','small','a','br','hr','img')
+    $pos=0;$plainStart=0
+    while($pos -lt $s.Length){
+        $kind='';$end=$pos;$value='';$tagClosing=$false;$tag=''
+        if($s[$pos] -eq '<'){
+            if($pos+3 -lt $s.Length -and $s[$pos+1] -eq '!' -and $s[$pos+2] -eq '-' -and $s[$pos+3] -eq '-'){
+                $ce=$s.IndexOf('-->',$pos+4)
+                if($ce -ge 0){
+                    if($pos -gt $plainStart){
+                        $v=$s.Substring($plainStart,$pos-$plainStart)
+                        if($state.Mode -eq 'sup'){$v=Convert-MiraSuperscript $v}elseif($state.Mode -eq 'sub'){$v=Convert-MiraSubscript $v}
+                        [void]$out.Add((New-MiraInlineSpan $v $state.Fg $state.Bg $state.Attr))
+                    }
+                    $pos=$ce+3;$plainStart=$pos;continue
+                }
+            }
+            $gt=$s.IndexOf('>',$pos+1)
+            if($gt -gt $pos){
+                $raw=$s.Substring($pos+1,$gt-$pos-1).Trim()
+                if($raw.StartsWith('/')){$tagClosing=$true;$raw=$raw.Substring(1).Trim()}
+                if($raw.EndsWith('/')){$raw=$raw.Substring(0,$raw.Length-1).Trim()}
+                $n=0;while($n -lt $raw.Length -and (([char]::IsLetterOrDigit($raw[$n])) -or $raw[$n] -eq ':')){++$n}
+                if($n -gt 0){$tag=$raw.Substring(0,$n).ToLowerInvariant();if($tags -contains $tag){$kind='tag';$end=$gt+1;$value=$raw}}
+            }
+        }
+        if($kind -eq '' -and $s[$pos] -eq [char]96){
+            $q=$s.IndexOf([char]96,$pos+1);if($q -gt $pos+1){$kind='code';$end=$q+1;$value=$s.Substring($pos+1,$q-$pos-1)}
+        }
+        if($kind -eq '' -and $s[$pos] -eq '$' -and ($pos+1 -ge $s.Length -or $s[$pos+1] -ne '$')){
+            $q=$s.IndexOf('$',$pos+1);if($q -gt $pos+1){$kind='math';$end=$q+1;$value=$s.Substring($pos+1,$q-$pos-1)}
+        }
+        if($kind -eq '' -and $pos+1 -lt $s.Length -and (($s[$pos] -eq '*' -and $s[$pos+1] -eq '*') -or ($s[$pos] -eq '_' -and $s[$pos+1] -eq '_'))){
+            $d=$s.Substring($pos,2)
+            if($stack.Count -gt 0 -and [string]$stack.Peek().Tag -eq $d){
+                $kind='mdclose';$end=$pos+2;$tag=$d
+            }else{
+                $q=$s.IndexOf($d,$pos+2)
+                if($q -gt $pos+2){$kind='mdopen';$end=$pos+2;$tag=$d}
+            }
+        }
+        if($kind -eq '' -and $pos+1 -lt $s.Length -and $s[$pos] -eq '~' -and $s[$pos+1] -eq '~'){
+            if($stack.Count -gt 0 -and [string]$stack.Peek().Tag -eq '~~'){
+                $kind='mdclose';$end=$pos+2;$tag='~~'
+            }else{
+                $q=$s.IndexOf('~~',$pos+2)
+                if($q -gt $pos+2){$kind='mdopen';$end=$pos+2;$tag='~~'}
+            }
+        }
+        if($kind -eq '' -and ($s[$pos] -eq '*' -or $s[$pos] -eq '_')){
+            $d=[string]$s[$pos]
+            if($stack.Count -gt 0 -and [string]$stack.Peek().Tag -eq $d){
+                $kind='mdclose';$end=$pos+1;$tag=$d
+            }else{
+                $open=($pos+1 -lt $s.Length -and -not [char]::IsWhiteSpace($s[$pos+1]))
+                if($d -eq '_' -and $pos -gt 0 -and [char]::IsLetterOrDigit($s[$pos-1])){$open=$false}
+                if($open){
+                    $q=$s.IndexOf($d,$pos+1)
+                    if($q -gt $pos+1){
+                        $close=($q+1 -ge $s.Length -or -not [char]::IsLetterOrDigit($s[$q+1]))
+                        if($close){$kind='mdopen';$end=$pos+1;$tag=$d}
+                    }
+                }
+            }
+        }
+        if($kind -ne ''){
+            if($pos -gt $plainStart){
+                $v=$s.Substring($plainStart,$pos-$plainStart)
+                if($state.Mode -eq 'sup'){$v=Convert-MiraSuperscript $v}elseif($state.Mode -eq 'sub'){$v=Convert-MiraSubscript $v}
+                [void]$out.Add((New-MiraInlineSpan $v $state.Fg $state.Bg $state.Attr))
+            }
+            switch($kind){
+                'mdopen' {
+                    [void]$stack.Push([pscustomobject]@{Tag=$tag;State=$state})
+                    $next=Get-MiraInlineState $state.Fg $state.Bg $state.Attr $state.Mode
+                    switch($tag){
+                        '**' {$next.Fg=$script:MarkupTheme.InlineBoldRGB;$next.Attr=$next.Attr-bor 1}
+                        '__' {$next.Fg=$script:MarkupTheme.InlineBoldRGB;$next.Attr=$next.Attr-bor 1}
+                        '~~' {$next.Fg=$script:MarkupTheme.InlineStrikeRGB;$next.Attr=$next.Attr-bor 9}
+                        '*'  {$next.Fg=$script:MarkupTheme.InlineItalicRGB;$next.Attr=$next.Attr-bor 3}
+                        '_'  {$next.Fg=$script:MarkupTheme.InlineItalicRGB;$next.Attr=$next.Attr-bor 3}
+                    }
+                    $state=$next
+                }
+                'mdclose' {
+                    if($stack.Count -gt 0){$entry=$stack.Pop();$state=$entry.State}
+                }
+                'tag' {
+                    if($tagClosing){
+                        if($stack.Count -gt 0){while($stack.Count -gt 0){$e=$stack.Pop();$state=$e.State;if([string]$e.Tag -eq $tag){break}}}
+                    }elseif($tag -in @('br','hr','img')){
+                        $glyph=if($tag -eq 'br'){'↵'}elseif($tag -eq 'hr'){'─'}else{'[image]'}
+                        $fg=if($tag -eq 'hr'){$script:MarkupTheme.MathFrameRGB}else{$script:MarkupTheme.InlineTagRGB}
+                        $v=[string]$glyph
+                        if($state.Mode -eq 'sup'){$v=Convert-MiraSuperscript $v}elseif($state.Mode -eq 'sub'){$v=Convert-MiraSubscript $v}
+                        [void]$out.Add((New-MiraInlineSpan $v ([string]$fg) $state.Bg $state.Attr))
+                    }else{
+                        [void]$stack.Push([pscustomobject]@{Tag=$tag;State=$state})
+                        $next=Get-MiraInlineState $state.Fg $state.Bg $state.Attr $state.Mode
+                        switch($tag){
+                            'b' {$next.Fg=$script:MarkupTheme.InlineBoldRGB;$next.Attr=$next.Attr-bor 1}
+                            'strong' {$next.Fg=$script:MarkupTheme.InlineBoldRGB;$next.Attr=$next.Attr-bor 1}
+                            'i' {$next.Fg=$script:MarkupTheme.InlineItalicRGB;$next.Attr=$next.Attr-bor 3}
+                            'em' {$next.Fg=$script:MarkupTheme.InlineItalicRGB;$next.Attr=$next.Attr-bor 3}
+                            'u' {$next.Fg=$script:MarkupTheme.InlineUnderlineRGB;$next.Attr=$next.Attr-bor 4}
+                            's' {$next.Fg=$script:MarkupTheme.InlineStrikeRGB;$next.Attr=$next.Attr-bor 9}
+                            'strike' {$next.Fg=$script:MarkupTheme.InlineStrikeRGB;$next.Attr=$next.Attr-bor 9}
+                            'del' {$next.Fg=$script:MarkupTheme.InlineStrikeRGB;$next.Attr=$next.Attr-bor 9}
+                            'code' {$next.Fg=$script:MarkupTheme.InlineCodeRGB;$next.Bg=$script:MarkupTheme.InlineCodeBG;$next.Attr=0}
+                            'mark' {$next.Fg=$script:MarkupTheme.InlineMarkRGB;$next.Bg=$script:MarkupTheme.InlineMarkBG}
+                            'kbd' {$next.Fg=$script:MarkupTheme.InlineKbdRGB;$next.Bg=$script:MarkupTheme.InlineKbdBG;$next.Attr=$next.Attr-bor 1}
+                            'sup' {$next.Mode='sup'}
+                            'sub' {$next.Mode='sub'}
+                            'small' {$next.Attr=$next.Attr-bor 2}
+                            'a' {$next.Fg=$script:MarkupTheme.InlineLinkRGB;$next.Attr=$next.Attr-bor 4}
+                        }
+                        $state=$next
+                    }
+                }
+            }
+            $pos=$end;$plainStart=$pos;continue
+        }
+        ++$pos
+    }
+    if($plainStart -lt $s.Length){
+        $v=$s.Substring($plainStart)
+        if($state.Mode -eq 'sup'){$v=Convert-MiraSuperscript $v}elseif($state.Mode -eq 'sub'){$v=Convert-MiraSubscript $v}
+        [void]$out.Add((New-MiraInlineSpan $v $state.Fg $state.Bg $state.Attr))
+    }
+    return @($out)
+}
+
+function Flush-MiraParagraphNode($Nodes,$Paragraph){
+    if($Paragraph.Count -eq 0){return}
+    [void]$Nodes.Add((New-MiraParagraphNode (Parse-MiraInline ($Paragraph -join ' '))))
+    $Paragraph.Clear()
+}
+
+function Get-MiraCellPrefixLength([string]$Text,[int]$MaxCells){
+    if([string]::IsNullOrEmpty($Text) -or $MaxCells -le 0){return 0}
+    $used=0
+    for($i=0;$i -lt $Text.Length;){
+        $start=$i
+        $cp=[char]::ConvertToUtf32($Text,$i)
+        $chars=if($cp -gt 0xFFFF){2}else{1}
+        $cell=if($cp -eq 0 -or $cp -lt 32 -or ($cp -ge 0x7F -and $cp -lt 0xA0) -or
+                   ($cp -ge 0x300 -and $cp -le 0x36F) -or ($cp -ge 0x1AB0 -and $cp -le 0x1AFF) -or
+                   ($cp -ge 0x1DC0 -and $cp -le 0x1DFF) -or ($cp -ge 0x20D0 -and $cp -le 0x20FF) -or
+                   ($cp -ge 0xFE00 -and $cp -le 0xFE0F) -or ($cp -ge 0xE0100 -and $cp -le 0xE01EF) -or
+                   $cp -eq 0x200D){0}
+              elseif(($cp -ge 0x1100 -and $cp -le 0x115F) -or ($cp -ge 0x2329 -and $cp -le 0x232A) -or
+                     ($cp -ge 0x2E80 -and $cp -le 0xA4CF) -or ($cp -ge 0xAC00 -and $cp -le 0xD7A3) -or
+                     ($cp -ge 0xF900 -and $cp -le 0xFAFF) -or ($cp -ge 0xFE10 -and $cp -le 0xFE6F) -or
+                     ($cp -ge 0xFF01 -and $cp -le 0xFF60) -or ($cp -ge 0xFFE0 -and $cp -le 0xFFE6) -or
+                     ($cp -ge 0x1F300 -and $cp -le 0x1FAFF) -or ($cp -ge 0x20000 -and $cp -le 0x3FFFD)){2}else{1}
+        if(($used+$cell) -gt $MaxCells){break}
+        $used += $cell
+        $i += $chars
+    }
+    return $i
+}
+
+function Pad-MiraCells([string]$Text,[int]$TargetCells){
+    $s=[string]$Text
+    $pad=[Math]::Max(0,$TargetCells-(Get-MiraCellWidth $s))
+    return $s + (' '*$pad)
+}
+
+
+
+function Add-MarkupSegment([string]$Text,[ConsoleColor]$Color,[object]$Background=$null){
+    if($null -eq $Text -or $Text.Length -eq 0){return}
+    while($Text.Length -gt 0){
+        $bg=$null;if($null -ne $Background){$bg=[ConsoleColor]$Background}
+        if(-not $script:MarkupFrameActive){
+            if($null -eq $bg){Write-Host $Text -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color)}
+            else{Write-Host $Text -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color) -BackgroundColor $bg}
+            return
+        }
+
+        $room=$script:MarkupFrameWidth-$script:MarkupFrameUsed
+        if($room -le 0){Write-Host '';Begin-MarkupLine;$room=$script:MarkupFrameWidth-$script:MarkupFrameUsed}
+
+        # Fast path for the overwhelmingly common ASCII response text.
+        # Avoid the Unicode cell scanner twice (prefix + width) when every
+        # character is one terminal cell wide.
+        $ascii=$true
+        for($ai=0;$ai -lt $Text.Length;++$ai){
+            if([int][char]$Text[$ai] -gt 127){$ascii=$false;break}
+        }
+        if($ascii){
+            $takeChars=[Math]::Min($Text.Length,[Math]::Max(0,$room))
+            if($takeChars -le 0){break}
+            $part=$Text.Substring(0,$takeChars)
+            if($null -eq $bg){Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color)}
+            else{Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color) -BackgroundColor $bg}
+            $script:MarkupFrameUsed += $takeChars
+            $Text=$Text.Substring($takeChars)
+            if($Text.Length -gt 0){Write-Host '';Begin-MarkupLine $Color $bg}
+            continue
+        }
+
+        $takeChars=Get-MiraCellPrefixLength $Text $room
+        if($takeChars -le 0){break}
+        $part=$Text.Substring(0,$takeChars)
+        if($null -eq $bg){Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color)}
+        else{Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color) -BackgroundColor $bg}
+        $script:MarkupFrameUsed += Get-MiraCellWidth $part
+        $Text=$Text.Substring($takeChars)
+        if($Text.Length -gt 0){Write-Host '';Begin-MarkupLine $Color $bg}
+    }
+}
+
+function End-MarkupLine([object]$FillColor=[ConsoleColor]::Gray,[object]$FillBackground=$null){
+    # Full-row padding is intentionally disabled. It is expensive on the Win7
+    # console and provides no visual value because response rows have no side wall.
+    # A background fill remains opt-in for callers that explicitly request one.
+    if($script:MarkupFrameActive -and $null -ne $FillBackground){
+        $remaining=[Math]::Max(0,$script:MarkupFrameWidth-$script:MarkupFrameUsed)
+        if($remaining -gt 0){Write-Host (' ' * $remaining) -NoNewline -ForegroundColor ([ConsoleColor]$FillColor) -BackgroundColor ([ConsoleColor]$FillBackground)}
+    }
+    Write-Host ''
+    $script:MarkupFrameUsed=0
+}
+
+function Write-MarkupPlainLine([string]$Text,[ConsoleColor]$Color=[ConsoleColor]::Gray,[object]$Background=$null){
+    Begin-MarkupLine $Color $Background
+    Add-MarkupSegment ([string]$Text) $Color $Background
+    End-MarkupLine $Color $Background
+}
+
+function Get-MessageFrameTop([string]$Status,[int]$WidthOverride=0){
+    $width=if($WidthOverride -gt 0){[int]$WidthOverride}else{[Math]::Max(20,(Width))}
+    $boxWidth=$width-1
+    $status=[string]$Status
+    if([string]::IsNullOrWhiteSpace($status)){$status='...  0.0s'}
+    $prefix=[string]$script:MarkupTheme.MessageTopLeft + [string]$script:MarkupTheme.MessageTopPrefix + $status + ' '
+    $right=[string]$script:MarkupTheme.MessageTopRight
+    $fill=[Math]::Max(0,$boxWidth-1-(Get-MiraCellWidth $prefix))
+    return ($prefix + ([string]$script:MarkupTheme.MessageHorizontal*$fill) + $right)
+}
+
+function Write-MiraFrameCells([string]$Text,[string]$Rgb,[ConsoleColor]$Fallback,[bool]$NewLine=$false){
+    $oldFg=$null
+    try{$oldFg=[Console]::ForegroundColor}catch{}
+    try{
+        [Console]::ForegroundColor=Resolve-UiRenderColor $Fallback
+        [Console]::Write([string]$Text)
+        if($NewLine){[Console]::WriteLine('')}
+    }finally{
+        if($null -ne $oldFg){try{[Console]::ForegroundColor=$oldFg}catch{}}
+    }
+}
+
+function Begin-MessageFrame(){
+    if(-not [bool]$script:MarkupTheme.MessageFrameEnabled){$script:MarkupFrameActive=$false;return}
+    if($script:MarkupFrameActive){return}
+
+    $width=[Math]::Max(20,(Width))
+    $boxWidth=$width-1
+    $script:MarkupFrameWidth=[Math]::Max(8,$boxWidth)
+    $script:MarkupFrameActive=$true
+
+    $status=[string]$script:LastStatusText
+    if([string]::IsNullOrWhiteSpace($status)){
+        $elapsed=[math]::Round(([int]$script:LastRequestElapsedMs)/1000,1)
+        $frame=if([string]::IsNullOrWhiteSpace([string]$script:LastRequestFrame)){'... '}else{[string]$script:LastRequestFrame}
+        $status=$frame+'  '+$elapsed+'s      ↑ '+[int]$script:LastPromptTokens+'  ↓ 0'+$(if($script:SessionActive){'  ●'}else{''})
+    }
+
+    $top=Get-MessageFrameTop $status $width
+    try{
+        Write-Host ("`r" + (' ' * [Math]::Max(1,$width-1)) + "`r" + $top) -ForegroundColor ([ConsoleColor]$script:MarkupTheme.MessageFrameColor)
+    }catch{
+        $script:MarkupFrameActive=$false
+        return
+    }
+}
+
+function End-MessageFrame(){
+    if($script:MarkupFrameActive){
+        $width=[Math]::Max(20,(Width))
+        $boxWidth=$width-1
+        $bottom=[string]$script:MarkupTheme.MessageBottomLeft + ([string]$script:MarkupTheme.MessageHorizontal*[Math]::Max(0,$boxWidth-2)) + [string]$script:MarkupTheme.MessageBottomRight
+        Write-MiraFrameCells $bottom ([string]$script:MarkupTheme.MessageFrameRGB) ([ConsoleColor]$script:MarkupTheme.MessageFrameColor) $true
+    }
+
+    $script:MarkupFrameActive=$false
+    $script:MarkupFrameUsed=0
+    $script:MarkupFrameWidth=0
+}
+
+function Write-MarkupInline([string]$line,[bool]$ContinueLine=$false){
+    if($null -eq $line){$line=''}
+    if(-not $ContinueLine){Begin-MarkupLine}
+    try{
+        $pending=New-Object System.Text.StringBuilder
+        $currentFg=[ConsoleColor]::Gray;$currentBg=$null;$haveStyle=$false
+        foreach($span in @(Parse-MiraInline $line)){
+            $fg=Convert-MiraRgbToConsoleColor ([string]$span.Fg) ([ConsoleColor]::Gray)
+            $bg=$null
+            if(-not [string]::IsNullOrWhiteSpace([string]$span.Bg)){$bg=Convert-MiraRgbToConsoleColor ([string]$span.Bg) ([ConsoleColor]::Black)}
+            $styleChanged=$haveStyle -and ($fg -ne $currentFg -or $bg -ne $currentBg)
+            if($styleChanged){
+                Add-MarkupSegment $pending.ToString() $currentFg $currentBg
+                [void]$pending.Clear()
+            }
+            if(-not $haveStyle){$currentFg=$fg;$currentBg=$bg;$haveStyle=$true}
+            elseif($styleChanged){$currentFg=$fg;$currentBg=$bg}
+            [void]$pending.Append([string]$span.Text)
+        }
+        if($pending.Length -gt 0){Add-MarkupSegment $pending.ToString() $currentFg $currentBg}
+    }catch{Add-MarkupSegment ([string]$line) ([ConsoleColor]::Gray)}
+    if(-not $ContinueLine){End-MarkupLine}
+}
+
+function Write-JsonColored([string]$line){
+    if($null -eq $line){$line=''}
+    Begin-MarkupLine
+    $pos=0;$plainStart=0
+    while($pos -lt $line.Length){
+        $end=$pos;$kind=''
+        $ch=$line[$pos]
+        if($ch -eq [char]34){
+            $end=$pos+1;$escaped=$false
+            while($end -lt $line.Length){
+                $q=$line[$end]
+                if($q -eq [char]34 -and -not $escaped){++$end;break}
+                if($q -eq [char]92 -and -not $escaped){$escaped=$true}else{$escaped=$false}
+                ++$end
+            }
+            $kind='string'
+        }elseif(([char]::IsDigit($ch)) -or ($ch -eq '-' -and $pos+1 -lt $line.Length -and [char]::IsDigit($line[$pos+1]))){
+            ++$end
+            while($end -lt $line.Length){
+                $n=[string]$line[$end]
+                if('0123456789+-.eE'.IndexOf($n) -lt 0){break}
+                ++$end
+            }
+            $kind='number'
+        }else{
+            $tail=$line.Substring($pos)
+            if($tail.StartsWith('true')){$end=$pos+4;$kind='literal'}
+            elseif($tail.StartsWith('false')){$end=$pos+5;$kind='literal'}
+            elseif($tail.StartsWith('null')){$end=$pos+4;$kind='literal'}
+            elseif('{}[],'.IndexOf($ch) -ge 0){$end=$pos+1;$kind='punct'}
+        }
+        if($kind -ne ''){
+            if($pos -gt $plainStart){Add-MarkupSegment $line.Substring($plainStart,$pos-$plainStart) ([ConsoleColor]::Gray)}
+            $fg=switch($kind){'string'{[ConsoleColor]::Yellow};'number'{[ConsoleColor]::Green};'literal'{[ConsoleColor]::Magenta};default{[ConsoleColor]::DarkCyan}}
+            Add-MarkupSegment $line.Substring($pos,$end-$pos) $fg
+            $pos=$end;$plainStart=$pos;continue
+        }
+        ++$pos
+    }
+    if($plainStart -lt $line.Length){Add-MarkupSegment $line.Substring($plainStart) ([ConsoleColor]::Gray)}
+    End-MarkupLine
+}
+
+function Write-JsonColoredCodeLine([string]$line,[string]$background,[int]$fillWidth){
+    # Kept as a compatibility wrapper. Code blocks no longer paint a full
+    # background; they use the normal terminal background for clean framing.
+    Write-MarkupPlainLine ([string]$line) ([ConsoleColor]$script:MarkupTheme.CodeTextFg)
+}
+
+function Normalize-CodeBlockLines([string[]]$lines){
+    if($null -eq $lines){return @()}
+
+    # Code fences are structural delimiters. Ignore only blank lines that sit
+    # directly against the opening/closing fence. Preserve blank lines inside
+    # the actual source code. This keeps the renderer unbreakable without
+    # destroying intentional spacing in the code itself.
+    $out=New-Object System.Collections.Generic.List[string]
+    foreach($line in @($lines)){[void]$out.Add($(if($null -eq $line){''}else{[string]$line}))}
+
+    while($out.Count -gt 0 -and [string]::IsNullOrWhiteSpace([string]$out[0])){$out.RemoveAt(0)}
+    while($out.Count -gt 0 -and [string]::IsNullOrWhiteSpace([string]$out[$out.Count-1])){$out.RemoveAt($out.Count-1)}
+    return @($out)
+}
+
+function Get-MarkupGraphicWidth([double]$percent,[int]$minimum){
+    # Graphics and text share the same width captured by Begin-MessageFrame.
+    # This keeps the renderer stable even if the terminal is resized mid-reply.
+    $frameWidth=[Math]::Max(8,[int]$script:MarkupFrameWidth)
+    $frameLimit=[Math]::Max(8,$frameWidth-2)
+    $w=[Math]::Max($minimum,[int][Math]::Floor($frameWidth*$percent))
+    return [Math]::Min($w,$frameLimit)
+}
+
+function Write-DotRule([int]$width,[ConsoleColor]$color){
+    $n=[Math]::Max(0,$width)
+    if($n -gt 0){Write-MarkupPlainLine (([string]$script:MarkupTheme.CodeRuleChar)*$n) $color}
+    else{Write-MarkupPlainLine '' $color}
+}
+
+function Get-MiraLatexGroup([string]$Text,[int]$OpenIndex){
+    if($null -eq $Text -or $OpenIndex -lt 0 -or $OpenIndex -ge $Text.Length -or $Text[$OpenIndex] -ne '{'){return $null}
+    $depth=0
+    for($i=$OpenIndex;$i -lt $Text.Length;++$i){
+        if($Text[$i] -eq '{'){$depth++}
+        elseif($Text[$i] -eq '}'){$depth--;if($depth -eq 0){return [pscustomobject]@{End=$i;Text=$Text.Substring($OpenIndex+1,$i-$OpenIndex-1)}}}
+    }
+    return $null
+}
+function Convert-LatexToUnicode([string]$Expression){
+    if($null -eq $Expression){return ''}
+    $s=[string]$Expression
+    try{
+        # Cheap literal command replacements first. No regex is used in the math hot path.
+        $replacements=@(
+            @('\left',''),@('\right',''),
+            @('\begin{pmatrix}',''),@('\end{pmatrix}',''),@('\begin{bmatrix}',''),@('\end{bmatrix}',''),
+            @('\begin{Bmatrix}',''),@('\end{Bmatrix}',''),@('\begin{vmatrix}',''),@('\end{vmatrix}',''),
+            @('\begin{Vmatrix}',''),@('\end{Vmatrix}',''),@('\begin{aligned}',''),@('\end{aligned}',''),
+            @('\begin(pmatrix',''),@('\end(pmatrix',''),@('\begin(bmatrix',''),@('\end(bmatrix',''),
+            @('\begin(Bmatrix',''),@('\end(Bmatrix',''),@('\begin(vmatrix',''),@('\end(vmatrix',''),
+            @('\begin(Vmatrix',''),@('\end(Vmatrix',''),@('\begin(aligned',''),@('\end(aligned',''),
+            @('\infty','∞'),@('\int','∫'),@('\sum','∑'),@('\prod','∏'),
+            @('\pi','π'),@('\lambda','λ'),@('\mu','μ'),@('\sigma','σ'),
+            @('\pm','±'),@('\mp','∓'),@('\partial','∂'),@('\nabla','∇'),
+            @('\rho','ρ'),@('\varepsilon','ε'),@('\epsilon','ε'),@('\phi','φ'),@('\psi','ψ'),@('\omega','ω'),
+            @('\alpha','α'),@('\beta','β'),@('\gamma','γ'),@('\delta','δ'),@('\theta','θ'),
+            @('\leq','≤'),@('\geq','≥'),@('\neq','≠'),@('\approx','≈'),@('\times','×'),
+            @('\cdot','·'),@('\rightarrow','→'),@('\to','→'),@('\hbar','ℏ'),@('\langle','⟨'),@('\rangle','⟩'),@('\mid','│'),@('\vert','│'),@('\hatH','Ĥ'),
+            @('\{','{'),@('\}','}'),@('\,',' '),@('\;',' ')
+        )
+        foreach($pair in $replacements){$s=$s.Replace([string]$pair[0],[string]$pair[1])}
+        $s=$s.Replace('&','  ').Replace('\\','    ')
+
+        # Simple named wrappers: keep their contents, discard the TeX wrapper.
+        foreach($name in @('\mathbf','\mathcal','\bar','\hat')){
+            while(($p=$s.IndexOf($name)) -ge 0){
+                $o=$p+$name.Length
+                while($o -lt $s.Length -and [char]::IsWhiteSpace($s[$o])){++$o}
+                if($o -ge $s.Length -or $s[$o] -ne '{'){break}
+                $g=Get-MiraLatexGroup $s $o;if($null -eq $g){break}
+                $inner=[string]$g.Text
+                if($name -eq '\hat'){
+                    switch($inner){'H'{$inner='Ĥ'}'h'{$inner='ĥ'}'A'{$inner='Â'}'E'{$inner='Ê'}'I'{$inner='Î'}'O'{$inner='Ô'}'U'{$inner='Û'}}
+                }
+                $s=$s.Substring(0,$p)+$inner+$s.Substring($g.End+1)
+            }
+        }
+
+        # sqrt{...} -> √... ; frac{a}{b} -> (a)/(b).
+        while(($p=$s.IndexOf('\sqrt')) -ge 0){
+            $o=$p+5;while($o -lt $s.Length -and [char]::IsWhiteSpace($s[$o])){++$o}
+            if($o -ge $s.Length -or $s[$o] -ne '{'){break}
+            $g=Get-MiraLatexGroup $s $o;if($null -eq $g){break}
+            $s=$s.Substring(0,$p)+'√'+[string]$g.Text+$s.Substring($g.End+1)
+        }
+        while(($p=$s.IndexOf('\frac')) -ge 0){
+            $o=$p+5;while($o -lt $s.Length -and [char]::IsWhiteSpace($s[$o])){++$o}
+            if($o -ge $s.Length -or $s[$o] -ne '{'){break}
+            $a=Get-MiraLatexGroup $s $o;if($null -eq $a){break}
+            $o=$a.End+1;while($o -lt $s.Length -and [char]::IsWhiteSpace($s[$o])){++$o}
+            if($o -ge $s.Length -or $s[$o] -ne '{'){break}
+            $b=Get-MiraLatexGroup $s $o;if($null -eq $b){break}
+            $s=$s.Substring(0,$p)+'('+[string]$a.Text+')/('+[string]$b.Text+')'+$s.Substring($b.End+1)
+        }
+
+        $sup=@{'0'='⁰';'1'='¹';'2'='²';'3'='³';'4'='⁴';'5'='⁵';'6'='⁶';'7'='⁷';'8'='⁸';'9'='⁹';'+'='⁺';'-'='⁻';'='='⁼';'(' ='⁽';')'='⁾';'a'='ᵃ';'b'='ᵇ';'c'='ᶜ';'d'='ᵈ';'e'='ᵉ';'f'='ᶠ';'g'='ᵍ';'h'='ʰ';'i'='ⁱ';'j'='ʲ';'k'='ᵏ';'l'='ˡ';'m'='ᵐ';'n'='ⁿ';'o'='ᵒ';'p'='ᵖ';'r'='ʳ';'s'='ˢ';'t'='ᵗ';'u'='ᵘ';'v'='ᵛ';'w'='ʷ';'x'='ˣ';'y'='ʸ';'z'='ᶻ'}
+        $sub=@{'0'='₀';'1'='₁';'2'='₂';'3'='₃';'4'='₄';'5'='₅';'6'='₆';'7'='₇';'8'='₈';'9'='₉';'+'='₊';'-'='₋';'='='₌';'('='₍';')'='₎';'a'='ₐ';'e'='ₑ';'h'='ₕ';'i'='ᵢ';'j'='ⱼ';'k'='ₖ';'l'='ₗ';'m'='ₘ';'n'='ₙ';'o'='ₒ';'p'='ₚ';'r'='ᵣ';'s'='ₛ';'t'='ₜ';'u'='ᵤ';'v'='ᵥ';'x'='ₓ'}
+
+        # Resolve braced powers/subscripts, then single-character forms.
+        foreach($pair in @(@('^',$sup),@('_',$sub))){
+            $mark=[string]$pair[0];$map=$pair[1]
+            while(($p=$s.IndexOf($mark+'{')) -ge 0){
+                $g=Get-MiraLatexGroup $s ($p+1);if($null -eq $g){break}
+                $buf=New-Object System.Text.StringBuilder
+                foreach($ch in ([string]$g.Text).ToCharArray()){if($map.ContainsKey([string]$ch)){[void]$buf.Append($map[[string]$ch])}else{[void]$buf.Append($ch)}}
+                $s=$s.Substring(0,$p)+$buf.ToString()+$s.Substring($g.End+1)
+            }
+        }
+        $buf=New-Object System.Text.StringBuilder
+        for($i=0;$i -lt $s.Length;){
+            if(($s[$i] -eq '^' -or $s[$i] -eq '_') -and $i+1 -lt $s.Length){
+                $map=if($s[$i] -eq '^'){$sup}else{$sub};$ch=[string]$s[$i+1].ToString().ToLowerInvariant()
+                if($map.ContainsKey($ch)){[void]$buf.Append($map[$ch]);$i+=2;continue}
+            }
+            [void]$buf.Append($s[$i]);++$i
+        }
+        $s=$buf.ToString().Replace('{','').Replace('}','')
+
+        # Collapse repeated whitespace without a regex.
+        $out=New-Object System.Text.StringBuilder;$spacePending=$false
+        foreach($ch in $s.ToCharArray()){
+            if([char]::IsWhiteSpace($ch)){if($out.Length -gt 0){$spacePending=$true};continue}
+            if($spacePending -and $out.Length -gt 0){[void]$out.Append(' ')}
+            [void]$out.Append($ch);$spacePending=$false
+        }
+        return $out.ToString()
+    }catch{}
+    return $s
+}
+
+function Write-MathBlock([string[]]$lines,[bool]$unfinished=$false){
+    $out=New-Object System.Collections.Generic.List[string]
+    foreach($line in @($lines)){[void]$out.Add($(if($null -eq $line){''}else{[string]$line}))}
+    while($out.Count -gt 0 -and [string]::IsNullOrWhiteSpace([string]$out[0])){$out.RemoveAt(0)}
+    while($out.Count -gt 0 -and [string]::IsNullOrWhiteSpace([string]$out[$out.Count-1])){$out.RemoveAt($out.Count-1)}
+
+    $frame=[ConsoleColor]$script:MarkupTheme.MathFrameColor
+    $labelFg=[ConsoleColor]$script:MarkupTheme.MathLanguageColor
+    $textFg=[ConsoleColor]$script:MarkupTheme.MathTextColor
+    $target=Get-MarkupGraphicWidth ([double]$script:MarkupTheme.MathRulePercent) ([int]$script:MarkupTheme.MathRuleMinWidth)
+    $prefix=[string]$script:MarkupTheme.MathHeaderPrefix + 'MATH' + [string]$script:MarkupTheme.MathLanguageGap
+    if((Get-MiraCellWidth $prefix) -gt $target){$prefix=$prefix.Substring(0,[Math]::Min($prefix.Length,(Get-MiraCellPrefixLength $prefix $target)))}
+    $ruleCount=[Math]::Max(0,$target-$prefix.Length)
+
+    Begin-MarkupLine
+    Add-MarkupSegment ([string]$script:MarkupTheme.MathHeaderPrefix) $frame
+    Add-MarkupSegment 'MATH' $labelFg
+    Add-MarkupSegment ([string]$script:MarkupTheme.MathLanguageGap) $frame
+    if($ruleCount -gt 0){Add-MarkupSegment (([string]$script:MarkupTheme.MathRuleChar)*$ruleCount) $frame}
+    End-MarkupLine
+
+    if($out.Count -eq 0){Write-MarkupPlainLine '' $textFg}
+    else{foreach($line in @($out)){Write-MarkupPlainLine (Convert-LatexToUnicode ([string]$line)) $textFg}}
+
+    Begin-MarkupLine
+    $bottomRule=([string]$script:MarkupTheme.MathRuleChar)*$target
+    Add-MarkupSegment $bottomRule $frame
+    End-MarkupLine
+}
+
+function Write-CodeBlock([string[]]$lines,[string]$language='', [bool]$unfinished=$false){
+    $lines=Normalize-CodeBlockLines $lines
+    $frame=[ConsoleColor]$script:MarkupTheme.CodeFenceFg
+    $frameBg=$script:MarkupTheme.CodeFenceBg
+    $langFg=[ConsoleColor]$script:MarkupTheme.CodeLanguageFg
+    $langBg=$script:MarkupTheme.CodeLanguageBg
+    $textFg=[ConsoleColor]$script:MarkupTheme.CodeTextFg
+    $textBg=$script:MarkupTheme.CodeTextBg
+
+    $langRaw=''+$language
+    if(-not [bool]$script:MarkupTheme.CodeShowLanguage){$langRaw=''}
+    $lang=$langRaw
+    if(-not [string]::IsNullOrWhiteSpace($langRaw) -and $null -ne $script:MarkupTheme.CodeLanguageMap){
+        $key=$langRaw.ToLowerInvariant()
+        if($script:MarkupTheme.CodeLanguageMap.ContainsKey($key)){$lang=[string]$script:MarkupTheme.CodeLanguageMap[$key]}
+    }
+    if([string]::IsNullOrWhiteSpace($lang)){$lang='Code'}
+    $lang=$lang.ToUpperInvariant()
+
+    $target=Get-MarkupGraphicWidth ([double]$script:MarkupTheme.CodeRulePercent) ([int]$script:MarkupTheme.CodeRuleMinWidth)
+    $prefix=[string]$script:MarkupTheme.CodeFencePrefix+$lang+([string]$script:MarkupTheme.CodeFenceGap)
+    if((Get-MiraCellWidth $prefix) -ge $target){$prefix=$prefix.Substring(0,[Math]::Min($prefix.Length,(Get-MiraCellPrefixLength $prefix ([Math]::Max(0,$target-1)))))}
+    $ruleWidth=[Math]::Max(0,$target-(Get-MiraCellWidth $prefix))
+
+    Begin-MarkupLine $frame $frameBg
+    Add-MarkupSegment ([string]$script:MarkupTheme.CodeFencePrefix) $frame $frameBg
+    if(-not [string]::IsNullOrWhiteSpace($lang)){Add-MarkupSegment $lang $langFg $langBg}
+    Add-MarkupSegment ([string]$script:MarkupTheme.CodeFenceGap) $frame $frameBg
+    if($ruleWidth -gt 0){Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$ruleWidth) $frame $frameBg}
+    End-MarkupLine $frame $frameBg
+
+    foreach($line in @($lines)){Write-MarkupPlainLine ([string]$line) $textFg $textBg}
+
+    Begin-MarkupLine $frame $frameBg
+    Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$target) $frame $frameBg
+    End-MarkupLine $frame $frameBg
+}
+
+function Write-MarkupTable([string[]]$lines){
+    if($null -eq $lines -or $lines.Count -lt 2){foreach($line in @($lines)){Write-MarkupInline ([string]$line)};return}
+
+    $rows=@()
+    $separators=@()
+    foreach($line in @($lines)){
+        if([string]::IsNullOrWhiteSpace($line)){continue}
+        $clean=$line.Trim().Trim('|')
+        $parts=@($clean.Split('|') | ForEach-Object {[string]$_.Trim()})
+        if($parts.Count -eq 0){continue}
+        $isSep=$true
+        foreach($p in $parts){if($p -notmatch '^:?-{3,}:?$'){$isSep=$false;break}}
+        $rows += ,$parts
+        $separators += $isSep
+    }
+    if($rows.Count -lt 2){foreach($line in @($lines)){Write-MarkupInline ([string]$line)};return}
+
+    $cols=0
+    foreach($r in $rows){if($r.Count -gt $cols){$cols=$r.Count}}
+    $widths=New-Object int[] $cols
+    for($ri=0;$ri -lt $rows.Count;$ri++){
+        for($i=0;$i -lt $rows[$ri].Count;$i++){
+            $n=Get-MiraCellWidth ([string]$rows[$ri][$i])
+            if($n -gt 36){$n=36}
+            if($n -gt $widths[$i]){$widths[$i]=$n}
+        }
+    }
+
+    for($ri=0;$ri -lt $rows.Count;$ri++){
+        $r=$rows[$ri]
+        $cells=@()
+        for($i=0;$i -lt $cols;$i++){
+            $v=if($i -lt $r.Count){[string]$r[$i]}else{''}
+            if((Get-MiraCellWidth $v) -gt $widths[$i]){
+                $cut=Get-MiraCellPrefixLength $v ([Math]::Max(0,$widths[$i]-1))
+                $v=$v.Substring(0,$cut)+'…'
+            }
+            $cells += Pad-MiraCells $v $widths[$i]
+        }
+        if($separators[$ri]){
+            $parts=@()
+            foreach($w in $widths){$parts += ('-' * ($w+2))}
+            Write-MarkupPlainLine ('  +'+($parts -join '+')+'+') ([ConsoleColor]::DarkGray)
+        }else{
+            $color=if($ri -eq 0){[ConsoleColor]::Cyan}else{[ConsoleColor]::Gray}
+            Write-MarkupPlainLine ('  | '+($cells -join ' | ')+' |') $color
+        }
+    }
+}
+
+function Get-MiraHeadingBody([string]$Text){
+    if($null -eq $Text){return $null}
+    $s=[string]$Text;$i=0
+    while($i -lt $s.Length -and $s[$i] -eq '#'){$i++}
+    if($i -lt 1 -or $i -gt 6 -or $i -ge $s.Length){return $null}
+    if(-not [char]::IsWhiteSpace($s[$i])){return $null}
+    return $s.Substring($i).TrimStart()
+}
+
+function Get-MiraListParts([string]$Text){
+    if($null -eq $Text){return $null}
+    $s=[string]$Text;$i=0
+    while($i -lt $s.Length -and [char]::IsWhiteSpace($s[$i])){++$i}
+    $indent=$s.Substring(0,$i);$markerStart=$i
+    if($i -lt $s.Length -and ($s[$i] -eq '-' -or $s[$i] -eq '*' -or $s[$i] -eq '+')){
+        ++$i
+        if($i -lt $s.Length -and [char]::IsWhiteSpace($s[$i])){
+            while($i -lt $s.Length -and [char]::IsWhiteSpace($s[$i])){++$i}
+            return [pscustomobject]@{Indent=$indent;Marker=$s.Substring($markerStart,$i-$markerStart);Body=$s.Substring($i)}
+        }
+        return $null
+    }
+    $digitsStart=$i
+    while($i -lt $s.Length -and [char]::IsDigit($s[$i])){++$i}
+    if($i -gt $digitsStart -and $i -lt $s.Length -and ($s[$i] -eq '.' -or $s[$i] -eq ')')){
+        ++$i
+        if($i -lt $s.Length -and [char]::IsWhiteSpace($s[$i])){
+            while($i -lt $s.Length -and [char]::IsWhiteSpace($s[$i])){++$i}
+            return [pscustomobject]@{Indent=$indent;Marker=$s.Substring($markerStart,$i-$markerStart);Body=$s.Substring($i)}
+        }
+    }
+    return $null
+}
+
+function Test-MiraRuleLine([string]$Text){
+    if($null -eq $Text){return $false}
+    $s=([string]$Text).Trim();if($s.Length -lt 3){return $false}
+    $glyph='';$count=0
+    foreach($ch in $s.ToCharArray()){
+        if([char]::IsWhiteSpace($ch)){continue}
+        if($glyph -eq ''){$glyph=[string]$ch}
+        if([string]$ch -ne $glyph){return $false}
+        ++$count
+    }
+    return ($count -ge 3 -and ($glyph -eq '-' -or $glyph -eq '*' -or $glyph -eq '_'))
+}
+
+function Write-MarkupText([string]$Text){
+    # Rendering is non-critical UI. It must never terminate the REPL.
+    if([string]::IsNullOrEmpty($Text)){return}
+    if($script:ResponseAnchorRow -ge 0){
+        try{[void](Cursor 0 $script:ResponseAnchorRow)}catch{}
+        $script:ResponseAnchorRow=-1
+    }
+    if(-not $script:UiRenderEnabled){
+        Write-Host $Text
+        return
+    }
+    Begin-MessageFrame
+    try{
+        $lines=@(([string]$Text).Replace("`r",'').Split([char]10))
+        $first=0
+        while($first -lt $lines.Count -and [string]::IsNullOrWhiteSpace([string]$lines[$first])){++$first}
+        if($first -gt 0 -and $first -lt $lines.Count){$lines=@($lines[$first..($lines.Count-1)])}
+        elseif($first -ge $lines.Count){$lines=@('')}
+        $inCode=$false
+        $codeLang=''
+        $codeBuffer=New-Object System.Collections.Generic.List[string]
+        $inMath=$false
+        $mathBuffer=New-Object System.Collections.Generic.List[string]
+        $tableBuffer=New-Object System.Collections.Generic.List[string]
+
+        foreach($line in $lines){
+            try{
+                $safeLine=[string]$line
+                $trim=$safeLine.Trim()
+
+                # CODE BLOCK STATE COMES FIRST. A literal $$ inside source code
+                # must remain source code and can never open/close a math block.
+                if($inCode){
+                    if($safeLine.Trim().StartsWith('```')){
+                        try{Write-CodeBlock @($codeBuffer) $codeLang $false}catch{foreach($t in @($codeBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
+                        $codeBuffer.Clear()
+                        $inCode=$false
+                        $codeLang=''
+                    }else{
+                        [void]$codeBuffer.Add($safeLine)
+                    }
+                    continue
+                }
+
+                # Standalone display-math fences. Support both $$ ... $$ and
+                # LaTeX \\[ ... \\], which models commonly emit.
+                if($inMath){
+                    # Display math may close with $$ or \] on the same line as content.
+                    if($safeLine.Trim() -eq '\]'){
+                        try{Write-MathBlock @($mathBuffer) $false}catch{foreach($t in @($mathBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
+                        $mathBuffer.Clear()
+                        $inMath=$false
+                        continue
+                    }
+
+                    $close=$safeLine.IndexOf('$$')
+                    if($close -ge 0){
+                        $before=$safeLine.Substring(0,$close)
+                        if(-not [string]::IsNullOrWhiteSpace($before)){[void]$mathBuffer.Add($before)}
+                        try{Write-MathBlock @($mathBuffer) $false}catch{foreach($t in @($mathBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
+                        $mathBuffer.Clear()
+                        $inMath=$false
+
+                        $after=$safeLine.Substring($close+2)
+                        if(-not [string]::IsNullOrWhiteSpace($after)){
+                            try{Write-MarkupInline $after}catch{Write-MarkupPlainLine $after ([ConsoleColor]::Gray)}
+                        }
+                        continue
+                    }
+
+                    [void]$mathBuffer.Add($safeLine)
+                    continue
+                }
+
+                # Display-math $$ may contain content on the opening line and may
+                # close on a later line. This covers:
+                # $$E = mc^2$$
+                # $$A = \begin{pmatrix ... \end{pmatrix}$$
+                if($safeLine.TrimStart().StartsWith(([string][char]36)+([string][char]36))){
+                    if($tableBuffer.Count -gt 0){
+                        try{Write-MarkupTable @($tableBuffer)}catch{foreach($t in @($tableBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
+                        $tableBuffer.Clear()
+                    }
+
+                    $rest=[string]$safeLine.TrimStart().Substring(2)
+                    $close=$rest.IndexOf('$$')
+                    if($close -ge 0){
+                        $inside=$rest.Substring(0,$close)
+                        if([string]::IsNullOrWhiteSpace($inside)){
+                            try{Write-MathBlock @() $false}catch{}
+                        }else{
+                            try{Write-MathBlock @($inside) $false}catch{Write-MarkupPlainLine $safeLine ([ConsoleColor]::Gray)}
+                        }
+                        $after=$rest.Substring($close+2)
+                        if(-not [string]::IsNullOrWhiteSpace($after)){
+                            try{Write-MarkupInline $after}catch{Write-MarkupPlainLine $after ([ConsoleColor]::Gray)}
+                        }
+                    }else{
+                        $inMath=$true
+                        $mathBuffer.Clear()
+                        if(-not [string]::IsNullOrWhiteSpace($rest)){[void]$mathBuffer.Add($rest)}
+                    }
+                    continue
+                }
+
+                # \[ ... \] display math, including content on the opening line.
+                if($safeLine.TrimStart().StartsWith('\[')){
+                    if($tableBuffer.Count -gt 0){
+                        try{Write-MarkupTable @($tableBuffer)}catch{foreach($t in @($tableBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
+                        $tableBuffer.Clear()
+                    }
+
+                    $rest=[string]$safeLine.TrimStart().Substring(2)
+                    $close=$rest.IndexOf('\]')
+                    if($close -ge 0){
+                        try{Write-MathBlock @([string]$rest.Substring(0,$close)) $false}catch{Write-MarkupPlainLine $safeLine ([ConsoleColor]::Gray)}
+                        $after=[string]$rest.Substring($close+2)
+                        if(-not [string]::IsNullOrWhiteSpace($after)){
+                            try{Write-MarkupInline $after}catch{Write-MarkupPlainLine $after ([ConsoleColor]::Gray)}
+                        }
+                    }else{
+                        $inMath=$true
+                        $mathBuffer.Clear()
+                        if(-not [string]::IsNullOrWhiteSpace($rest)){[void]$mathBuffer.Add($rest)}
+                    }
+                    continue
+                }
+
+                # Markdown code fence MUST be a standalone line. This is the
+                # highest-priority renderer rule when not already inside math.
+                if($safeLine.Trim().StartsWith('```')){
+                    if($tableBuffer.Count -gt 0){
+                        try{Write-MarkupTable @($tableBuffer)}catch{foreach($t in @($tableBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
+                        $tableBuffer.Clear()
+                    }
+                    if(-not $inCode){
+                        $inCode=$true
+                        $codeLang=$trim.Substring(3).Trim().ToLowerInvariant()
+                        $codeBuffer.Clear()
+                    }else{
+                        try{Write-CodeBlock @($codeBuffer) $codeLang $false}catch{foreach($t in @($codeBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
+                        $codeBuffer.Clear()
+                        $inCode=$false
+                        $codeLang=''
+                    }
+                    continue
+                }
+
+                if($trim.StartsWith('|') -and $trim.EndsWith('|')){
+                    [void]$tableBuffer.Add($safeLine)
+                    continue
+                }
+                if($tableBuffer.Count -gt 0){
+                    try{Write-MarkupTable @($tableBuffer)}catch{foreach($t in @($tableBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
+                    $tableBuffer.Clear()
+                }
+
+                $heading=Get-MiraHeadingBody $trim
+                if($null -ne $heading){
+                    try{Write-MarkupPlainLine $heading ([ConsoleColor]::Magenta)}catch{Write-MarkupPlainLine $safeLine ([ConsoleColor]::Gray)}
+                    continue
+                }
+
+                # Unordered / ordered lists: convert only the Markdown marker.
+                # The actual text and all Unicode punctuation stay untouched.
+                $listMatch=Get-MiraListParts $safeLine
+                if($null -ne $listMatch){
+                    try{
+                        $indent=[string]$listMatch.Indent
+                        $marker=[string]$listMatch.Marker
+                        $body=[string]$listMatch.Body
+                        Begin-MarkupLine
+                        if($marker.Length -gt 0 -and ($marker[0] -eq '-' -or $marker[0] -eq '*' -or $marker[0] -eq '+')){
+                            Add-MarkupSegment ($indent+'• ') ([ConsoleColor]::Yellow)
+                        }else{
+                            Add-MarkupSegment ($indent+$marker) ([ConsoleColor]::Yellow)
+                        }
+                        Write-MarkupInline $body $true
+                        End-MarkupLine
+                    }catch{Write-MarkupPlainLine $safeLine ([ConsoleColor]::Gray)}
+                    continue
+                }
+                if($trim.StartsWith('>')){
+                    try{
+                        $quote=$trim.Substring(1).TrimStart()
+                        Begin-MarkupLine
+                        Add-MarkupSegment '│ ' ([ConsoleColor]::DarkGray)
+                        Write-MarkupInline $quote $true
+                        End-MarkupLine
+                    }catch{Write-MarkupPlainLine $safeLine ([ConsoleColor]::Gray)}
+                    continue
+                }
+
+                # Only color complete JSON-looking lines; invalid JSON-like text is left alone.
+                if(($trim.StartsWith('{') -and $trim.EndsWith('}')) -or ($trim.StartsWith('[') -and $trim.EndsWith(']'))){
+                    try{Write-JsonColored $safeLine}catch{Write-MarkupPlainLine $safeLine ([ConsoleColor]::Gray)}
+                    continue
+                }
+
+                try{Write-MarkupInline $safeLine}catch{Write-MarkupPlainLine $safeLine ([ConsoleColor]::Gray)}
+            }catch{
+                try{Write-MarkupPlainLine ([string]$line) ([ConsoleColor]::Gray)}catch{}
+            }
+        }
+
+        if($inCode){
+            try{Write-CodeBlock @($codeBuffer) $codeLang $true}catch{foreach($t in @($codeBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
+        }
+        if($inMath){
+            try{Write-MathBlock @($mathBuffer) $true}catch{foreach($t in @($mathBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
+        }
+        if($tableBuffer.Count -gt 0){
+            try{Write-MarkupTable @($tableBuffer)}catch{foreach($t in @($tableBuffer)){Write-MarkupPlainLine ([string]$t) ([ConsoleColor]::Gray)}}
+        }
+    }catch{
+        try{
+            foreach($fallbackLine in @(([string]$Text).Replace("`r",'').Split([char]10))){Write-MarkupPlainLine ([string]$fallbackLine) ([ConsoleColor]::Gray)}
+        }catch{}
+    }finally{
+        End-MessageFrame
+    }
+}
+
+function Show-Response($response,$providerType){
+    $tokensIn=0
+    $tokensOut=0
+    if($providerType -eq 'gemini'){
+        if($null -ne $response.usageMetadata){
+            if($null -ne $response.usageMetadata.promptTokenCount){$tokensIn=[int]$response.usageMetadata.promptTokenCount}
+            if($null -ne $response.usageMetadata.candidatesTokenCount){$tokensOut=[int]$response.usageMetadata.candidatesTokenCount}
+        }
+        $tokenString="[Tokens: $tokensIn in, $tokensOut out]"
+        $candidates=@($response.candidates)
+        if($candidates.Count -eq 0){
+            $reply='[NO CANDIDATES RETURNED]'
+            if($null -ne $response.promptFeedback -and $null -ne $response.promptFeedback.safetyRatings){
+                foreach($rating in $response.promptFeedback.safetyRatings){$reply += "`n$($rating.category): $($rating.probability)"}
+            }
+            return [pscustomobject]@{Text=$reply;Display="$tokenString`n$reply";FinishReason='';PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+        }
+        $candidate=$candidates[0]
+        $reply=''
+        if($null -ne $candidate.content -and $null -ne $candidate.content.parts){$reply=(@($candidate.content.parts | ForEach-Object {[string]$_.text}) -join '')}
+        $finish=[string]$candidate.finishReason
+        if($finish -eq 'MAX_TOKENS'){$reply += "`n`n[WARNING: Response truncated due to token limit]"}
+        elseif($finish -eq 'SAFETY'){
+            $reply='[BLOCKED BY SAFETY FILTERS]'
+            if($null -ne $candidate.safetyRatings){foreach($rating in $candidate.safetyRatings){$reply += "`n$($rating.category): $($rating.probability)"}}
+        }
+        return [pscustomobject]@{Text=$reply;Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+    }
+
+    if($null -ne $response.usage){
+        if($null -ne $response.usage.prompt_tokens){$tokensIn=[int]$response.usage.prompt_tokens}
+        if($null -ne $response.usage.completion_tokens){$tokensOut=[int]$response.usage.completion_tokens}
+    }
+    $tokenString="[Tokens: $tokensIn in, $tokensOut out]"
+    $choices=@($response.choices)
+    if($choices.Count -eq 0){
+        $reply='[NO CHOICES RETURNED]'
+        return [pscustomobject]@{Text=$reply;Display="$tokenString`n$reply";FinishReason='';PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+    }
+    $choice=$choices[0]
+    $reply=''
+    $reasoning=''
+    $reasoningDetails=@()
+    if($null -ne $choice.message){
+        $content=$choice.message.content
+        if($content -is [string]){
+            $reply=[string]$content
+        }
+        elseif($null -ne $content){
+            # Some compatible providers return content as an array of typed parts.
+            $chunks=New-Object System.Collections.Generic.List[string]
+            foreach($part in @($content)){
+                if($part -is [string]){[void]$chunks.Add([string]$part);continue}
+                if($null -ne $part.text){[void]$chunks.Add([string]$part.text);continue}
+                if($null -ne $part.content -and $part.content -is [string]){[void]$chunks.Add([string]$part.content)}
+            }
+            $reply=$chunks -join ''
+        }
+        if($null -ne $choice.message.reasoning){$reasoning=[string]$choice.message.reasoning}
+        if($null -ne $choice.message.reasoning_details){$reasoningDetails=@($choice.message.reasoning_details)}
+    }
+    $finish=[string]$choice.finish_reason
+    if($finish -eq 'length'){$reply += "`n`n[WARNING: Response truncated due to token limit]"}
+    return [pscustomobject]@{Text=$reply;Reasoning=$reasoning;ReasoningDetails=$reasoningDetails;Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+}
+
+function Invoke-Provider($text,$parts=$null){
+    $provider=Get-Provider $script:CurrentProviderName
+    if($null -eq $provider){W ('[provider error] unknown provider: '+$script:CurrentProviderName) Red;return $false}
+    if($script:SessionActive -and $script:LastPromptTokens -ge $script:CompressThreshold){[void](Compress-Session)}
+
+    $messages=@($script:Conversation|ForEach-Object{$_})
+    # Initialize parts explicitly; assigning a new property to a PSObject fails in PS 5.1.
+    $user=[pscustomobject]@{role='user';text=[string]$text;parts=$null}
+    if($null -ne $parts){$user.parts=@($parts)}
+    $messages+=$user
+    $type=[string]$provider.type
+    if($type -eq 'gemini'){$payload=Build-GeminiPayload $messages $script:SessionSummary}
+    elseif($type -eq 'openai-compatible'){$payload=Build-OpenAICompatiblePayload $provider $messages $script:CurrentModel $script:SessionSummary}
+    else{W ('[provider error] unsupported type: '+$type) Red;return $false}
+
+    $jsonPayload=$payload|ConvertTo-Json -Depth 40
+    $script:LastRequest=$jsonPayload
+    if($script:DryRunMode){
+        W '[dry-run] no request sent' Yellow
+        W ('provider : '+$script:CurrentProviderName) Gray
+        W ('model    : '+$script:CurrentModel) Gray
+        W ''
+        W $jsonPayload Gray
+        $script:LastText=$jsonPayload
+        return $true
+    }
+
+    try{
+        if($type -eq 'openai-compatible' -and $script:StreamResponses){
+            try{
+                $result=Send-OpenAICompatibleStream $provider $script:CurrentModel $payload
+            }catch{
+                if($_.Exception.Message -eq 'Request cancelled.'){throw}
+                W ('[stream error] '+$_.Exception.Message) Yellow
+                W '[stream fallback] retrying non-stream request...' DarkGray
+                $payload.stream=$false
+                $response=Send-ProviderPayload $provider $script:CurrentModel $payload
+                $result=Show-Response $response $type
+            }
+        }else{
+            $response=Send-ProviderPayload $provider $script:CurrentModel $payload
+            $result=Show-Response $response $type
+        }
+
+        if($type -eq 'openai-compatible' -and $script:ShowReasoning -and $result.Reasoning){
+            W '[THOUGHT]' DarkGray
+            W ([string]$result.Reasoning) DarkGray
+        }
+    }catch{
+        $msg=$_.Exception.Message
+        if($msg -eq 'Request cancelled.'){return $false}
+        if($_.ErrorDetails -and $_.ErrorDetails.Message){$msg+=[Environment]::NewLine+$_.ErrorDetails.Message}
+        W ('[API error] '+$msg) Red
+        return $false
+    }
+
+    $script:LastPromptTokens=0
+    if($null -ne $result.PromptTokens){$script:LastPromptTokens=[int]$result.PromptTokens}
+    if($type -eq 'gemini' -and
+       $script:LastPromptTokens -eq 0 -and
+       $null -ne $response -and
+       $null -ne $response.usageMetadata -and
+       $null -ne $response.usageMetadata.promptTokenCount){
+        $script:LastPromptTokens=[int]$response.usageMetadata.promptTokenCount
+    }
+
+    $script:LastText=$result.Text
+
+    # Final status is prepared before the renderer converts the reserved live
+    # row into the top frame. No second status row is created.
+    $elapsedSec=[math]::Round(([int]$script:LastRequestElapsedMs)/1000,1)
+    $statusFrame=if([string]::IsNullOrEmpty([string]$script:LastRequestFrame)){'... '}else{[string]$script:LastRequestFrame}
+    $tokensIn=if($null -ne $result.PromptTokens){[int]$result.PromptTokens}else{0}
+    $tokensOut=if($null -ne $result.CompletionTokens){[int]$result.CompletionTokens}else{0}
+    $bullet=if($script:SessionActive){'  ●'}else{''}
+    $script:LastStatusText=$statusFrame+'  '+$elapsedSec+'s      ↑ '+$tokensIn+'  ↓ '+$tokensOut+$bullet
+    $script:LastStatusHasBullet=$script:SessionActive
+
+    if($type -eq 'gemini' -or -not $script:StreamResponses){
+        try{
+            Write-MarkupText ([string]$result.Text)
+        }catch{
+            try{ W '[markup warning] raw response fallback' Yellow }catch{}
+            try{ Write-Host ([string]$result.Text) -ForegroundColor Gray }catch{}
+        }
+    }
+
+    # Self-learning used.list: only remember models that produced a real
+    # non-empty text answer through Mira's normal chat path. Model selection
+    # itself never writes to used.list, so failed/TTS/non-text models stay out.
+    $ok=($result.FinishReason -ne 'SAFETY') -and
+        -not [string]::IsNullOrEmpty([string]$result.Text) -and
+        ([string]$result.Text -notmatch '^\[NO CHOICES RETURNED\]$') -and
+        ([string]$result.Text -notmatch '^\[NO CANDIDATES RETURNED\]$')
+    if($ok){Add-UsedModel $script:CurrentProviderName $script:CurrentModel}
+    if($ok -and $script:SessionActive){[void]$script:Conversation.Add($user);Add-Message 'assistant' $result.Text $result.ReasoningDetails}
+    return $ok
+}
+
+function Show-ApiKeyStatus(){
+    W '' DarkCyan
+    W 'API key status (safe; never prints secrets):' Cyan
+    $names=@('GEMINI_API_KEY','OPENROUTER_API_KEY','GROQ_API_KEY','OPENAI_API_KEY','DEEPSEEK_API_KEY','MISTRAL_API_KEY','TOGETHER_API_KEY','FIREWORKS_API_KEY','XAI_API_KEY','PERPLEXITY_API_KEY')
+    foreach($name in $names){
+        $v=Get-Item ('Env:'+ $name) -ErrorAction SilentlyContinue
+        if($null -eq $v -or [string]::IsNullOrWhiteSpace([string]$v.Value)){
+            W ($name+' = <empty>') DarkGray
+        }else{
+            W ($name+' = <set>') DarkGray
+        }
+    }
+}
+
+function Help(){
+    W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
+    W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
+    Show-ApiKeyStatus
+    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <Tab>              refresh only providers with a non-empty API key env' DarkGray; W '  .models test               pre-filter fetched models, probe API, learn successful text models into used.list' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live OpenAI-compatible streaming' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
+}
+
+function Add-Message($role,$text,$reasoningDetails=$null,$parts=$null){
+    # Keep optional fields present so PowerShell 5.1 can assign them later.
+    $m=[pscustomobject]@{role=$role;text=[string]$text;reasoning_details=$null;parts=$null}
+    if($null -ne $reasoningDetails){$rd=@($reasoningDetails);if($rd.Count -gt 0){$m.reasoning_details=$rd}}
+    if($null -ne $parts){$m.parts=@($parts)}
+    [void]$script:Conversation.Add($m)
+}
+
+function Get-SaveExtension([string]$language){
+    switch(([string]$language).Trim().ToLowerInvariant()){
+        'powershell' {'ps1'} 'ps1' {'ps1'} 'pwsh' {'ps1'} 'ps' {'ps1'}
+        'bash' {'sh'} 'sh' {'sh'}
+        'python' {'py'} 'py' {'py'}
+        'javascript' {'js'} 'js' {'js'} 'typescript' {'ts'} 'ts' {'ts'}
+        'json' {'json'} 'xml' {'xml'} 'html' {'html'} 'css' {'css'}
+        'yaml' {'yaml'} 'yml' {'yml'} 'sql' {'sql'} 'csharp' {'cs'} 'cs' {'cs'}
+        'cpp' {'cpp'} 'c++' {'cpp'} 'c' {'c'} 'java' {'java'} 'rust' {'rs'} 'go' {'go'} 'lua' {'lua'}
+        'markdown' {'md'} 'md' {'md'} 'text' {'txt'} 'txt' {'txt'} default { if($language){$language.TrimStart('.')}else{'txt'} }
+    }
+}
+
+function Get-UniqueSavePath([string]$baseName,[string]$extension){
+    $safe=[IO.Path]::GetFileNameWithoutExtension([string]$baseName)
+    if([string]::IsNullOrWhiteSpace($safe)){$safe='mira'}
+    $ext=[string]$extension
+    if(-not $ext.StartsWith('.')){$ext='.'+$ext}
+    $path=Join-Path (Get-Location).Path ($safe+$ext)
+    $n=1
+    while(Test-Path -LiteralPath $path){
+        $path=Join-Path (Get-Location).Path ($safe+'_'+$n+$ext)
+        ++$n
+    }
+    return $path
+}
+
+function Save-LastMessage([string]$Text,[string]$Name=''){
+    if([string]::IsNullOrWhiteSpace($Text)){W '[No output to save]' Yellow;return}
+
+    # Markdown fence parser: one opening ``` line, any body, one closing ``` line.
+    # No blank line is required after the opening fence.
+    $pattern='(?ms)^[ \t]*```([^\r\n`]*)[ \t]*\r?\n(.*?)^[ \t]*```[ \t]*(?:\r?\n|$)'
+    $matches=[regex]::Matches($Text,$pattern)
+
+    if($matches.Count -gt 0){
+        $saved=0
+        foreach($m in $matches){
+            $lang=$m.Groups[1].Value.Trim()
+            $body=$m.Groups[2].Value.TrimEnd([char]13,[char]10)
+            $ext=Get-SaveExtension $lang
+            if([string]::IsNullOrWhiteSpace($ext)){$ext='txt'}
+
+            if(-not [string]::IsNullOrWhiteSpace($Name) -and $matches.Count -eq 1){
+                $base=$Name
+            }elseif(-not [string]::IsNullOrWhiteSpace($Name)){
+                $label=if($lang){$lang.ToLowerInvariant()}else{'text'}
+                $base=$Name+'_'+('{0:D2}' -f ($saved+1))+'_'+$label
+            }else{
+                $label=if($lang){$lang.ToLowerInvariant()}else{'text'}
+                $base='mira_{0:D2}_{1}' -f ($saved+1),$label
+            }
+
+            $path=Get-UniqueSavePath $base ('.'+$ext)
+            [IO.File]::WriteAllText($path,$body,(New-Object System.Text.UTF8Encoding($true)))
+            W ('[Saved: '+(Split-Path -Leaf $path)+']') Green
+            ++$saved
+        }
+        return
+    }
+
+    # No fenced code: keep the historical behavior and save the whole response.
+    $base=if([string]::IsNullOrWhiteSpace($Name)){'mira_message'}else{$Name}
+    if([IO.Path]::GetExtension($base)){
+        $ext=[IO.Path]::GetExtension($base)
+        $base=[IO.Path]::GetFileNameWithoutExtension($base)
+    }else{$ext='.txt'}
+    $path=Get-UniqueSavePath $base $ext
+    [IO.File]::WriteAllText($path,$Text,(New-Object System.Text.UTF8Encoding($true)))
+    W ('[Saved: '+(Split-Path -Leaf $path)+']') Green
+}
+
+function Set-TuiClipboardText([string]$Text){
+    if([string]::IsNullOrEmpty($Text)){throw 'no output to copy'}
+    try{
+        Set-Clipboard -Value $Text -ErrorAction Stop
+        return
+    }catch{}
+
+    try{
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        [System.Windows.Forms.Clipboard]::SetText($Text)
+        return
+    }catch{
+        throw ('clipboard unavailable: '+$_.Exception.Message)
+    }
+}
+
+function Copy-LastMessage([string]$Text){
+    try{
+        Set-TuiClipboardText $Text
+        W ('[copied '+$Text.Length+' chars]') Green
+    }catch{W ('[copy error] '+$_.Exception.Message) Red}
+}
+
+function Grab-LastMessage([string]$Text,[string]$Name=''){
+    if([string]::IsNullOrWhiteSpace($Text)){W '[No output to grab]' Yellow;return}
+    try{
+        $base=if([string]::IsNullOrWhiteSpace($Name)){'mira_'+(Get-Date -Format 'yyyyMMdd_HHmmss')}else{$Name}
+        if(-not [IO.Path]::GetExtension($base)){$base += '.txt'}
+        else{$base=[IO.Path]::GetFileNameWithoutExtension($base)+[IO.Path]::GetExtension($base)}
+        $ext=[IO.Path]::GetExtension($base)
+        $stem=[IO.Path]::GetFileNameWithoutExtension($base)
+        $path=Get-UniqueSavePath $stem $ext
+        [IO.File]::WriteAllText($path,$Text,(New-Object System.Text.UTF8Encoding($true)))
+        W ('[Grabbed: '+(Split-Path -Leaf $path)+']') Green
+    }catch{W ('[grab error] '+$_.Exception.Message) Red}
+}
+function Show-CliArgumentStatus(){
+    W '[CLI arguments]' Cyan
+    W '  implemented      -d, --dry-run' Gray
+    W '  not implemented  -m, --model <name>  •  -e, --execute  •  -h, --help  •  --' DarkGray
+}
+
+function Show-Request([switch]$Raw){
+    if([string]::IsNullOrEmpty($script:LastRequest)){W '[no request sent yet]' Yellow;return}
+    if($Raw){W $script:LastRequest Gray;return}
+
+    $obj=$null
+    try{$obj=$script:LastRequest | ConvertFrom-Json -ErrorAction Stop}catch{}
+    W '[last request]' Cyan
+    W ('provider : '+$script:CurrentProviderName) Gray
+    W ('model    : '+$script:CurrentModel) Gray
+    W ('bytes    : '+([Text.Encoding]::UTF8.GetByteCount([string]$script:LastRequest))) Gray
+    W ('session  : '+$(if($script:SessionActive){$script:SessionName}else{'off'})) Gray
+    if($null -ne $obj){
+        $keys=@($obj.PSObject.Properties | ForEach-Object {$_.Name})
+        if($keys.Count -gt 0){W ('fields   : '+($keys -join ', ')) DarkGray}
+        if($null -ne $obj.contents){W ('contents : '+@($obj.contents).Count+' item(s)') DarkGray}
+        elseif($null -ne $obj.messages){W ('messages : '+@($obj.messages).Count+' item(s)') DarkGray}
+        if($null -ne $obj.generationConfig){
+            $cfg=@($obj.generationConfig.PSObject.Properties | ForEach-Object {$_.Name})
+            if($cfg.Count -gt 0){W ('config   : '+($cfg -join ', ')) DarkGray}
+        }
+        if($null -ne $obj.tools){W ('tools    : '+@($obj.tools).Count+' item(s)') DarkGray}
+    }
+    W 'use .request json for the raw JSON payload' DarkGray
+}
+
+function Run-Local($line){
+    $cmd=$line.Substring(1).Trim(); if(!$cmd){Help;return}
+    try{ $o=Invoke-Expression $cmd 2>&1|Out-String -Width 4096; $script:LastText=$o.TrimEnd(); if($script:LastText){W $script:LastText Gray}else{W '' Gray} }
+    catch{W ('[local error] '+$_.Exception.Message) Red}
+}
+
+function Get-FileMimeType([string]$path){
+    switch(([IO.Path]::GetExtension($path)).ToLowerInvariant()){
+        '.png'  {'image/png'} '.jpg'  {'image/jpeg'} '.jpeg' {'image/jpeg'} '.gif' {'image/gif'} '.webp' {'image/webp'} '.bmp' {'image/bmp'} default {'application/octet-stream'}
+    }
+}
+
+function New-TextPart([string]$text){return [pscustomobject]@{kind='text';text=[string]$text}}
+function New-ImagePart([string]$path){$bytes=[IO.File]::ReadAllBytes($path);return [pscustomobject]@{kind='image';mimeType=(Get-FileMimeType $path);data=[Convert]::ToBase64String($bytes)}}
+
+function Send-FileToProvider([string]$path,[bool]$ForceText=$false){
+    if([string]::IsNullOrWhiteSpace($path)){W '[Usage: .file <path>]' Yellow;return}
+    try{
+        $item=Get-Item -LiteralPath $path -Force -ErrorAction Stop
+        if($item.PSIsContainer){throw 'path is a directory'}
+        $mime=Get-FileMimeType $item.FullName
+        if(-not $ForceText -and $mime -ne 'application/octet-stream'){
+            if($item.Length -gt 8388608){throw 'image is larger than 8 MB for this test build'}
+            $label='[IMAGE FILE: '+$item.FullName+']'
+            $parts=@([pscustomobject]@{kind='text';text=$label},(New-ImagePart $item.FullName))
+            [void](Invoke-Provider $label $parts);return
+        }
+        if($item.Length -gt 2097152){throw 'text file is larger than 2 MB for this test build'}
+        $text=[IO.File]::ReadAllText($item.FullName,[Text.Encoding]::UTF8)
+        $payloadText='[FILE: '+$item.FullName+']'+"`n`n"+$text
+        [void](Invoke-Provider $payloadText @(New-TextPart $payloadText))
+    }catch{W ('[file send error] '+$_.Exception.Message) Red}
+}
+
+function Send-TextFileToProvider([string]$path){
+    if([string]::IsNullOrWhiteSpace($path)){W '[Usage: .read <path>]' Yellow;return}
+    try{
+        $item=Get-Item -LiteralPath $path -Force -ErrorAction Stop
+        if($item.PSIsContainer){throw 'path is a directory'}
+        if($item.Length -gt 2097152){throw 'text file is larger than 2 MB for this test build'}
+        $text=[IO.File]::ReadAllText($item.FullName,[Text.Encoding]::UTF8)
+        $payloadText='[TEXT: '+$item.FullName+']'+"`n`n"+$text
+        [void](Invoke-Provider $payloadText @(New-TextPart $payloadText))
+    }catch{W ('[read send error] '+$_.Exception.Message) Red}
+}
+
+function New-SimpleDiff([string]$a,[string]$b){
+    $left=@([IO.File]::ReadAllLines($a,[Text.Encoding]::UTF8));$right=@([IO.File]::ReadAllLines($b,[Text.Encoding]::UTF8));$sb=New-Object Text.StringBuilder
+    [void]$sb.AppendLine(('--- '+$a));[void]$sb.AppendLine(('+++ '+$b))
+    $max=[Math]::Max($left.Count,$right.Count)
+    for($i=0;$i -lt $max;++$i){
+        if($i -lt $left.Count -and $i -lt $right.Count -and $left[$i] -eq $right[$i]){[void]$sb.AppendLine('  '+$left[$i]);continue}
+        if($i -lt $left.Count){[void]$sb.AppendLine('- '+$left[$i])}
+        if($i -lt $right.Count){[void]$sb.AppendLine('+ '+$right[$i])}
+    }
+    return $sb.ToString().TrimEnd()
+}
+
+function Send-DiffToProvider([string]$a,[string]$b){
+    try{
+        $x=Get-Item -LiteralPath $a -Force -ErrorAction Stop;$y=Get-Item -LiteralPath $b -Force -ErrorAction Stop
+        if($x.PSIsContainer -or $y.PSIsContainer){throw 'both paths must be files'}
+        $diff=New-SimpleDiff $x.FullName $y.FullName
+        $payloadText='[DIFF]'+"`n`n"+$diff
+        [void](Invoke-Provider $payloadText @(New-TextPart $payloadText))
+    }catch{W ('[diff send error] '+$_.Exception.Message) Red}
+}
+
+function Send-ShotToProvider([string]$path=''){
+    try{
+        $mime='image/png'
+        if([string]::IsNullOrWhiteSpace($path)){
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop;Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+            $img=[System.Windows.Forms.Clipboard]::GetImage();if($null -eq $img){throw 'no image found on clipboard'}
+            $stream=New-Object IO.MemoryStream
+            try{$img.Save($stream,[System.Drawing.Imaging.ImageFormat]::Png);$bytes=$stream.ToArray()}finally{$stream.Dispose();$img.Dispose()}
+            $label='[CLIPBOARD SCREENSHOT]'
+        }else{
+            $item=Get-Item -LiteralPath $path -Force -ErrorAction Stop;if($item.PSIsContainer){throw 'path is a directory'}
+            $mime=Get-FileMimeType $item.FullName;if($mime -eq 'application/octet-stream'){throw 'unsupported image type'}
+            $bytes=[IO.File]::ReadAllBytes($item.FullName);$label='[IMAGE: '+$item.FullName+']'
+        }
+        if($bytes.Length -gt 8388608){throw 'image is larger than 8 MB for this test build'}
+        $parts=@([pscustomobject]@{kind='text';text=$label},[pscustomobject]@{kind='image';mimeType=$mime;data=[Convert]::ToBase64String($bytes)})
+        [void](Invoke-Provider $label $parts)
+    }catch{W ('[shot send error] '+$_.Exception.Message) Red}
+}
+
+function Handle-UiCommand([string]$t){
+    $x=$t.Trim().ToLowerInvariant()
+    if($x -eq '.ui'){
+        W ('[ui] '+$(if($script:UiRenderEnabled){'on'}else{'off'})) Cyan
+        return $true
+    }
+    if($x -eq '.ui on' -or $x -eq '.ui off'){
+        $script:UiRenderEnabled=($x -eq '.ui on')
+        W ('[ui '+$(if($script:UiRenderEnabled){'on]'}else{'off]'})) Cyan
+        return $true
+    }
+    return $false
+}
+
+function Handle($line){
+    $t=$line.Trim()
+    if($t -in @('.q',':q',':wq','quit')){$script:Running=$false;return}
+    if($t -eq '.help'){Help;return}
+    if($t -eq '.clear'){Clear-Host;return}
+    if($t -eq '.clear history'){$script:History.Clear();$script:HistIndex=-1;$script:HistDraft='';Reset-TuiHistorySearch;Save-TuiHistory;W '[history cleared]' DarkGray;return}
+    if($t -eq '.history persist on'){Set-TuiHistoryPersistence $true;return}
+    if($t -eq '.history persist off'){Set-TuiHistoryPersistence $false;return}
+    if($t -eq '.history'){Show-TuiHistory;return}
+    if($t.StartsWith('!')){Run-Local $t;return}
+    if($t -eq '.file' -or $t.StartsWith('.file ')){Send-FileToProvider (($t.Substring(5)).Trim());return}
+    if($t -eq '.read' -or $t.StartsWith('.read ')){Send-TextFileToProvider (($t.Substring(5)).Trim());return}
+    if($t -eq '.shot' -or $t.StartsWith('.shot ')){Send-ShotToProvider (($t.Substring(5)).Trim());return}
+    if($t -eq '.model'){Show-Model;return}
+    if($t.StartsWith('.model ')){[void](Set-ModelSelection ($t.Substring(7)));return}
+    if($t -eq '.models test'){Test-CachedModels;return}
+    if($t -eq '.models'){Show-Models;return}
+    if($t -eq '.providers'){Show-Providers;return}
+    if($t -eq '.ui' -or $t -eq '.ui on' -or $t -eq '.ui off'){
+        if(Handle-UiCommand $t){return}
+    }
+    if($t -eq '.request'){Show-Request;return}
+    if($t -eq '.request json' -or $t -eq '.request raw'){Show-Request -Raw;return}
+    if($t -eq '.save' -or $t.StartsWith('.save ')){Save-LastMessage $script:LastText (($t.Substring(5)).Trim());return}
+    if($t -eq '.copy'){Copy-LastMessage $script:LastText;return}
+    if($t -eq '.grab' -or $t.StartsWith('.grab ')){Grab-LastMessage $script:LastText (($t.Substring(5)).Trim());return}
+    if($t -eq '.stream'){W ('[stream] '+$(if($script:StreamResponses){'on'}else{'off'})+' (OpenAI-compatible)') Cyan;return}
+    if($t -in @('.stream on','.stream off')){$script:StreamResponses=($t -eq '.stream on');W ('[stream '+$(if($script:StreamResponses){'on'}else{'off'})+']') Cyan;return}
+    if($t -eq '.reasoning'){W ('[reasoning] '+$(if($script:ShowReasoning){'on'}else{'off'})) Cyan;return}
+    if($t -in @('.reasoning on','.reasoning off')){$script:ShowReasoning=($t -eq '.reasoning on');W ('[reasoning '+$(if($script:ShowReasoning){'on'}else{'off'})+']') Cyan;return}
+    if($t -eq '.enable-session'){Start-Session '';return}
+    if($t.StartsWith('.enable-session ')){Start-Session ($t.Substring(16));return}
+    if($t -eq '.export-session' -or $t.StartsWith('.export-session ')){[void](Export-Session (($t.Substring(15)).Trim()));return}
+    if($t -eq '.empty session'){Empty-Session;return}
+    if($t -eq '.compress session'){[void](Compress-Session);return}
+    if($t -eq '.delete session'){Exit-Session;return}
+    if($t.StartsWith('.diff ')){$a=$t.Substring(6).Trim() -split '\s+',2;if($a.Count -lt 2){W '[Usage: .diff <a> <b>]' Yellow;return};Send-DiffToProvider $a[0] $a[1];return}
+    [void](Invoke-Provider $line)
+}
+
+function Read-Line {
+    param([int]$PromptRow)
+    $buffer=''
+    $cursor=0
+    $historyPos=$script:History.Count
+    $draft=''
+    $historySearch=$false
+    $historyPrefix=''
+    $historySearchPos=$script:History.Count
+    $killRing=''
+    $undoStack=New-Object System.Collections.Stack
+    [Console]::Write((Get-TuiPrompt 0))
+
+    while($true){
+        $key=Read-Key
+        $ctrl=(($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)
+        $alt=(($key.Modifiers -band [ConsoleModifiers]::Alt) -ne 0)
+        $shift=(($key.Modifiers -band [ConsoleModifiers]::Shift) -ne 0)
+        $isCtrlEnter=($key.Key -eq [ConsoleKey]::Enter -and $ctrl)
+        $isCtrlJ=(($key.Key -eq [ConsoleKey]::J -and $ctrl) -or ([int][char]$key.KeyChar -eq 10))
+        $isCtrlUnderscore=(($ctrl -and $shift -and $key.Key -eq [ConsoleKey]::OemMinus) -or ($ctrl -and ([string]$key.KeyChar -eq '_')))
+
+        $SaveUndo = {
+            param([string]$oldBuffer,[int]$oldCursor)
+            if($undoStack.Count -eq 0 -or $undoStack.Peek().Buffer -ne $oldBuffer -or $undoStack.Peek().Cursor -ne $oldCursor){
+                [void]$undoStack.Push([pscustomobject]@{Buffer=$oldBuffer;Cursor=$oldCursor})
+                while($undoStack.Count -gt 100){[void]$undoStack.Pop()}
+            }
+        }
+        $Undo = {
+            param([ref]$outBuffer,[ref]$outCursor)
+            if($undoStack.Count -gt 0){
+                $u=$undoStack.Pop()
+                $outBuffer.Value=$u.Buffer
+                $outCursor.Value=$u.Cursor
+                Clear-Menu
+                Redraw $outBuffer.Value $outCursor.Value $PromptRow
+                return $true
+            }
+            return $false
+        }
+        $WordStart = {
+            param([string]$text,[int]$pos)
+            $i=$pos
+            while($i -gt 0 -and [char]::IsWhiteSpace($text[$i-1])){--$i}
+            while($i -gt 0 -and -not [char]::IsWhiteSpace($text[$i-1])){--$i}
+            return $i
+        }
+        $WordEnd = {
+            param([string]$text,[int]$pos)
+            $i=$pos
+            while($i -lt $text.Length -and [char]::IsWhiteSpace($text[$i])){++$i}
+            while($i -lt $text.Length -and -not [char]::IsWhiteSpace($text[$i])){++$i}
+            return $i
+        }
+
+        # Interactive .model completion menu owns Up/Down/Tab/Enter/Esc while active.
+        if($script:ModelMenuActive){
+            if($key.Key -eq [ConsoleKey]::Tab){
+                Move-ModelMenu 1 $PromptRow ([ref]$buffer) ([ref]$cursor)
+                continue
+            }
+            if($key.Key -eq [ConsoleKey]::UpArrow){
+                Move-ModelMenu -1 $PromptRow ([ref]$buffer) ([ref]$cursor)
+                continue
+            }
+            if($key.Key -eq [ConsoleKey]::DownArrow -or ($key.Key -eq [ConsoleKey]::J -and -not $ctrl)){
+                Move-ModelMenu 1 $PromptRow ([ref]$buffer) ([ref]$cursor)
+                continue
+            }
+            if(($key.Key -eq [ConsoleKey]::K -and -not $ctrl)){
+                Move-ModelMenu -1 $PromptRow ([ref]$buffer) ([ref]$cursor)
+                continue
+            }
+            if($key.Key -eq [ConsoleKey]::Enter){
+                if($script:ModelMenuItems.Count -gt 0){
+                    $idx=[Math]::Max(0,[Math]::Min($script:ModelMenuIndex,$script:ModelMenuItems.Count-1))
+                    $buffer='.model '+[string]$script:ModelMenuItems[$idx]
+                    $cursor=$buffer.Length
+                }
+                Clear-ModelMenu
+                Redraw $buffer $cursor $PromptRow
+                continue
+            }
+            if($key.Key -eq [ConsoleKey]::Escape){
+                $buffer='.model '+$script:ModelMenuTyped
+                $cursor=$buffer.Length
+                Clear-ModelMenu
+                Redraw $buffer $cursor $PromptRow
+                continue
+            }
+            Clear-ModelMenu
+            Redraw $buffer $cursor $PromptRow
+        }
+
+        if($script:MenuVisible){
+            # Completion menu owns navigation while it is open.
+            # Use both ConsoleKey and KeyChar so this works with native Console.ReadKey
+            # and the RawUI fallback used on older PowerShell hosts.
+            $kc=[string]$key.KeyChar
+            $isJ=($kc -ceq 'j')
+            $isK=($kc -ceq 'k')
+
+            if($key.Key -eq [ConsoleKey]::Tab){
+                $dir=if(($key.Modifiers -band [ConsoleModifiers]::Shift) -ne 0){-1}else{1}
+                Move-Menu $dir $PromptRow ([ref]$buffer) ([ref]$cursor)
+                continue
+            }
+            if($key.Key -eq [ConsoleKey]::UpArrow -or $isK){
+                Move-Menu -1 $PromptRow ([ref]$buffer) ([ref]$cursor)
+                continue
+            }
+            if($key.Key -eq [ConsoleKey]::DownArrow -or $isJ){
+                Move-Menu 1 $PromptRow ([ref]$buffer) ([ref]$cursor)
+                continue
+            }
+            if($key.Key -eq [ConsoleKey]::Enter){
+                [void](Accept-Menu $PromptRow ([ref]$buffer) ([ref]$cursor))
+                continue
+            }
+            if($key.Key -eq [ConsoleKey]::Escape){
+                Clear-Menu
+                Redraw $buffer $cursor $PromptRow
+                continue
+            }
+            # Any other key means the user is editing/filtering the query.
+            # Close the old menu and let normal readline processing handle the key.
+            Clear-Menu
+            Redraw $buffer $cursor $PromptRow
+        }
+
+        if($isCtrlEnter -or $isCtrlJ){
+            Clear-Menu
+            $buffer=$buffer.Insert($cursor,"`n")
+            ++$cursor
+            $draft=$buffer
+            $historyPos=$script:History.Count
+            $historySearch=$false
+            $historyPrefix=''
+            $historySearchPos=$script:History.Count
+            Redraw $buffer $cursor $PromptRow
+            continue
+        }
+
+        # Fish-like history:
+        # - Empty line: normal Up/Down navigation through all history.
+        # - Non-empty line: Up/Ctrl+P searches backward for entries starting with the current text.
+        # - Down/Ctrl+N searches forward through the same prefix matches and then restores the draft.
+        $historyPrevious=($key.Key -eq [ConsoleKey]::UpArrow) -or ($ctrl -and $key.Key -eq [ConsoleKey]::P)
+        $historyNext=($key.Key -eq [ConsoleKey]::DownArrow) -or ($ctrl -and $key.Key -eq [ConsoleKey]::N)
+
+        if($historyPrevious -or $historyNext){
+            if($script:History.Count -gt 0){
+                $direction=if($historyPrevious){-1}else{1}
+
+                if(-not $historySearch -and $buffer.Length -gt 0 -and $historyPos -eq $script:History.Count){
+                    # Start a fish-like prefix search from the newest end of history.
+                    $historySearch=$true
+                    $historyPrefix=$buffer
+                    $historySearchPos=$script:History.Count
+                    $draft=$buffer
+                }
+
+                if($historySearch){
+                    $i=$historySearchPos+$direction
+                    $found=$false
+                    while($i -ge 0 -and $i -lt $script:History.Count){
+                        $candidate=[string]$script:History[$i]
+                        if($candidate.StartsWith($historyPrefix,[StringComparison]::OrdinalIgnoreCase)){
+                            $historySearchPos=$i
+                            $historyPos=$i
+                            $buffer=$candidate
+                            $cursor=$buffer.Length
+                            $found=$true
+                            break
+                        }
+                        $i+=$direction
+                    }
+
+                    if(-not $found -and $direction -gt 0){
+                        # Past the newest matching entry: restore what the user originally typed.
+                        $buffer=$draft
+                        $cursor=$buffer.Length
+                        $historyPos=$script:History.Count
+                        $historySearch=$false
+                        $historyPrefix=''
+                        $historySearchPos=$script:History.Count
+                    }
+                } else {
+                    # Ordinary full-history navigation on an empty line.
+                    if($direction -lt 0){
+                        if($historyPos -eq $script:History.Count){$draft=$buffer}
+                        if($historyPos -gt 0){--$historyPos}
+                    } elseif($historyPos -lt $script:History.Count){
+                        ++$historyPos
+                    }
+
+                    if($historyPos -lt $script:History.Count){
+                        $buffer=[string]$script:History[$historyPos]
+                        $cursor=$buffer.Length
+                    } else {
+                        $buffer=$draft
+                        $cursor=$buffer.Length
+                    }
+                }
+
+                Clear-Menu
+                Redraw $buffer $cursor $PromptRow
+            }
+            continue
+        }
+
+        # Any normal editing action leaves history-search mode.
+        if($historySearch){
+            $historySearch=$false
+            $historyPrefix=''
+            $historySearchPos=$script:History.Count
+            $historyPos=$script:History.Count
+            $draft=$buffer
+        }
+
+        if($key.Key -eq [ConsoleKey]::Tab){
+            if($script:MenuVisible){continue}
+            if($cursor -ne $buffer.Length){continue}
+
+            # NETWORK REFRESH IS EXPLICIT: only .models + Tab writes model cache files.
+            if($buffer -eq '.models' -or $buffer -eq '.models '){
+                Clear-Menu
+                Refresh-ModelCaches
+                $buffer='.models ';$cursor=$buffer.Length
+                Redraw $buffer $cursor $PromptRow
+                continue
+            }
+
+            if($buffer -match '^\.models\s+[^\s]+$'){
+                $only=$buffer.Substring(8).Trim();$p=Get-Provider $only
+                Clear-Menu
+                if($null -eq $p){
+                    $matches=@($script:Providers|ForEach-Object{[string]$_.name}|Where-Object{$_.StartsWith($only,[StringComparison]::OrdinalIgnoreCase)})
+                    if($matches.Count -eq 1){Refresh-ModelCaches $matches[0]}else{W '[models] unknown/ambiguous provider' Yellow}
+                }else{Refresh-ModelCaches $only}
+                Redraw $buffer $cursor $PromptRow
+                continue
+            }
+
+            if($buffer.StartsWith('!')){
+                $c=Complete-LocalApp $buffer $PromptRow
+                if($null -ne $c -and $c -is [string] -and $c -ne $buffer){
+                    $buffer=$c;$cursor=$buffer.Length;Redraw $buffer $cursor $PromptRow
+                }
+                continue
+            }
+            if($buffer.Length -eq 0){
+                $mi=@($script:Commands|ForEach-Object{[pscustomobject]@{Name=$_;PSIsContainer=$false}})
+                Show-Menu $mi $PromptRow $buffer $cursor
+                continue
+            }
+            if($buffer -in @('.file','.read','.shot','.diff','.model')){
+                $buffer+=' ';$cursor=$buffer.Length;Redraw $buffer $cursor $PromptRow;continue
+            }
+            # Argument completion must run before the generic dot-command completer.
+            # Otherwise '.diff <Tab>' and '.model <Tab>' are swallowed by Complete-Command.
+            if($buffer -match '^\.model\s'){
+                try{
+                    $r=Complete-Model $buffer $PromptRow
+                    if($null -ne $r){$buffer=$r;$cursor=$buffer.Length;Redraw $buffer $cursor $PromptRow}
+                }catch{Clear-Menu;W ('[model completion error] '+$_.Exception.Message) Red;Redraw $buffer $cursor $PromptRow}
+                continue
+            }
+            if($buffer -match '^\.(file|read|shot|diff)(?:\s|$)'){
+                $cmd='.'+$Matches[1]
+                try{
+                    $r=Complete-Path $buffer $cursor $PromptRow $cmd
+                    if($null -ne $r -and $r -is [string]){$buffer=$r;$cursor=$buffer.Length;Redraw $buffer $cursor $PromptRow}
+                }catch{Clear-Menu;W ('[completion error] '+$_.Exception.Message) Red;Redraw $buffer $cursor $PromptRow}
+                continue
+            }
+            if($buffer.StartsWith('.')){
+                $c=Complete-Command $buffer $PromptRow
+                if($null -ne $c -and $c -is [string] -and $c -ne $buffer){
+                    $buffer=$c;$cursor=$buffer.Length;Redraw $buffer $cursor $PromptRow
+                }
+                continue
+            }
+            continue
+        }
+
+        # Emacs/readline-style editing extensions. Ctrl+_ is the usual Emacs undo key;
+        # on Windows it arrives as Ctrl+Shift+- / OemMinus, or occasionally KeyChar '_'.
+        if($ctrl -and $isCtrlUnderscore){
+            if(-not (&$Undo ([ref]$buffer) ([ref]$cursor))){try{[Console]::Beep(700,35)}catch{}}
+            continue
+        }
+
+        if($alt){
+            # Windows console commonly reports Meta/Alt as a modifier on the
+            # same key event. Handle it here and then explicitly continue the
+            # readline loop so the plain character is NOT inserted afterward.
+            $altHandled=$false
+            switch($key.Key){
+                ([ConsoleKey]::B){
+                    $cursor=(& $WordStart $buffer $cursor)
+                    Redraw $buffer $cursor $PromptRow
+                    $altHandled=$true
+                }
+                ([ConsoleKey]::F){
+                    $cursor=(& $WordEnd $buffer $cursor)
+                    Redraw $buffer $cursor $PromptRow
+                    $altHandled=$true
+                }
+                ([ConsoleKey]::D){
+                    if($cursor -lt $buffer.Length){
+                        $oldBuffer=$buffer; $oldCursor=$cursor; $end=(& $WordEnd $buffer $cursor)
+                        $killRing=$buffer.Substring($cursor,$end-$cursor)
+                        & $SaveUndo $oldBuffer $oldCursor
+                        $buffer=$buffer.Remove($cursor,$end-$cursor)
+                        Redraw $buffer $cursor $PromptRow
+                    }
+                    $altHandled=$true
+                }
+                ([ConsoleKey]::Backspace){
+                    if($cursor -gt 0){
+                        $oldBuffer=$buffer; $oldCursor=$cursor; $start=(& $WordStart $buffer $cursor)
+                        $killRing=$buffer.Substring($start,$cursor-$start)
+                        & $SaveUndo $oldBuffer $oldCursor
+                        $buffer=$buffer.Remove($start,$cursor-$start); $cursor=$start
+                        Redraw $buffer $cursor $PromptRow
+                    }
+                    $altHandled=$true
+                }
+                ([ConsoleKey]::H){
+                    if($cursor -gt 0){
+                        $oldBuffer=$buffer; $oldCursor=$cursor; $start=(& $WordStart $buffer $cursor)
+                        $killRing=$buffer.Substring($start,$cursor-$start)
+                        & $SaveUndo $oldBuffer $oldCursor
+                        $buffer=$buffer.Remove($start,$cursor-$start); $cursor=$start
+                        Redraw $buffer $cursor $PromptRow
+                    }
+                    $altHandled=$true
+                }
+            }
+            if($altHandled){ continue }
+        }
+
+        if($ctrl){
+            switch($key.Key){
+                ([ConsoleKey]::A){$cursor=0;Redraw $buffer $cursor $PromptRow;continue}
+                ([ConsoleKey]::E){$cursor=$buffer.Length;Redraw $buffer $cursor $PromptRow;continue}
+                ([ConsoleKey]::B){if($cursor -gt 0){--$cursor};Redraw $buffer $cursor $PromptRow;continue}
+                ([ConsoleKey]::F){if($cursor -lt $buffer.Length){++$cursor};Redraw $buffer $cursor $PromptRow;continue}
+                ([ConsoleKey]::U){
+                    if($cursor -gt 0){
+                        $oldBuffer=$buffer; $oldCursor=$cursor;
+                        $killRing=$buffer.Substring(0,$cursor)
+                        & $SaveUndo $oldBuffer $oldCursor
+                        $buffer=$buffer.Substring($cursor); $cursor=0
+                    }
+                    Redraw $buffer $cursor $PromptRow; continue
+                }
+                ([ConsoleKey]::W){
+                    if($cursor -gt 0){
+                        $oldBuffer=$buffer; $oldCursor=$cursor; $start=(& $WordStart $buffer $cursor)
+                        $killRing=$buffer.Substring($start,$cursor-$start)
+                        & $SaveUndo $oldBuffer $oldCursor
+                        $buffer=$buffer.Remove($start,$cursor-$start); $cursor=$start
+                    }
+                    Redraw $buffer $cursor $PromptRow; continue
+                }
+                ([ConsoleKey]::Y){
+                    if(-not [string]::IsNullOrEmpty($killRing)){
+                        $oldBuffer=$buffer; $oldCursor=$cursor; & $SaveUndo $oldBuffer $oldCursor
+                        $buffer=$buffer.Insert($cursor,$killRing); $cursor += $killRing.Length
+                    }
+                    Redraw $buffer $cursor $PromptRow; continue
+                }
+                ([ConsoleKey]::C){
+                    if($buffer.Length -gt 0){$oldBuffer=$buffer;$oldCursor=$cursor;& $SaveUndo $oldBuffer $oldCursor}
+                    $buffer='';$cursor=0;$draft='';$historyPos=$script:History.Count;$historySearch=$false;$historyPrefix='';$historySearchPos=$script:History.Count;Redraw $buffer $cursor $PromptRow;continue
+                }
+                ([ConsoleKey]::D){
+                    if($cursor -lt $buffer.Length){$oldBuffer=$buffer;$oldCursor=$cursor;& $SaveUndo $oldBuffer $oldCursor;$buffer=$buffer.Remove($cursor,1)}
+                    Redraw $buffer $cursor $PromptRow;continue
+                }
+                ([ConsoleKey]::H){
+                    if($cursor -gt 0){$oldBuffer=$buffer;$oldCursor=$cursor;& $SaveUndo $oldBuffer $oldCursor;$buffer=$buffer.Remove($cursor-1,1);--$cursor}
+                    Redraw $buffer $cursor $PromptRow;continue
+                }
+                ([ConsoleKey]::L){
+                    Clear-Menu
+                    [void](Refresh-TuiWindow)
+                    Redraw $buffer $cursor $PromptRow
+                    continue
+                }
+            }
+        }
+
+        if($key.Key -eq [ConsoleKey]::LeftArrow){if($cursor -gt 0){--$cursor};Redraw $buffer $cursor $PromptRow;continue}
+        if($key.Key -eq [ConsoleKey]::RightArrow){if($cursor -lt $buffer.Length){++$cursor};Redraw $buffer $cursor $PromptRow;continue}
+        if($key.Key -eq [ConsoleKey]::Home){$cursor=0;Redraw $buffer $cursor $PromptRow;continue}
+        if($key.Key -eq [ConsoleKey]::End){$cursor=$buffer.Length;Redraw $buffer $cursor $PromptRow;continue}
+        if($key.Key -eq [ConsoleKey]::Backspace){
+            if($cursor -gt 0){$oldBuffer=$buffer;$oldCursor=$cursor;& $SaveUndo $oldBuffer $oldCursor;$buffer=$buffer.Remove($cursor-1,1);--$cursor}
+            $historyPos=$script:History.Count;$draft=$buffer
+            Redraw $buffer $cursor $PromptRow;continue
+        }
+        if($key.Key -eq [ConsoleKey]::Delete){
+            if($cursor -lt $buffer.Length){$oldBuffer=$buffer;$oldCursor=$cursor;& $SaveUndo $oldBuffer $oldCursor;$buffer=$buffer.Remove($cursor,1)}
+            $historyPos=$script:History.Count;$draft=$buffer
+            Redraw $buffer $cursor $PromptRow;continue
+        }
+        if($key.Key -eq [ConsoleKey]::Enter){
+            $enterRow=[Console]::CursorTop
+            $script:ResponseAnchorRow=$enterRow+1
+            Clear-Menu
+            [void](Cursor 0 $script:ResponseAnchorRow)
+            return $buffer
+        }
+
+        if(-not [Char]::IsControl($key.KeyChar)){
+            $oldBuffer=$buffer; $oldCursor=$cursor; & $SaveUndo $oldBuffer $oldCursor
+            $historyPos=$script:History.Count
+            $draft=''
+            if($cursor -eq $buffer.Length){$buffer+=$key.KeyChar}else{$buffer=$buffer.Insert($cursor,[string]$key.KeyChar)}
+            ++$cursor
+            if(Available){
+                while(Available){
+                    $p=Read-Key
+                    if($p.Key -eq [ConsoleKey]::Enter){$buffer=$buffer.Insert($cursor,"`n");++$cursor;continue}
+                    if($p.Key -eq [ConsoleKey]::Tab){$buffer=$buffer.Insert($cursor,"`t");++$cursor;continue}
+                    if(-not [Char]::IsControl($p.KeyChar)){$buffer=$buffer.Insert($cursor,[string]$p.KeyChar);++$cursor}
+                }
+            }
+            Redraw $buffer $cursor $PromptRow
+        }
+    }
+}
+
+function Get-MiraExecuteShell {
+    $shell='powershell'
+    try{
+        $p=Get-WmiObject Win32_Process -Filter ('ProcessId='+$PID) -ErrorAction Stop
+        $ppid=[int]$p.ParentProcessId
+        $parent=Get-Process -Id $ppid -ErrorAction Stop
+        if($parent.ProcessName -ieq 'cmd'){$shell='cmd'}
+    }catch{}
+    if($env:MIRA_SHELL -match '^(cmd|powershell)$'){
+        $shell=$env:MIRA_SHELL.ToLowerInvariant()
+    }
+    return $shell
+}
+
+function Get-MiraExecuteOs {
+    try{
+        $v=[Environment]::OSVersion.Version
+        $name='Windows'
+        if($v.Major -eq 6 -and $v.Minor -eq 1){$name='Windows 7'}
+        elseif($v.Major -eq 6 -and $v.Minor -eq 2){$name='Windows 8'}
+        elseif($v.Major -eq 6 -and $v.Minor -eq 3){$name='Windows 8.1'}
+        elseif($v.Major -ge 10){$name='Windows 10/11'}
+        return ($name+' '+$v.ToString())
+    }catch{return 'Windows'}
+}
+
+function Get-MiraExecuteCommand([string]$text) {
+    $raw=[string]$script:LastText
+    if([string]::IsNullOrWhiteSpace($raw)){throw 'LLM returned an empty command.'}
+
+    $m=[regex]::Match($raw,'(?s)\x60{3}(?:[A-Za-z0-9_+-]+)?\s*\r?\n?(.*?)\x60{3}')
+    if($m.Success){$raw=$m.Groups[1].Value}
+
+    $lines=@($raw -split '\r?\n' | ForEach-Object {$_.TrimEnd()})
+    while($lines.Count -gt 0 -and [string]::IsNullOrWhiteSpace($lines[0])){
+        $lines=@($lines | Select-Object -Skip 1)
+    }
+    while($lines.Count -gt 0 -and [string]::IsNullOrWhiteSpace($lines[-1])){
+        $lines=@($lines | Select-Object -SkipLast 1)
+    }
+    if($lines.Count -eq 0){throw 'LLM returned an empty command.'}
+
+    if($lines.Count -gt 1){$raw=($lines -join [Environment]::NewLine)}else{$raw=$lines[0].Trim()}
+    if($raw -match '(?i)^(here|sure|command|run this|you can|use this)\b'){
+        throw 'LLM did not return a bare command.'
+    }
+    return $raw
+}
+
+function Invoke-MiraExecute([string]$text) {
+    $shell=Get-MiraExecuteShell
+    $os=Get-MiraExecuteOs
+    $shellName=if($shell -eq 'cmd'){'cmd.exe'}else{'Windows PowerShell 5.1'}
+
+    $prompt=@"
+You are MIRA's shell-command generator.
+The user wants to accomplish this task:
+$text
+
+Execution environment:
+OS: $os
+Shell: $shellName
+
+Return EXACTLY ONE executable command for this environment.
+Rules:
+- Output the command only.
+- No Markdown fences.
+- No explanation.
+- Do not provide commands for another OS or shell.
+- Use syntax native to $shellName.
+- If the task needs multiple operations, combine them into one executable command using the shell's native command separator.
+"@
+
+    W ('[execute] '+$shellName+' / '+$os) DarkGray
+    [void](Invoke-Provider $prompt)
+
+    try{
+        $command=Get-MiraExecuteCommand $script:LastText
+    }catch{
+        W ('[execute error] '+$_.Exception.Message) Red
+        return $false
+    }
+
+    W ''
+    W '[command]' Cyan
+    W $command Gray
+    W ''
+
+    $answer=Read-Host 'Execute this command? [Y/N]'
+    if($answer -notmatch '^(?i)y(es)?$'){
+        W '[execute cancelled]' Yellow
+        return $false
+    }
+
+    W '[executing]' DarkGray
+    try{
+        if($shell -eq 'cmd'){
+            $output=& $env:ComSpec /d /c $command 2>&1 | Out-String -Width 4096
+            $exitCode=$LASTEXITCODE
+        }else{
+            $output=Invoke-Expression $command 2>&1 | Out-String -Width 4096
+            $exitCode=if($?){0}else{1}
+        }
+
+        if(-not [string]::IsNullOrWhiteSpace($output)){
+            W $output.TrimEnd() Gray
+        }
+        W ('[exit code] '+$exitCode) $(if($exitCode -eq 0){'Green'}else{'Red'})
+        return ($exitCode -eq 0)
+    }catch{
+        W ('[execute error] '+$_.Exception.Message) Red
+        return $false
+    }
+}
+
+$cliArgs=@($cliArgs)
+$executeMode=$false
+$executeParts=New-Object System.Collections.Generic.List[string]
+
+if($cliArgs.Count -gt 0){
+    foreach($arg in $cliArgs){
+        if($arg -eq '--mira-console'){continue}
+        if($arg -eq '-d' -or $arg -eq '--dry-run'){
+            $script:DryRunMode=$true
+            continue
+        }
+        if($arg -eq '-e' -or $arg -eq '--execute'){
+            $executeMode=$true
+            continue
+        }
+        [void]$executeParts.Add([string]$arg)
+    }
+
+    if($executeMode){
+        if($executeParts.Count -eq 0){
+            Write-Host '[cli] -e requires a task description.' -ForegroundColor Yellow
+            exit 2
+        }
+        Load-Providers
+        $task=($executeParts.ToArray() -join ' ')
+        [void](Invoke-MiraExecute $task)
+        exit 0
+    }
+
+    foreach($arg in $executeParts){
+        Write-Host ('[cli] argument not implemented: '+$arg) -ForegroundColor Red
+        Write-Host ''
+        Show-CliArgumentStatus
+        exit 2
+    }
+}
+
+Clear-Host
+Load-Providers
+Load-TuiHistory
+W 'MIRA-TUI / SLIM PROVIDERS' Cyan
+W ('Own readline • no PSReadLine • Tab • history • multiline • attachments • model: ' + $script:CurrentProviderName + ':' + $script:CurrentModel) DarkGray
+W ('Session: off (one-shot requests) • .enable-session enables RAM context • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
+W ('History persistence: ' + $(if($script:PersistHistory){$script:HistoryFile}else{'OFF (RAM only)'}) + ' • loaded last ' + $script:HistoryLoadLimit + ' entries • .history persist on/off') DarkGray
+W ('OpenAI-compatible stream: ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning: ' + $(if($script:ShowReasoning){'on'}else{'off'})) DarkGray
+W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
+W ('Used models: ' + $script:UsedModelsCacheFile + ' • learned from successful text replies/probes') DarkGray
+W ''
+
+$script:MiraConsoleInputConfigured=$false
+try{
+    try{
+        if($Host.Name -ne 'Windows PowerShell ISE Host'){
+            [Console]::TreatControlCAsInput=$true
+            $script:MiraConsoleInputConfigured=$true
+        }
+    }catch{}
+
+    while($script:Running){
+        Reset-TuiHistorySearch
+        Clear-Menu
+        $line=Read-Line (Row)
+        if([string]::IsNullOrEmpty($line)){continue}
+        Add-TuiHistory $line
+        Save-TuiHistory
+        try{
+            Handle $line
+        }catch{
+            try{W ('[command error] '+$_.Exception.Message) Red}catch{}
+        }finally{
+            $script:ResponseAnchorRow=-1
+        }
+    }
+}finally{
+    Save-TuiHistory
+    if($script:MiraConsoleInputConfigured){
+        try{[Console]::TreatControlCAsInput=$false}catch{}
+    }
+}
+)
     if(-not $m.Success){return $Fallback}
     $r=[int]$m.Groups[1].Value;$g=[int]$m.Groups[2].Value;$b=[int]$m.Groups[3].Value
-    $palette=@{
-        Black=@(0,0,0);DarkBlue=@(0,0,128);DarkGreen=@(0,128,0);DarkCyan=@(0,128,128)
-        DarkRed=@(128,0,0);DarkMagenta=@(128,0,128);DarkYellow=@(128,128,0);Gray=@(192,192,192)
-        DarkGray=@(128,128,128);Blue=@(0,0,255);Green=@(0,255,0);Cyan=@(0,255,255)
-        Red=@(255,0,0);Magenta=@(255,0,255);Yellow=@(255,255,0);White=@(255,255,255)
+
+    if($null -eq $script:MiraConsolePalette){
+        $script:MiraConsolePalette=@{
+            Black=@(0,0,0);DarkBlue=@(0,0,128);DarkGreen=@(0,128,0);DarkCyan=@(0,128,128)
+            DarkRed=@(128,0,0);DarkMagenta=@(128,0,128);DarkYellow=@(128,128,0);Gray=@(192,192,192)
+            DarkGray=@(128,128,128);Blue=@(0,0,255);Green=@(0,255,0);Cyan=@(0,255,255)
+            Red=@(255,0,0);Magenta=@(255,0,255);Yellow=@(255,255,0);White=@(255,255,255)
+        }
     }
     $best=$Fallback;$distance=[double]::PositiveInfinity
-    foreach($name in $palette.Keys){
-        $p=$palette[$name];$dr=$r-$p[0];$dg=$g-$p[1];$db=$b-$p[2];$d=($dr*$dr)+($dg*$dg)+($db*$db)
+    foreach($name in $script:MiraConsolePalette.Keys){
+        $p=$script:MiraConsolePalette[$name];$dr=$r-$p[0];$dg=$g-$p[1];$db=$b-$p[2];$d=($dr*$dr)+($dg*$dg)+($db*$db)
         if($d -lt $distance){$distance=$d;$best=[ConsoleColor]$name}
     }
+    $script:MiraConsoleColorCache[$cacheKey]=$best
     return $best
 }
 
