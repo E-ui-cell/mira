@@ -2077,13 +2077,18 @@ $script:MarkupFrameActive = $false
 $script:MarkupFrameWidth = 0
 $script:MarkupFrameUsed = 0
 
-function Begin-MarkupLine([ConsoleColor]$Color=[ConsoleColor]::Gray,[object]$Background=$null){
+function Begin-MarkupLine([object]$Color=$null,[object]$Background=$null){
     $script:MarkupFrameUsed=0
     if($script:MarkupFrameActive){
         $pad=[string]$script:MarkupTheme.MessageLeftPadding
         if($pad.Length -gt 0){
-            if($null -eq $Background){Write-Host $pad -NoNewline -ForegroundColor $Color}
-            else{Write-Host $pad -NoNewline -ForegroundColor $Color -BackgroundColor ([ConsoleColor]$Background)}
+            if($null -eq $Color){
+                Write-Host $pad -NoNewline
+            }elseif($null -eq $Background){
+                Write-Host $pad -NoNewline -ForegroundColor ([ConsoleColor]$Color)
+            }else{
+                Write-Host $pad -NoNewline -ForegroundColor ([ConsoleColor]$Color) -BackgroundColor ([ConsoleColor]$Background)
+            }
             $script:MarkupFrameUsed=Get-MiraCellWidth $pad
         }
     }
@@ -2707,13 +2712,18 @@ function Pad-MiraCells([string]$Text,[int]$TargetCells){
 
 
 
-function Add-MarkupSegment([string]$Text,[ConsoleColor]$Color,[object]$Background=$null){
+function Add-MarkupSegment([string]$Text,[object]$Color=$null,[object]$Background=$null){
     if($null -eq $Text -or $Text.Length -eq 0){return}
     while($Text.Length -gt 0){
         $bg=$null;if($null -ne $Background){$bg=[ConsoleColor]$Background}
         if(-not $script:MarkupFrameActive){
-            if($null -eq $bg){Write-Host $Text -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color)}
-            else{Write-Host $Text -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color) -BackgroundColor $bg}
+            if($null -eq $Color){
+                Write-Host $Text -NoNewline
+            }elseif($null -eq $bg){
+                Write-Host $Text -NoNewline -ForegroundColor (Resolve-UiRenderColor ([ConsoleColor]$Color))
+            }else{
+                Write-Host $Text -NoNewline -ForegroundColor (Resolve-UiRenderColor ([ConsoleColor]$Color)) -BackgroundColor $bg
+            }
             return
         }
 
@@ -2731,8 +2741,13 @@ function Add-MarkupSegment([string]$Text,[ConsoleColor]$Color,[object]$Backgroun
             $takeChars=[Math]::Min($Text.Length,[Math]::Max(0,$room))
             if($takeChars -le 0){break}
             $part=$Text.Substring(0,$takeChars)
-            if($null -eq $bg){Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color)}
-            else{Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color) -BackgroundColor $bg}
+            if($null -eq $Color){
+                Write-Host $part -NoNewline
+            }elseif($null -eq $bg){
+                Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor ([ConsoleColor]$Color))
+            }else{
+                Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor ([ConsoleColor]$Color)) -BackgroundColor $bg
+            }
             $script:MarkupFrameUsed += $takeChars
             $Text=$Text.Substring($takeChars)
             if($Text.Length -gt 0){Write-Host '';Begin-MarkupLine $Color $bg}
@@ -2742,8 +2757,13 @@ function Add-MarkupSegment([string]$Text,[ConsoleColor]$Color,[object]$Backgroun
         $takeChars=Get-MiraCellPrefixLength $Text $room
         if($takeChars -le 0){break}
         $part=$Text.Substring(0,$takeChars)
-        if($null -eq $bg){Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color)}
-        else{Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor $Color) -BackgroundColor $bg}
+        if($null -eq $Color){
+            Write-Host $part -NoNewline
+        }elseif($null -eq $bg){
+            Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor ([ConsoleColor]$Color))
+        }else{
+            Write-Host $part -NoNewline -ForegroundColor (Resolve-UiRenderColor ([ConsoleColor]$Color)) -BackgroundColor $bg
+        }
         $script:MarkupFrameUsed += Get-MiraCellWidth $part
         $Text=$Text.Substring($takeChars)
         if($Text.Length -gt 0){Write-Host '';Begin-MarkupLine $Color $bg}
@@ -2762,7 +2782,7 @@ function End-MarkupLine([object]$FillColor=[ConsoleColor]::Gray,[object]$FillBac
     $script:MarkupFrameUsed=0
 }
 
-function Write-MarkupPlainLine([string]$Text,[ConsoleColor]$Color=[ConsoleColor]::Gray,[object]$Background=$null){
+function Write-MarkupPlainLine([string]$Text,[object]$Color=$null,[object]$Background=$null){
     Begin-MarkupLine $Color $Background
     Add-MarkupSegment ([string]$Text) $Color $Background
     End-MarkupLine $Color $Background
@@ -3065,12 +3085,8 @@ function Write-MathBlock([string[]]$lines,[bool]$unfinished=$false){
 
 function Write-CodeBlock([string[]]$lines,[string]$language='', [bool]$unfinished=$false){
     $lines=Normalize-CodeBlockLines $lines
-    $frame=[ConsoleColor]$script:MarkupTheme.CodeFenceFg
-    $frameBg=$script:MarkupTheme.CodeFenceBg
-    $langFg=[ConsoleColor]$script:MarkupTheme.CodeLanguageFg
-    $langBg=$script:MarkupTheme.CodeLanguageBg
-    $textFg=[ConsoleColor]$script:MarkupTheme.CodeTextFg
-    $textBg=$script:MarkupTheme.CodeTextBg
+    # Fenced code stays on the console's existing colors for Win7/ConHost speed.
+    # Theme color fields remain readable config, but are not used on the hot path.
 
     $langRaw=''+$language
     if(-not [bool]$script:MarkupTheme.CodeShowLanguage){$langRaw=''}
@@ -3094,10 +3110,10 @@ function Write-CodeBlock([string[]]$lines,[string]$language='', [bool]$unfinishe
     if($ruleWidth -gt 0){Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$ruleWidth) $frame $frameBg}
     End-MarkupLine $frame $frameBg
 
-    foreach($line in @($lines)){Write-MarkupPlainLine ([string]$line) $textFg $textBg}
+    foreach($line in @($lines)){Write-MarkupPlainLine ([string]$line)}
 
-    Begin-MarkupLine $frame $frameBg
-    Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$target) $frame $frameBg
+    Begin-MarkupLine
+    Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$target)
     End-MarkupLine $frame $frameBg
 }
 
