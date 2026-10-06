@@ -4317,7 +4317,7 @@ function Get-MiraExecuteCommand([string]$text) {
     while($lines.Count -gt 0 -and [string]::IsNullOrWhiteSpace($lines[-1])){$lines=@($lines | Select-Object -SkipLast 1)}
     if($lines.Count -eq 0){throw 'LLM returned an empty command.'}
     if($lines.Count -gt 1){$raw=($lines -join [Environment]::NewLine)}else{$raw=$lines[0].Trim()}
-    if($raw -match '^(?i)(here|sure|command|run this|you can|use this)\b'){throw 'LLM did not return a bare command.'}
+    if($raw -match '(?i)^(here|sure|command|run this|you can|use this)\b'){throw 'LLM did not return a bare command.'}
     return $raw
 }
 function Invoke-MiraExecute([string]$text) {
