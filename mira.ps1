@@ -82,7 +82,8 @@ $script:HistoryLoadLimit = if($env:MIRA_HISTORY_LOAD_LIMIT){[Math]::Max(1,[int]$
 $script:HistoryFile = if($env:MIRA_HISTORY_FILE){$env:MIRA_HISTORY_FILE}else{Join-Path (Join-Path $env:LOCALAPPDATA 'Mira-TUI') 'history.json'}
 if([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)){ $script:HistoryFile = Join-Path (Get-Location).Path 'mira-history.json' }
 # Model-list cache lives in TEMP5 when defined, otherwise standard TEMP.
-# Startup and .model completion never fetch; only .models + Tab refreshes caches.
+# Startup and .model completion never fetch. used.list is the completion pool when present;
+# without it, completion falls back to the local provider model lists.
 $script:ModelCacheRoot = if(-not [string]::IsNullOrWhiteSpace($env:TEMP5)){Join-Path $env:TEMP5 'Mira-TUI'}elseif(-not [string]::IsNullOrWhiteSpace($env:TEMP)){Join-Path $env:TEMP 'Mira-TUI'}else{Join-Path (Get-Location).Path '.mira-tmp'}
 $script:UsedModelsCacheFile = Join-Path $script:ModelCacheRoot 'used.list'
 $script:ModelMenuActive = $false
@@ -1433,26 +1434,35 @@ function Show-Providers(){
 }
 
 function ModelCandidates([string]$typed){
-    # .model completion is intentionally ONLY self-learning data.
-    # Never read provider catalogs, model caches, or perform network I/O here.
+    # Completion pool policy:
+    #   used.list exists -> use only that learned pool.
+    #   no used.list    -> use all local provider model lists.
+    # Never fetch the network from .model completion.
     $q=if($null -eq $typed){''}else{$typed.Trim()}
     $out=New-Object System.Collections.Generic.List[psobject]
-
-    foreach($full in @(Read-UsedModels)){
-        $name=[string]$full
-        if([string]::IsNullOrWhiteSpace($name)){continue}
-        if([string]::IsNullOrEmpty($q) -or $name.StartsWith($q,[StringComparison]::OrdinalIgnoreCase)){
-            [void]$out.Add([pscustomobject]@{
-                Name=$name
-                PSIsContainer=$false
-                Kind='used'
-            })
+    if(Test-Path -LiteralPath $script:UsedModelsCacheFile){
+        foreach($full in @(Read-UsedModels)){
+            $name=[string]$full
+            if([string]::IsNullOrWhiteSpace($name)){continue}
+            if([string]::IsNullOrEmpty($q) -or $name.StartsWith($q,[StringComparison]::OrdinalIgnoreCase)){
+                [void]$out.Add([pscustomobject]@{Name=$name;PSIsContainer=$false;Kind='used'})
+            }
+        }
+    }else{
+        foreach($provider in $script:Providers){
+            foreach($model in @(Get-CachedProviderModels $provider)){
+                $name=[string]$provider.name+':'+[string]$model
+                if([string]::IsNullOrWhiteSpace($name)){continue}
+                if([string]::IsNullOrEmpty($q) -or $name.StartsWith($q,[StringComparison]::OrdinalIgnoreCase)){
+                    $duplicate=$false
+                    foreach($existing in $out){if([string]$existing.Name -ieq $name){$duplicate=$true;break}}
+                    if(-not $duplicate){[void]$out.Add([pscustomobject]@{Name=$name;PSIsContainer=$false;Kind='provider'})}
+                }
+            }
         }
     }
-
     return @($out | Select-Object -First 32)
 }
-
 function Clear-ModelMenu(){
     if(-not $script:ModelMenuActive){return}
     Clear-Menu
@@ -1593,72 +1603,169 @@ function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary){
     return $payload
 }
 
+function Start-MiraRequestUi(){
+    $script:RequestUiActive=$true
+    $script:RequestUiLineOpen=$true
+    $script:RequestUiFrameIndex=0
+    $script:RequestUiStopwatch=[Diagnostics.Stopwatch]::StartNew()
+    $script:RequestUiRow=Row
+    $script:LastRequestElapsedMs=0
+    $script:LastRequestFrame='... '
+    Update-MiraRequestUi $true
+}
+
+function Update-MiraRequestUi([bool]$Force=$false){
+    if(-not $script:RequestUiActive -or -not $script:RequestUiLineOpen){return}
+    if(-not $Force -and $script:RequestUiStopwatch.ElapsedMilliseconds -lt 100){return}
+    $frames=@('.  ','.. ','...','   ')
+    $frame=$frames[$script:RequestUiFrameIndex % $frames.Length]
+    $elapsed=[int]$script:RequestUiStopwatch.ElapsedMilliseconds
+    $bullet=if($script:SessionActive){'  ●'}else{''}
+    $status=$frame+'  '+([math]::Round($elapsed/1000,1))+'s      '+$bullet
+    $width=[Math]::Max(1,(Width)-1)
+    if($status.Length -gt $width){$status=$status.Substring(0,$width)}else{$status=$status.PadRight($width)}
+    try{
+        [void](Cursor 0 $script:RequestUiRow)
+        Write-Host (([char]13)+$status) -NoNewline -ForegroundColor DarkGray
+    }catch{}
+    $script:RequestUiFrameIndex++
+    $script:LastRequestElapsedMs=$elapsed
+    $script:LastRequestFrame=$frame
+}
+
+function Suspend-MiraRequestUi(){
+    if(-not $script:RequestUiActive -or -not $script:RequestUiLineOpen){return}
+    Update-MiraRequestUi $true
+    try{Write-Host ''}catch{}
+    $script:RequestUiLineOpen=$false
+}
+
+function Stop-MiraRequestUi([int]$PromptTokens=0,[int]$CompletionTokens=0){
+    if(-not $script:RequestUiActive){return}
+    if($script:RequestUiStopwatch.IsRunning){$script:RequestUiStopwatch.Stop()}
+    $elapsed=[int]$script:RequestUiStopwatch.ElapsedMilliseconds
+    $frames=@('.  ','.. ','...','   ')
+    $frame=$frames[[Math]::Max(0,$script:RequestUiFrameIndex-1) % $frames.Length]
+    $script:LastRequestElapsedMs=$elapsed
+    $script:LastRequestFrame=$frame
+    $bullet=if($script:SessionActive){'  ●'}else{''}
+    $status=$frame+'  '+([math]::Round($elapsed/1000,1))+'s      ↑ '+$PromptTokens+'  ↓ '+$CompletionTokens+$bullet
+    $script:LastStatusText=$status
+    $script:LastStatusHasBullet=$script:SessionActive
+    if($script:RequestUiLineOpen){
+        $width=[Math]::Max(1,(Width)-1)
+        $draw=$status
+        if($draw.Length -gt $width){$draw=$draw.Substring(0,$width)}else{$draw=$draw.PadRight($width)}
+        try{
+            [void](Cursor 0 $script:RequestUiRow)
+            Write-Host (([char]13)+$draw) -NoNewline -ForegroundColor DarkGray
+            Write-Host ''
+        }catch{}
+    }
+    $script:RequestUiActive=$false
+    $script:RequestUiLineOpen=$false
+}
+
 function Send-OpenAICompatibleStream($provider,$model,$payload){
     $apiKey=Get-ProviderKey $provider
     if([string]::IsNullOrWhiteSpace($apiKey)){throw 'OpenAI-compatible provider API key is missing.'}
-
     $url=([string]$provider.api_base).TrimEnd('/')+'/chat/completions'
     $payload.stream=$true
     $json=$payload | ConvertTo-Json -Depth 40
     $bytes=[Text.Encoding]::UTF8.GetBytes($json)
 
     $request=[Net.HttpWebRequest]::Create($url)
-    $request.Method='POST'
-    $request.ContentType='application/json'
-    $request.Accept='text/event-stream'
-    $request.ContentLength=$bytes.Length
-    $request.Timeout=120000
-    $request.ReadWriteTimeout=600000
-    $request.KeepAlive=$false
+    $request.Method='POST';$request.ContentType='application/json';$request.Accept='text/event-stream'
+    $request.ContentLength=$bytes.Length;$request.Timeout=120000;$request.ReadWriteTimeout=600000;$request.KeepAlive=$false
     try{$request.ServicePoint.Expect100Continue=$false}catch{}
     $request.Headers['Authorization']='Bearer '+$apiKey
     $request.UserAgent='Mira-TUI/1.0.5'
     if($null -ne $provider.headers){foreach($prop in $provider.headers.PSObject.Properties){$request.Headers[[string]$prop.Name]=[string]$prop.Value}}
 
-    $reqStream=$null;$resp=$null;$reader=$null
+    $oldTreatControlCAsInput=$null;$reqStream=$null;$resp=$null;$reader=$null;$responseAsync=$null
+    $cancelled=$false;$startedOutput=$false
     try{
+        try{$oldTreatControlCAsInput=[Console]::TreatControlCAsInput;[Console]::TreatControlCAsInput=$true}catch{}
+        Start-MiraRequestUi
         $reqStream=$request.GetRequestStream();$reqStream.Write($bytes,0,$bytes.Length);$reqStream.Close();$reqStream=$null
-        try{$resp=$request.GetResponse()}catch [Net.WebException]{
-            $we=$_.Exception;$detail=$we.Message
-            if($null -ne $we.Response){$errReader=New-Object IO.StreamReader($we.Response.GetResponseStream());try{$errBody=$errReader.ReadToEnd()}finally{$errReader.Dispose()};if($errBody){$detail+="`n"+$errBody}}
+
+        $responseAsync=$request.BeginGetResponse($null,$null)
+        while(-not $responseAsync.IsCompleted){
+            try{
+                if([Console]::KeyAvailable){
+                    while([Console]::KeyAvailable){
+                        $key=[Console]::ReadKey($true)
+                        if($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)){
+                            $cancelled=$true;try{$request.Abort()}catch{};break
+                        }
+                    }
+                }
+            }catch{}
+            if($cancelled){break}
+            Update-MiraRequestUi
+            Start-Sleep -Milliseconds 100
+        }
+        if($cancelled){try{$request.Abort()}catch{};throw 'Request cancelled.'}
+
+        try{$resp=$request.EndGetResponse($responseAsync)}catch [Net.WebException]{
+            $we=$_.Exception
+            if($we.Status -eq [Net.WebExceptionStatus]::RequestCanceled){throw 'Request cancelled.'}
+            $detail=$we.Message
+            if($null -ne $we.Response){
+                $errReader=New-Object IO.StreamReader($we.Response.GetResponseStream())
+                try{$errBody=$errReader.ReadToEnd()}finally{$errReader.Dispose()}
+                if($errBody){$detail+=([Environment]::NewLine)+$errBody}
+            }
             throw $detail
         }
-        $responseStream=$resp.GetResponseStream()
-        $contentType=[string]$resp.ContentType
+
+        $responseStream=$resp.GetResponseStream();$contentType=[string]$resp.ContentType
         if($contentType -and $contentType -notlike 'text/event-stream*'){
             $reader=New-Object IO.StreamReader($responseStream,[Text.Encoding]::UTF8)
             $body=$reader.ReadToEnd()
             if([string]::IsNullOrWhiteSpace($body)){throw 'Streaming provider returned an empty response.'}
-            $full=$body|ConvertFrom-Json -ErrorAction Stop
-            $r=Show-Response $full 'openai-compatible'
-            return [pscustomobject]@{Text=[string]$r.Text;Reasoning=[string]$r.Reasoning;ReasoningDetails=@($r.ReasoningDetails);Display=[string]$r.Display;FinishReason=[string]$r.FinishReason;PromptTokens=0;CompletionTokens=0;ReasoningTokens=0}
+            $fullResponse=$body|ConvertFrom-Json -ErrorAction Stop
+            $r=Show-Response $fullResponse 'openai-compatible'
+            Stop-MiraRequestUi ([int]$r.PromptTokens) ([int]$r.CompletionTokens)
+            return [pscustomobject]@{Text=[string]$r.Text;Reasoning=[string]$r.Reasoning;ReasoningDetails=@($r.ReasoningDetails);Display=[string]$r.Display;FinishReason=[string]$r.FinishReason;PromptTokens=[int]$r.PromptTokens;CompletionTokens=[int]$r.CompletionTokens;ReasoningTokens=0}
         }
 
-        # Keep the foreground thread interruptible while SSE is idle.
         try{$responseStream.ReadTimeout=500}catch{}
         $reader=New-Object IO.StreamReader($responseStream,[Text.Encoding]::UTF8)
         $readWatch=[Diagnostics.Stopwatch]::StartNew()
-        $answer=New-Object Text.StringBuilder
-        $reasoning=New-Object Text.StringBuilder
+        $answer=New-Object Text.StringBuilder;$reasoning=New-Object Text.StringBuilder
         $reasoningDetails=New-Object System.Collections.Generic.List[object]
         $finish='';$tokensIn=0;$tokensOut=0;$reasoningTokens=0;$showThought=$false
 
         while($true){
-            try{$line=$reader.ReadLine()}
-            catch [IO.IOException]{
+            try{$line=$reader.ReadLine()}catch [IO.IOException]{
                 if($readWatch.ElapsedMilliseconds -ge 120000){throw 'Streaming response timed out while waiting for data.'}
+                Update-MiraRequestUi
+                try{
+                    if([Console]::KeyAvailable){
+                        while([Console]::KeyAvailable){
+                            $key=[Console]::ReadKey($true)
+                            if($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)){
+                                $cancelled=$true;try{$request.Abort()}catch{};break
+                            }
+                        }
+                    }
+                }catch{}
+                if($cancelled){throw 'Request cancelled.'}
                 continue
             }
             if($null -eq $line){break}
-            if([Console]::KeyAvailable){
-                while([Console]::KeyAvailable){
-                    $key=[Console]::ReadKey($true)
-                    if($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)){
-                        try{$request.Abort()}catch{}
-                        throw 'Request cancelled.'
+            try{
+                if([Console]::KeyAvailable){
+                    while([Console]::KeyAvailable){
+                        $key=[Console]::ReadKey($true)
+                        if($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)){
+                            $cancelled=$true;try{$request.Abort()}catch{};break
+                        }
                     }
                 }
-            }
+            }catch{}
+            if($cancelled){throw 'Request cancelled.'}
             if(-not $line.StartsWith('data:')){continue}
             $data=$line.Substring(5).Trim()
             if($data -eq '[DONE]'){break}
@@ -1671,29 +1778,52 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
                 if($null -ne $chunk.usage.completion_tokens){$tokensOut=[int]$chunk.usage.completion_tokens}
                 if($null -ne $chunk.usage.completion_tokens_details -and $null -ne $chunk.usage.completion_tokens_details.reasoning_tokens){$reasoningTokens=[int]$chunk.usage.completion_tokens_details.reasoning_tokens}
             }
-
             $choices=@($chunk.choices);if($choices.Count -eq 0){continue}
             $choice=$choices[0];$delta=$choice.delta;$finish=[string]$choice.finish_reason
             if($null -eq $delta){continue}
 
             if($null -ne $delta.reasoning -and -not [string]::IsNullOrEmpty([string]$delta.reasoning)){
-                $r=[string]$delta.reasoning;[void]$reasoning.Append($r)
-                if($script:ShowReasoning){if(-not $showThought){W '[THOUGHT]' DarkGray;$showThought=$true};[Console]::Write($r)}
+                $rText=[string]$delta.reasoning;[void]$reasoning.Append($rText)
+                if($script:ShowReasoning){
+                    if(-not $startedOutput){Suspend-MiraRequestUi;$startedOutput=$true}
+                    if(-not $showThought){W '[THOUGHT]' DarkGray;$showThought=$true}
+                    [Console]::Write($rText)
+                }
             }
             if($null -ne $delta.reasoning_details){foreach($detail in @($delta.reasoning_details)){[void]$reasoningDetails.Add($detail)}}
-
             if($null -ne $delta.content){
-                if($delta.content -is [string]){$pieces=@([string]$delta.content)}else{$pieces=@($delta.content|ForEach-Object{if($null -ne $_.text){[string]$_.text}})}
-                foreach($c in $pieces){if([string]::IsNullOrEmpty($c)){continue};if($showThought -and $answer.Length -eq 0){[Console]::Write("`r`n[ANSWER] ")};[void]$answer.Append($c);[Console]::Write($c)}
+                if($delta.content -is [string]){$pieces=@([string]$delta.content)}
+                else{$pieces=@($delta.content|ForEach-Object{if($null -ne $_.text){[string]$_.text}})}
+                foreach($c in $pieces){
+                    if([string]::IsNullOrEmpty($c)){continue}
+                    if(-not $startedOutput){Suspend-MiraRequestUi;$startedOutput=$true}
+                    if($showThought -and $answer.Length -eq 0){[Console]::Write(([Environment]::NewLine)+'[ANSWER] ')}
+                    [void]$answer.Append($c);[Console]::Write($c)
+                }
             }
         }
 
-        [Console]::Write("`r`n")
-        $tokenString="[Tokens: $tokensIn in, $tokensOut out]";if($reasoningTokens -gt 0){$tokenString+=" [Reasoning: $reasoningTokens]"};W $tokenString DarkCyan
+        $readWatch.Stop()
+        if($startedOutput){
+            Write-Host ''
+            if($script:RequestUiStopwatch.IsRunning){$script:RequestUiStopwatch.Stop()}
+            $script:LastRequestElapsedMs=[int]$script:RequestUiStopwatch.ElapsedMilliseconds
+            if([string]::IsNullOrWhiteSpace($script:LastRequestFrame)){$script:LastRequestFrame='... '}
+            $bullet=if($script:SessionActive){'  ●'}else{''}
+            $script:LastStatusText=$script:LastRequestFrame+'  '+([math]::Round($script:LastRequestElapsedMs/1000,1))+'s      ↑ '+$tokensIn+'  ↓ '+$tokensOut+$bullet
+            $script:LastStatusHasBullet=$script:SessionActive
+            W $script:LastStatusText DarkGray
+            $script:RequestUiActive=$false;$script:RequestUiLineOpen=$false
+        }else{Stop-MiraRequestUi $tokensIn $tokensOut}
         if([string]::IsNullOrWhiteSpace($finish)){$finish='stop'}
-        return [pscustomobject]@{Text=[string]$answer.ToString();Reasoning=[string]$reasoning.ToString();ReasoningDetails=$reasoningDetails.ToArray();Display=$tokenString;FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut;ReasoningTokens=$reasoningTokens}
+        return [pscustomobject]@{Text=[string]$answer.ToString();Reasoning=[string]$reasoning.ToString();ReasoningDetails=$reasoningDetails.ToArray();Display='[Tokens: '+$tokensIn+' in, '+$tokensOut+' out]';FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut;ReasoningTokens=$reasoningTokens}
+    }finally{
+        if($null -ne $reader){try{$reader.Dispose()}catch{}}
+        if($null -ne $resp){try{$resp.Dispose()}catch{}}
+        if($null -ne $reqStream){try{$reqStream.Dispose()}catch{}}
+        if($null -ne $oldTreatControlCAsInput){try{[Console]::TreatControlCAsInput=$oldTreatControlCAsInput}catch{}}
+        if($script:RequestUiActive -and $cancelled){try{Stop-MiraRequestUi 0 0}catch{}}
     }
-    finally{if($null -ne $reader){$reader.Dispose()};if($null -ne $resp){$resp.Dispose()};if($null -ne $reqStream){$reqStream.Dispose()}}
 }
 
 function Send-ProviderPayload($provider,$model,$payload){
@@ -1720,73 +1850,29 @@ function Send-ProviderPayload($provider,$model,$payload){
     $params=@{Uri=$url;Method='Post';ContentType='application/json';Body=$bytes;TimeoutSec=120;ErrorAction='Stop'}
     if($headers.Count -gt 0){$params.Headers=$headers}
 
-    # Keep the foreground thread responsive while the HTTP request is in flight.
-    # The same native-console approach used by the earlier Mira build gives us a
-    # lightweight waiting animation without PSReadLine or any external module.
-    $oldTreatControlCAsInput=$null
-    $runspace=$null
-    $powershell=$null
-    $asyncResult=$null
-    $cancelled=$false
-    try{
+    # Request UI owns the stopwatch/cursor lifecycle.
+    Start-MiraRequestUi
+    $asyncResult=$powershell.BeginInvoke()
+    while(-not $asyncResult.IsCompleted){
         try{
-            $oldTreatControlCAsInput=[Console]::TreatControlCAsInput
-            [Console]::TreatControlCAsInput=$true
-        }catch{}
-
-        $runspace=[Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
-        $runspace.Open()
-        $powershell=[Management.Automation.PowerShell]::Create()
-        $powershell.Runspace=$runspace
-        [void]$powershell.AddScript({
-            param($p)
-            Invoke-RestMethod @p
-        }).AddArgument($params)
-
-        $asyncResult=$powershell.BeginInvoke()
-        $frames=@('.  ','.. ','...','   ')
-        $i=0
-        $sw=[Diagnostics.Stopwatch]::StartNew()
-
-        while(-not $asyncResult.IsCompleted){
-            try{
-                if([Console]::KeyAvailable){
+            if([Console]::KeyAvailable){
+                while([Console]::KeyAvailable){
                     $key=[Console]::ReadKey($true)
                     if($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)){
-                        $cancelled=$true
-                        try{$powershell.Stop()}catch{}
-                        break
+                        $cancelled=$true;try{$powershell.Stop()}catch{};break
                     }
                 }
-            }catch{}
-
-            $frame=$frames[$i % $frames.Length]
-            $elapsed=[int]$sw.ElapsedMilliseconds
-            $bullet=if($script:SessionActive){'  ●'}else{''}
-            $status="$frame  $([math]::Round($elapsed/1000,1))s      $bullet"
-            # Repaint in place without blanking the entire row first.
-            $statusWidth=[Math]::Max(1,(Width)-1)
-            $drawStatus=$status.PadRight($statusWidth)
-            if($drawStatus.Length -gt $statusWidth){$drawStatus=$drawStatus.Substring(0,$statusWidth)}
-            Write-Host ("`r" + $drawStatus) -NoNewline -ForegroundColor DarkGray
-            Start-Sleep -Milliseconds 150
-            ++$i
-        }
-        $sw.Stop()
-        $script:LastRequestElapsedMs=[int]$sw.ElapsedMilliseconds
-        $script:LastRequestFrame=$frames[[Math]::Max(0,$i-1) % $frames.Length]
-
-
-        if($cancelled){
-            try{$powershell.EndInvoke($asyncResult)|Out-Null}catch{}
-            Write-Host ("`r" + (" " * 24) + "`r[Request cancelled]") -ForegroundColor Yellow
-            throw 'Request cancelled.'
-        }
-
-        # Keep the final timer line alive until the response is available, then
-        # finalize it with token counts on the same line.
-        $elapsed=[int]$sw.ElapsedMilliseconds
-        $frame=$frames[$i % $frames.Length]
+            }
+        }catch{}
+        if($cancelled){break}
+        Update-MiraRequestUi
+        Start-Sleep -Milliseconds 100
+    }
+    if($cancelled){
+        try{$powershell.EndInvoke($asyncResult)|Out-Null}catch{}
+        Stop-MiraRequestUi 0 0
+        throw 'Request cancelled.'
+    }
 
         $response=@($powershell.EndInvoke($asyncResult))
         $runspaceErrors=@($powershell.Streams.Error)
@@ -1828,15 +1914,11 @@ function Send-ProviderPayload($provider,$model,$payload){
             }
         }catch{}
 
-        $bullet=if($script:SessionActive){'  ●'}else{''}
-        $status="$frame  $([math]::Round($elapsed/1000,1))s      ↑ $tokensIn  ↓ $tokensOut$bullet"
-        $script:LastStatusRow=Row
-        $script:LastStatusText=$status
-        $script:LastStatusHasBullet=$script:SessionActive
-        Write-Host ("`r" + (" " * [Math]::Max(1,(Width)-1)) + "`r" + $status) -NoNewline -ForegroundColor DarkGray
+        Stop-MiraRequestUi $tokensIn $tokensOut
         return $final
     }finally{
         if($null -ne $oldTreatControlCAsInput){try{[Console]::TreatControlCAsInput=$oldTreatControlCAsInput}catch{}}
+        if($script:RequestUiActive){try{Stop-MiraRequestUi 0 0}catch{}}
         if($null -ne $powershell){try{$powershell.Dispose()}catch{}}
         if($null -ne $runspace){try{$runspace.Dispose()}catch{}}
     }
@@ -3422,6 +3504,7 @@ function Invoke-Provider($text,$parts=$null){
             try{
                 $result=Send-OpenAICompatibleStream $provider $script:CurrentModel $payload
             }catch{
+                if($_.Exception.Message -eq 'Request cancelled.'){throw}
                 W ('[stream error] '+$_.Exception.Message) Yellow
                 W '[stream fallback] retrying non-stream request...' DarkGray
                 $payload.stream=$false
@@ -4268,7 +4351,7 @@ W ('Session: off (one-shot requests) • .enable-session enables RAM context •
 W ('History persistence: ' + $(if($script:PersistHistory){$script:HistoryFile}else{'OFF (RAM only)'}) + ' • loaded last ' + $script:HistoryLoadLimit + ' entries • .history persist on/off') DarkGray
 W ('OpenAI-compatible stream: ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning: ' + $(if($script:ShowReasoning){'on'}else{'off'})) DarkGray
 W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
-W ('Used models: ' + $script:UsedModelsCacheFile + ' • learned from successful text replies/probes') DarkGray
+W ('Used models: ' + $script:UsedModelsCacheFile + ' • completion pool when present') DarkGray
 W ''
 $script:MiraConsoleInputConfigured=$false
 try{
