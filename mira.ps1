@@ -3103,18 +3103,18 @@ function Write-CodeBlock([string[]]$lines,[string]$language='', [bool]$unfinishe
     if((Get-MiraCellWidth $prefix) -ge $target){$prefix=$prefix.Substring(0,[Math]::Min($prefix.Length,(Get-MiraCellPrefixLength $prefix ([Math]::Max(0,$target-1)))))}
     $ruleWidth=[Math]::Max(0,$target-(Get-MiraCellWidth $prefix))
 
-    Begin-MarkupLine $frame $frameBg
-    Add-MarkupSegment ([string]$script:MarkupTheme.CodeFencePrefix) $frame $frameBg
-    if(-not [string]::IsNullOrWhiteSpace($lang)){Add-MarkupSegment $lang $langFg $langBg}
-    Add-MarkupSegment ([string]$script:MarkupTheme.CodeFenceGap) $frame $frameBg
-    if($ruleWidth -gt 0){Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$ruleWidth) $frame $frameBg}
-    End-MarkupLine $frame $frameBg
+    Begin-MarkupLine
+    Add-MarkupSegment ([string]$script:MarkupTheme.CodeFencePrefix)
+    if(-not [string]::IsNullOrWhiteSpace($lang)){Add-MarkupSegment $lang}
+    Add-MarkupSegment ([string]$script:MarkupTheme.CodeFenceGap)
+    if($ruleWidth -gt 0){Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$ruleWidth)}
+    End-MarkupLine
 
     foreach($line in @($lines)){Write-MarkupPlainLine ([string]$line)}
 
     Begin-MarkupLine
     Add-MarkupSegment (([string]$script:MarkupTheme.CodeFenceChar)*$target)
-    End-MarkupLine $frame $frameBg
+    End-MarkupLine
 }
 
 function Write-MarkupTable([string[]]$lines){
