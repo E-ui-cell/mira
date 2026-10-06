@@ -1608,6 +1608,7 @@ function Start-MiraRequestUi(){
     $script:RequestUiLineOpen=$true
     $script:RequestUiFrameIndex=0
     $script:RequestUiStopwatch=[Diagnostics.Stopwatch]::StartNew()
+    try{[Console]::CursorVisible=$false}catch{}
     $script:RequestUiRow=Row
     $script:LastRequestElapsedMs=0
     $script:LastRequestFrame='... '
@@ -1664,6 +1665,7 @@ function Stop-MiraRequestUi([int]$PromptTokens=0,[int]$CompletionTokens=0){
     }
     $script:RequestUiActive=$false
     $script:RequestUiLineOpen=$false
+    try{[Console]::CursorVisible=$true}catch{}
 }
 
 function Send-OpenAICompatibleStream($provider,$model,$payload){
