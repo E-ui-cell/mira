@@ -2360,7 +2360,23 @@ function Convert-MiraRgbToConsoleColor([string]$Rgb,[ConsoleColor]$Fallback=[Con
     $cacheKey=$Rgb+'|'+[string]$Fallback
     if($script:MiraConsoleColorCache.ContainsKey($cacheKey)){return [ConsoleColor]$script:MiraConsoleColorCache[$cacheKey]}
 
-    $m=[regex]::Match($Rgb,'^(\d{1,3});(\d{1,3});(\d{1,3})
+    $m=[regex]::Match($Rgb,'^(\d{1,3});(\d{1,3});(\d{1,3})$')
+    if(-not $m.Success){return $Fallback}
+    $r=[int]$m.Groups[1].Value;$g=[int]$m.Groups[2].Value;$b=[int]$m.Groups[3].Value
+    $palette=@{
+        Black=@(0,0,0);DarkBlue=@(0,0,128);DarkGreen=@(0,128,0);DarkCyan=@(0,128,128)
+        DarkRed=@(128,0,0);DarkMagenta=@(128,0,128);DarkYellow=@(128,128,0);Gray=@(192,192,192)
+        DarkGray=@(128,128,128);Blue=@(0,0,255);Green=@(0,255,0);Cyan=@(0,255,255)
+        Red=@(255,0,0);Magenta=@(255,0,255);Yellow=@(255,255,0);White=@(255,255,255)
+    }
+    $best=$Fallback;$distance=[double]::PositiveInfinity
+    foreach($name in $palette.Keys){
+        $p=$palette[$name];$dr=$r-$p[0];$dg=$g-$p[1];$db=$b-$p[2];$d=($dr*$dr)+($dg*$dg)+($db*$db)
+        if($d -lt $distance){$distance=$d;$best=[ConsoleColor]$name}
+    }
+    $script:MiraConsoleColorCache[$cacheKey]=[ConsoleColor]$best
+    return [ConsoleColor]$best
+}
 
 function Write-MiraCanvas($Canvas,[int]$X=0,[int]$Y=0){
     if($null -eq $Canvas){return}
