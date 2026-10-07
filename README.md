@@ -2,7 +2,7 @@
 
 **An aichat alternative for Windows PowerShell 5.1**, with a small set of compatible command concepts and a native console TUI.
 
-Minimal LLM TUI for **Windows PowerShell 5.1**.
+Wrapper for LLMs  
 
 ## TL;DR
 
