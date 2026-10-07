@@ -1,12 +1,8 @@
 # MIRA
 
-**An aichat alternative for Windows 7 / Windows PowerShell 5.1**, with a small set of compatible command concepts and a native console TUI.
+**An aichat alternative for Windows PowerShell 5.1**, with a small set of compatible command concepts and a native console TUI.
 
 Minimal LLM TUI for **Windows PowerShell 5.1**.
-
-AI Co-pilot: **GPT-5.6 Luna**, Git copilot.
-
-MIRA takes its name from Mira (Omicron Ceti), the “wonderful” variable star in Cetus.
 
 ## TL;DR
 
@@ -514,6 +510,12 @@ MIRA does not currently implement the full aichat CLI surface or a persistent se
 ## Release
 
 Releases are created automatically from version tags such as `v0.1.0-beta.3`.
+
+## More info
+
+AI Co-pilot: **GPT-5.6 Luna**, Git copilot.
+
+MIRA takes its name from Mira (Omicron Ceti), the “wonderful” variable star in Cetus.
 
 
 ## License
