@@ -1,5 +1,5 @@
 # MIRA tool module: read-only Windows host summary.
-Register-MiraTool -Name 'get_system_info' -Description 'Returns a compact read-only summary of Windows, PowerShell, CPU, memory and fixed drives.' -Parameters @{type='object';properties=@{}} -RequiresApproval $false -Handler {
+Register-MiraTool -Name 'get_system_info' -Description 'Returns a compact read-only summary of Windows, PowerShell, CPU, memory and fixed drives.' -Parameters @{type='object';properties=@{}} -RequiresApproval $true -Handler {
     $os=Get-WmiObject Win32_OperatingSystem -ErrorAction SilentlyContinue
     $cpu=Get-WmiObject Win32_Processor -ErrorAction SilentlyContinue|Select-Object -First 1
     $drives=@(Get-WmiObject Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction SilentlyContinue|ForEach-Object{
