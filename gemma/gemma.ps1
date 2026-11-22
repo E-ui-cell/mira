@@ -87,6 +87,8 @@ $GeminiSafetySettings = @(
         }
     )
 $LastGeminiRequestJson = $null
+$script:GoogleSearchGrounding = $false
+$script:AntigravityProject = $null
 
 function Get-GeminiModels {
     if (Test-Path -LiteralPath (Get-AntigravityTokenPath)) { return Get-AntigravityModels }
@@ -390,6 +392,10 @@ function Invoke-GemmaSearchCommand {
     param([string]$Argument = '')
     $value = $Argument.Trim().ToLowerInvariant()
     if ($value -eq 'on') {
+        if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
+            Write-Host '[Native Google Search grounding requires Google Antigravity OAuth. Run .auth login first.]' -ForegroundColor Yellow
+            return
+        }
         if ($script:MODEL -ine 'gemini-3.1-flash-lite') {
             Write-Host '[Native Google Search is currently verified only for Antigravity model gemini-3.1-flash-lite. Use .model gemini-3.1-flash-lite first.]' -ForegroundColor Yellow
             return
@@ -1410,10 +1416,6 @@ while ($true) {
             Write-Host "`r" -NoNewline
 
             $response = $powershell.EndInvoke($asyncResult)
-            if ($usingAntigravityOAuth) {
-                if ($null -eq $response.response) { throw "Antigravity returned an invalid response envelope." }
-                $response = $response.response
-            }
             $hasRunspaceError = $powershell.Streams.Error.Count -gt 0
             $runspaceErrors = @($powershell.Streams.Error)
 
@@ -1448,6 +1450,11 @@ while ($true) {
                 }
 
                 throw "Gemini API request failed with HTTP $status."
+            }
+
+            if ($usingAntigravityOAuth) {
+                if ($null -eq $response.response) { throw "Antigravity returned an invalid response envelope." }
+                $response = $response.response
             }
 
             if ($null -eq $response) {
