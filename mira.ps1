@@ -1117,9 +1117,8 @@ function Invoke-MiraAuthCommand([string]$Argument='') {
 function Invoke-MiraGroundingCommand([string]$Argument='') {
     $value=$Argument.Trim().ToLowerInvariant()
     if($value -eq 'on'){
-        if(-not (Test-Path -LiteralPath (Get-MiraAntigravityTokenPath))){W '[Grounding needs Antigravity OAuth. Run .auth login first.]' Yellow;return}
-        $script:GoogleSearchGrounding=$true
-        W '[Google Search grounding enabled.]' Green
+        try{$null=Get-MiraAntigravityAccessToken;$script:GoogleSearchGrounding=$true;W '[Google Search grounding enabled.]' Green}
+        catch{W ('[Grounding unavailable] '+$_.Exception.Message) Yellow}
     }elseif($value -eq 'off'){
         $script:GoogleSearchGrounding=$false
         W '[Google Search grounding disabled.]' Yellow
@@ -1130,14 +1129,6 @@ function Invoke-MiraGroundingCommand([string]$Argument='') {
         W ('[research model] '+$script:SearchModel) DarkGray
     }
 }
-
-
-# -----------------------------------------------------------------------------
-# MODULAR TOOL AND SKILL RUNTIME
-# Built-ins stay in the single-file distribution. Trusted user tool modules can
-# register additional function tools from %USERPROFILE%\.mira\tools\*.ps1.
-# Markdown skills are loaded on demand from %USERPROFILE%\.mira\skills\*.md.
-# -----------------------------------------------------------------------------
 function Initialize-MiraSkills {
     if($null -ne $script:MiraSkills){return}
     $script:MiraSkills=[ordered]@{
@@ -1951,6 +1942,7 @@ function Set-ModelSelection([string]$spec){
     elseif($null -ne (Get-Provider $s)){$providerName=$s;$model=''}
     $provider=Get-Provider $providerName
     if($null -eq $provider){W ('[model error] unknown provider: '+$providerName) Red;return $false}
+    if([string]$provider.type -eq 'antigravity' -and -not (Test-ProviderUsable $provider)){W '[model error] Antigravity OAuth is not connected. Run .auth login.' Yellow;return $false}
     if([string]::IsNullOrWhiteSpace($model)){
         $model=Get-DefaultProviderModel $provider
         if([string]::IsNullOrWhiteSpace($model)){W ('[model error] provider has no model list: '+$providerName) Red;return $false}
@@ -2523,7 +2515,7 @@ function Compress-Session(){
     $summaryMessages=@([pscustomobject]@{role='user';text=$prompt})
     try{
         $type=[string]$provider.type
-        if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $summaryMessages ''}
+        if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $summaryMessages '';if($payload.Contains('tools')){[void]$payload.Remove('tools')};if($payload.Contains('toolConfig')){[void]$payload.Remove('toolConfig')}}
         elseif($type -eq 'openai-compatible'){$payload=Build-OpenAICompatiblePayload $provider $summaryMessages $script:CurrentModel ''; $payload.stream=$false}
         else{throw ('unsupported provider type: '+$type)}
         $response=Send-ProviderPayload $provider $script:CurrentModel $payload
