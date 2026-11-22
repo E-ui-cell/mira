@@ -96,7 +96,7 @@ $GeminiSafetySettings = @(
     )
 $script:GoogleSearchGrounding = [bool]$MIRA_DEFAULT_GROUNDING
 $script:Provider = $MIRA_DEFAULT_PROVIDER
-$script:Effort = 'medium'
+$script:Effort = 'high'
 $script:ExecutionPermission = $MIRA_DEFAULT_PERMISSION
 $script:AntigravityProject = $null
 
