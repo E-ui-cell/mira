@@ -10,7 +10,7 @@ Register-MiraTool -Name 'search_files' -Description 'Search file names under a u
         max_results=@{type='integer';description='Maximum results, 1 to 200; defaults to 50.'}
     }
     required=@('root','pattern')
-} -RequiresApproval $false -Handler {
+} -RequiresApproval $true -Handler {
     param($toolArgs)
     $rootText=[string]$toolArgs.root
     if([string]::IsNullOrWhiteSpace($rootText)){throw 'search_files requires root.'}
