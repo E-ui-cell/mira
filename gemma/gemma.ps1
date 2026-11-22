@@ -31,11 +31,9 @@ $MIRA_STOP_SEQUENCES = $null                # e.g. @('END')
 # Runtime behavior
 $MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'; ASK prompt defaults to Yes
 $MIRA_DEFAULT_GROUNDING = $true              # Google Search enabled; native grounding preferred when supported
-# Models known to support native Google Search on each provider. Add exact model IDs here as verified.
-$MIRA_NATIVE_GROUNDING_MODELS = @{
-    antigravity = @('gemini-3.1-flash-lite','gemini-3-flash')
-    gemini      = @()
-}
+# Antigravity native Search support is discovered from fetchAvailableModels.webSearchModelIds.
+# Gemini Developer API grounding requires a billing-enabled project; use the independent
+# Antigravity Flash-Lite research agent for the Gemini API provider.
 $MIRA_DEFAULT_CACHED_CONTENT = if ($env:MIRA_GEMINI_CACHED_CONTENT) { $env:MIRA_GEMINI_CACHED_CONTENT } else { $null }
 $MIRA_DEFAULT_SYSTEM_PROMPT = @"
 You Professional assistant. Speak short, presice, no noncence
@@ -151,6 +149,8 @@ $script:Provider = $MIRA_DEFAULT_PROVIDER
 $script:Effort = $MIRA_DEFAULT_EFFORT
 $script:ExecutionPermission = $MIRA_DEFAULT_PERMISSION
 $script:AntigravityProject = $null
+$script:AntigravityWebSearchModelIds = $null
+$script:AntigravityCapabilityProbeAttempted = $false
 
 function Get-GeminiModels {
     if ($script:Provider -eq 'antigravity') { return Get-AntigravityModels }
@@ -406,6 +406,20 @@ function Get-AntigravityModels {
     $token = Get-AntigravityAccessToken
     $project = Get-AntigravityProject
     $catalog = Invoke-AntigravityPost -Method 'fetchAvailableModels' -Body @{ project = $project } -AccessToken $token
+
+    # Google returns the authoritative per-account native Search capability list
+    # separately from the selectable model catalogue.
+    $script:AntigravityCapabilityProbeAttempted = $true
+    $script:AntigravityWebSearchModelIds = $null
+    if ($catalog.PSObject.Properties['webSearchModelIds'] -and $null -ne $catalog.webSearchModelIds) {
+        $script:AntigravityWebSearchModelIds = @(
+            foreach ($searchModelId in @($catalog.webSearchModelIds)) {
+                $normalizedId = ([string]$searchModelId).Trim() -replace '^models/',''
+                if ($normalizedId) { $normalizedId }
+            }
+        )
+    }
+
     $items = $null
     foreach ($key in @('models','modelInfos','availableModels','availableModelInfos')) {
         if ($catalog.PSObject.Properties[$key]) { $items = $catalog.$key; if ($null -ne $items) { break } }
@@ -440,9 +454,27 @@ function Test-MiraNativeGoogleSearchSupport {
         [string]$Model = $script:MODEL
     )
     if (-not $script:GoogleSearchGrounding) { return $false }
-    if (-not $MIRA_NATIVE_GROUNDING_MODELS.ContainsKey($Provider)) { return $false }
-    foreach ($supportedModel in @($MIRA_NATIVE_GROUNDING_MODELS[$Provider])) {
-        if ([string]::Equals([string]$supportedModel, [string]$Model, [StringComparison]::OrdinalIgnoreCase)) {
+
+    # Gemini Developer API Search grounding is unavailable to free-tier projects.
+    # Keep its search path on the independent Antigravity research agent.
+    if (-not [string]::Equals($Provider, 'antigravity', [StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
+
+    # Fetch the capability catalogue once if .model has not already loaded it.
+    if ($null -eq $script:AntigravityWebSearchModelIds -and -not $script:AntigravityCapabilityProbeAttempted) {
+        try {
+            [void](Get-AntigravityModels)
+        } catch {
+            # Unknown capability must fail closed to the independent search agent.
+            $script:AntigravityCapabilityProbeAttempted = $true
+        }
+    }
+
+    if ($null -eq $script:AntigravityWebSearchModelIds) { return $false }
+    foreach ($supportedModel in @($script:AntigravityWebSearchModelIds)) {
+        $normalizedModel = ([string]$supportedModel).Trim() -replace '^models/',''
+        if ([string]::Equals($normalizedModel, [string]$Model, [StringComparison]::OrdinalIgnoreCase)) {
             return $true
         }
     }
