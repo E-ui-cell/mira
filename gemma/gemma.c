@@ -472,7 +472,7 @@ static char *readfile(const char*p) {
     fseek(f,0,SEEK_END);
     long n=ftell(f);
     rewind(f);
-    if(n<0||n>MAX_HTTP) {
+    if(n<0||n>(long)MAX_HTTP) {
         fclose(f);
         return NULL;
     }
