@@ -21,7 +21,7 @@ Wrapper for LLMs
 >
 ```
 
-Own readline. No PSReadLine. No external modules. No config file required — for basic use, only a provider API key is needed.
+Own readline. No PSReadLine dependency. No external PowerShell modules required. Use a Gemini API key or connect Antigravity with Google OAuth; optional tool modules and Markdown skills extend MIRA.
 
 MIRA is designed as an **aichat alternative for Windows 7 / Windows PowerShell 5.1**, with some familiar and compatible command concepts, while remaining a standalone implementation.
 
@@ -41,7 +41,13 @@ Native file/image input, diff sending, on-demand sessions with export, model dis
 
 ## Quickstart
 
-MIRA starts with **Gemini** as the default provider.
+MIRA starts with **Gemini Developer API** as the default provider. Antigravity OAuth is an additional provider and shares its token file with Gemma.
+
+Connect Antigravity:
+
+    .auth login
+    .provider antigravity
+    .grounding status
 
 Default model:
 
@@ -81,19 +87,12 @@ No provider config file is required. The provider registry, endpoints and built-
 
 `.models` shows the cached text-chat model list.
 
-Press **Tab** after `.models` to explicitly refresh provider model lists from their APIs:
+Use `.models refresh` to explicitly refresh all available provider catalogues, or `.models refresh antigravity` to refresh only the Antigravity OAuth catalogue:
 
-```text
-.models
-```
+    .models refresh
+    .models refresh antigravity
 
-or:
-
-```text
-.models <provider><Tab>
-```
-
-The refresh only uses providers that have a non-empty API-key environment variable.
+Antigravity model discovery uses the signed-in account's fetchAvailableModels catalogue; API-key providers use their model-list endpoints. Model completion itself remains local and never fetches the network.
 
 MIRA filters returned catalogs using provider metadata when available and keeps a local cache.
 
@@ -119,9 +118,10 @@ It probes candidate models, skips obvious non-chat families, handles rate limits
 
 Built-in providers:
 
-| Provider | API key environment variable |
+| Provider | Authentication |
 |---|---|
-| Gemini | `GEMINI_API_KEY` |
+| Antigravity | Google OAuth (.auth login) |
+| Gemini Developer API | `GEMINI_API_KEY` |
 | OpenRouter | `OPENROUTER_API_KEY` |
 | Groq | `GROQ_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
@@ -145,6 +145,42 @@ Example:
 ```
 
 Successful text-chat models are remembered in the local `used.list` cache for fast `.model` completion.
+
+## Antigravity OAuth and Google Search grounding
+
+Antigravity OAuth is a separate answer provider. It uses Google's native server-side Google Search grounding in the same answer request. MIRA does not attach its client-side web_search function to Antigravity answer models.
+
+Connect and manage OAuth:
+
+    .auth login
+    .auth status
+    .provider antigravity
+    .grounding status
+    .grounding off
+    .grounding on
+    .auth logout
+
+The OAuth token is stored in the shared Gemma location under the user profile: .gemini\antigravity-cli\antigravity-oauth-token. MIRA refreshes expired access tokens automatically.
+
+For Gemini Developer API answer models, the optional client-side web_search function runs a separate Antigravity OAuth research request. It is disabled by default; set MIRA_ENABLE_AGENTIC_WEB_SEARCH=1 to enable it. MIRA_SEARCH_MODEL selects the research model (default: gemini-3.1-flash-lite). Both paths require Antigravity OAuth for Google Search.
+
+MIRA reports grounding queries and source URLs when Google returns grounding metadata. Enabling grounding is not proof that a search occurred; missing metadata is reported as unverified.
+
+## Tools and skills
+
+Built-in function tools include:
+
+- get_current_datetime — local date/time and timezone
+- run_powershell — local Windows PowerShell, permission-gated
+- quick_web — weather (wttr.in), public IP (api.ipify.org), and cheat sheets (cht.sh)
+- get_skill — load a task playbook on demand
+- web_search — Gemini Developer API only, when agentic web search is enabled
+
+Repository tool modules in mira/tools add bounded file search/read and system information. User modules can be placed in %USERPROFILE%\.mira\tools; user-authored Markdown skills go in %USERPROFILE%\.mira\skills.
+
+Use .tools, .skills, and .skill <name> to inspect the extension system. Read mira/tools/README.md before writing a tool module. PowerShell modules are executable code and must be reviewed before loading.
+
+Permission mode defaults to ASK. Tool actions that require approval prompt with Enter = Yes. Use .ask to restore confirmation and .autopilot to allow model-requested tool actions without confirmation. Skills never grant permissions.
 
 ## One-shot and sessions
 
@@ -392,7 +428,14 @@ Show the raw JSON request:
 | `.models` | Show cached text-chat models |
 | `.models <provider><Tab>` | Refresh provider model list |
 | `.models test` | Probe candidate models |
-| `.providers` | Show built-in providers |
+| `.providers` | Show built-in providers and credential status |
+| `.provider <name>` | Switch answer provider |
+| `.auth login/status/logout` | Manage Antigravity OAuth |
+| `.grounding on/off/status` | Toggle Google Search grounding |
+| `.models refresh [provider]` | Refresh provider model catalogues |
+| `.tools` | List built-in and modular tools |
+| `.skills` / `.skill <name>` | List/load skills |
+| `.ask` / `.autopilot` | Set tool permission mode |
 | `.request` | Show last request summary |
 | `.request json` | Show raw last request JSON |
 | `.save [name]` | Save fenced code blocks |
@@ -425,20 +468,17 @@ MIRA is **not a drop-in replacement for aichat** and does not attempt to reprodu
 
 ## CLI arguments
 
-Currently implemented:
+Implemented CLI arguments:
 
 ```text
--d
---dry-run
-```
-
-The following aichat-style CLI options are not currently implemented:
-
-```text
--m, --model
+-m, --model <provider:model>
+-e, --execute
+-d, --dry-run
 -h, --help
 --
 ```
+
+`-e` generates a command for the detected Windows shell and executes it only after confirmation. `-d` prints the request JSON without sending it. `-m` selects a provider/model for the one-shot request.
 
 ### Execute mode
 
@@ -480,7 +520,7 @@ XAI_API_KEY
 PERPLEXITY_API_KEY
 ```
 
-Optional MIRA environment settings include history, compression, model-test and cache controls.
+Optional MIRA environment settings include history, compression, model-test and cache controls, `MIRA_ENABLE_AGENTIC_WEB_SEARCH`, and `MIRA_SEARCH_MODEL`. `AGY_GOOGLE_CLIENT_ID` and `AGY_GOOGLE_CLIENT_SECRET` can override the Antigravity OAuth client values.
 
 ## Platform
 
@@ -501,11 +541,11 @@ No PS7-specific runtime requirement.
 
 ### Functional
 
-The current beta includes the native readline/TUI, built-in providers, API-key based configuration, one-shot requests, RAM-only sessions that can be enabled on demand and exported to a file, session compression, persistent history, model-list caching and refresh, model probing, Markdown rendering, file/text/image input, clipboard screenshots, diffs, output saving/copying, OpenAI-compatible streaming, reasoning display, request inspection and raw-response mode.
+The current beta includes the native readline/TUI, Gemini Developer API and Antigravity OAuth providers, native Antigravity Google Search grounding, optional Gemini API web_search through Antigravity OAuth, model discovery, a function-tool loop, ASK/AUTOPILOT permissions, built-in and modular tools, on-demand built-in/user skills, one-shot requests, RAM-only sessions, session compression, persistent history, model caching, Markdown rendering, file/text/image input, diffs, output saving/copying, OpenAI-compatible streaming, reasoning display and request inspection.
 
 ### Not yet done
 
-MIRA does not currently implement the full aichat CLI surface or a persistent session/database system.
+MIRA does not implement the full aichat CLI surface or a persistent session/database system. Live OAuth, grounding, and Windows runtime behavior still require testing on the target Windows PowerShell 5.1 host.
 
 ## Release
 
@@ -513,7 +553,7 @@ Releases are created automatically from version tags such as `v0.1.0-beta.3`.
 
 ## More info
 
-AI Co-pilot: **GPT-5.6 Luna**, Git copilot.
+Project development notes are maintained in `ai.log`.
 
 MIRA takes its name from Mira (Omicron Ceti), the “wonderful” variable star in Cetus.
 
