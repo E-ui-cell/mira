@@ -208,10 +208,15 @@ static void switch_model(State*s){char**m;int n=models(s,&m);if(!n){puts("[Could
 static void browser(const char*u){
 #ifdef _WIN32
  ShellExecuteA(NULL,"open",u,NULL,NULL,SW_SHOWNORMAL);
-#elif defined(__APPLE__)
- char c[8192];snprintf(c,sizeof c,"open \"%s\" >/dev/null 2>&1 &",u);system(c);
 #else
- char c[8192];snprintf(c,sizeof c,"xdg-open \"%s\" >/dev/null 2>&1 &",u);system(c);
+ pid_t pid=fork();if(pid==0){
+ #ifdef __APPLE__
+ execlp("open","open",u,(char*)NULL);
+ #else
+ execlp("xdg-open","xdg-open",u,(char*)NULL);
+ #endif
+ _exit(127);
+}
 #endif
 }
 static int login(State*s){if(!*s->cid||!*s->secret){fprintf(stderr,"Set AGY_GOOGLE_CLIENT_ID and AGY_GOOGLE_CLIENT_SECRET before .auth login.\n");return 0;}char*st=randomstr(32),*vf=randomstr(48),*ch=sha256(vf);const char*k[]={"client_id","redirect_uri","response_type","scope","access_type","prompt","state","code_challenge","code_challenge_method"};const char*v[]={s->cid,REDIRECT,"code",SCOPES,"offline","consent",st,ch,"S256"};Buf u;init(&u);put(&u,AUTH_URL);for(int i=0;i<9;i++){char*a=escape(k[i]),*b=escape(v[i]);fmt(&u,"%s%s=%s",i?"&":"?",a,b);free(a);free(b);}printf("Opening Google sign-in. If needed, copy this URL:\n%s\n",u.s);browser(u.s);printf("Paste authorization code or callback URL: ");char in[8192];if(!fgets(in,sizeof in,stdin))return 0;char*val=trim(in),*code=NULL;if(starts(val,"http")){char*copy=ds(val),*q=strchr(copy,'?');if(q){q++;char*save=NULL;for(char*x=strtok_r(q,"&",&save);x;x=strtok_r(NULL,"&",&save)){char*e=strchr(x,'=');if(!e)continue;*e++=0;if(!strcmp(x,"state")&&strcmp(e,st)){fprintf(stderr,"OAuth state mismatch.\n");free(copy);goto fail;}if(!strcmp(x,"error")){fprintf(stderr,"OAuth error: %s\n",e);free(copy);goto fail;}if(!strcmp(x,"code"))code=ds(e);}}free(copy);}else code=ds(val);if(!code||!*code){fprintf(stderr,"No authorization code.\n");goto fail;}
