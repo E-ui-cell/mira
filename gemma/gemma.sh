@@ -17,6 +17,7 @@ refresh(){
  [[ -f "$TOKEN" ]] || { echo "Not signed in; use .auth login" >&2; return 1; }
  local exp now rt r
  exp="$(jq -r '.token.expiry // 0' "$TOKEN")"; now="$(date +%s)"
+ if [[ ! "$exp" =~ ^[0-9]+$ ]]; then exp="$(date -d "$exp" +%s 2>/dev/null || echo 0)"; fi
  (( exp > now+60 )) && return 0
  rt="$(jq -r '.token.refresh_token // empty' "$TOKEN")"
  [[ -n "$CID" && -n "$CSECRET" && -n "$rt" ]] || { echo "Set AGY_GOOGLE_CLIENT_ID/SECRET" >&2; return 1; }
