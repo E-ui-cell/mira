@@ -90,6 +90,7 @@ $LastGeminiRequestJson = $null
 $script:GoogleSearchGrounding = $false
 $script:Provider = 'gemini'
 $script:Effort = 'medium'
+$script:ExecutionPermission = 'ask'
 $script:AntigravityProject = $null
 
 function Get-GeminiModels {
@@ -457,13 +458,25 @@ function Invoke-GemmaWebSearch {
     return @{ query=$Query; research=$research; sources=@($sources); search_model='gemini-3.1-flash-lite' }
 }
 
+function Invoke-GemmaPermissionCommand {
+    param([ValidateSet('ask','autopilot')][string]$Mode)
+    $script:ExecutionPermission = $Mode
+    if ($Mode -eq 'ask') {
+        Write-Host '[PowerShell permission mode: ASK | each command requires confirmation; Enter = Yes.]' -ForegroundColor Cyan
+    } else {
+        Write-Host '[PowerShell permission mode: AUTOPILOT | all model-requested PowerShell commands execute without confirmation.]' -ForegroundColor Yellow
+    }
+}
+
 function Invoke-GemmaPowerShellTool {
     param([string]$Command)
     if ([string]::IsNullOrWhiteSpace($Command)) { throw 'run_powershell requires a command.' }
     Write-Host "`n[PowerShell requested by model]:" -ForegroundColor DarkYellow
     Write-Host $Command -ForegroundColor Gray
-    $approval = Read-Host 'Execute this PowerShell command on this computer? [y/N]'
-    if ($approval -notmatch '^(?i:y|yes)$') { return @{ approved=$false; output='User declined command execution.' } }
+    if ($script:ExecutionPermission -eq 'ask') {
+        $approval = Read-Host 'Execute this PowerShell command? [Y/n]'
+        if ($approval -match '^(?i:n|no)$') { return @{ approved=$false; output='User declined command execution.' } }
+    }
     try {
         $output = Invoke-Expression $Command 2>&1 | Out-String -Width 240
         if ($output.Length -gt 20000) { $output = $output.Substring(0,20000) + "`n[PowerShell output truncated]" }
@@ -610,7 +623,7 @@ $script:MiraHistoryMax = 500
 # Mira owns the console input buffer through Read-GemLineFallback.
 $script:UsePSReadLine = $false
 
-$script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.requests','.requestkeys','.model','.provider','.effort','.auth','.grounding','.mira-update')
+$script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.requests','.requestkeys','.model','.provider','.effort','.auth','.grounding','.ask','.autopilot','.mira-update')
 
 function Get-GemCommands([string]$p) {
     @(
@@ -1024,7 +1037,7 @@ function Save-GeminiCodeBlocks {
 }
 
 Clear-Host
-Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.requests' | '.requestkeys' | '.provider' | '.model' | '.effort' | '.auth' | '.grounding' | '.mira-update' | '!<cmd>'`n" -ForegroundColor DarkGray
+Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.requests' | '.requestkeys' | '.provider' | '.model' | '.effort' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '.mira-update' | '!<cmd>'`n" -ForegroundColor DarkGray
 
 # ==============================================================================
 # ==============================================================================
@@ -1125,6 +1138,15 @@ while ($true) {
         $effortArgument = ""
         if ($trimmedInput.Length -gt 7) { $effortArgument = $trimmedInput.Substring(7).Trim() }
         Invoke-GemmaEffortCommand -Argument $effortArgument
+        continue
+    }
+
+    if ($trimmedInput -ieq '.ask') {
+        Invoke-GemmaPermissionCommand -Mode ask
+        continue
+    }
+    if ($trimmedInput -ieq '.autopilot') {
+        Invoke-GemmaPermissionCommand -Mode autopilot
         continue
     }
 
@@ -1394,7 +1416,7 @@ while ($true) {
                 },
                 @{
                     name = "run_powershell"
-                    description = "Run commands in the user's local Windows PowerShell session for real machine inspection and tasks. The user approves each execution. Use PowerShell syntax, never Bash. Continue using tool results to complete multi-step tasks; do not claim a task is blocked merely because local inspection is needed."
+                    description = "Run commands in the user's local Windows PowerShell session for real machine inspection and tasks. Permission mode is controlled by .ask (confirmation, default Yes) and .autopilot (execute without confirmation). Use PowerShell syntax, never Bash. Continue using tool results to complete multi-step tasks; do not claim a task is blocked merely because local inspection is needed."
                     parameters = @{ type = "object"; properties = @{ command = @{ type = "string"; description = "PowerShell command to execute on the Windows host." } }; required = @("command") }
                 }
             )
