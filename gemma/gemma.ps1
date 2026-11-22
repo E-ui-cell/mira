@@ -1959,6 +1959,32 @@ while ($true) {
             -Contents $Contents
 
         $usingAntigravityOAuth = ($script:Provider -eq 'antigravity')
+
+        # Apply native Search compatibility at the final request boundary.
+        # Antigravity requires this flag whenever a built-in server-side tool
+        # (Google Search) is sent alongside client function declarations.
+        # Do not rely only on the outer script variables being copied by the
+        # payload builder: write and validate the exact outgoing payload.
+        if ($usingAntigravityOAuth -and $script:GoogleSearchGrounding -and -not $script:CommandMode) {
+            $hasNativeGoogleSearch = $false
+            foreach ($declaredTool in @($payloadObj.tools)) {
+                if ($declaredTool -is [System.Collections.IDictionary] -and $declaredTool.Contains('googleSearch')) {
+                    $hasNativeGoogleSearch = $true
+                    break
+                }
+            }
+            if (-not $hasNativeGoogleSearch) {
+                throw 'Grounding is ON, but the Antigravity request is missing the native googleSearch tool declaration.'
+            }
+
+            $payloadObj.toolConfig = [ordered]@{
+                functionCallingConfig = @{ mode = 'AUTO' }
+                includeServerSideToolInvocations = $true
+            }
+            if (-not [bool]$payloadObj.toolConfig.includeServerSideToolInvocations) {
+                throw 'Antigravity native Google Search requires toolConfig.includeServerSideToolInvocations=true.'
+            }
+        }
         if ($usingAntigravityOAuth) {
             $accessToken = Get-AntigravityAccessToken
             $project = Get-AntigravityProject
