@@ -1967,8 +1967,10 @@ while ($true) {
             $i = 0
             $sw = [Diagnostics.Stopwatch]::StartNew()
 
-            $oldTreatControlCAsInput = [Console]::TreatControlCAsInput
-            [Console]::TreatControlCAsInput = $true
+            if (-not $script:Headless) {
+                $oldTreatControlCAsInput = [Console]::TreatControlCAsInput
+                [Console]::TreatControlCAsInput = $true
+            }
 
             $runspace = [Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
             $runspace.Open()
@@ -1982,20 +1984,20 @@ while ($true) {
 
             $cancelled = $false
             while (-not $asyncResult.IsCompleted) {
-                if ([Console]::KeyAvailable) {
-                    $key = [Console]::ReadKey($true)
-                    if ($key.Key -eq [ConsoleKey]::C -and
-                        (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
-                        $cancelled = $true
-                        Write-Host "`rStopping request...                                           " -NoNewline -ForegroundColor Yellow
-                        try { $powershell.Stop() } catch {}
-                        break
+                if (-not $script:Headless) {
+                    if ([Console]::KeyAvailable) {
+                        $key = [Console]::ReadKey($true)
+                        if ($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
+                            $cancelled = $true
+                            Write-Host "`rStopping request...                                           " -NoNewline -ForegroundColor Yellow
+                            try { $powershell.Stop() } catch {}
+                            break
+                        }
                     }
+                    $frame = $frames[$i % $frames.Length]
+                    $elapsed = [int]$sw.ElapsedMilliseconds
+                    Write-Host "`r$frame  $([math]::Round($elapsed/1000, 1))s " -NoNewline -ForegroundColor DarkGray
                 }
-
-                $frame = $frames[$i % $frames.Length]
-                $elapsed = [int]$sw.ElapsedMilliseconds
-                Write-Host "`r$frame  $([math]::Round($elapsed/1000, 1))s " -NoNewline -ForegroundColor DarkGray
                 Start-Sleep -Milliseconds $MIRA_SPINNER_INTERVAL_MS
                 $i++
             }
@@ -2008,16 +2010,20 @@ while ($true) {
 
                 Rollback-MiraTurn -History $Contents -StartCount $turnStartCount
 
-                Write-Host "`r" -NoNewline
-                Write-Host (" " * 60) -NoNewline
-                Write-Host "`r[Request cancelled]" -ForegroundColor Yellow
+                if (-not $script:Headless) {
+                    Write-Host "`r" -NoNewline
+                    Write-Host (" " * 60) -NoNewline
+                    Write-Host "`r[Request cancelled]" -ForegroundColor Yellow
+                }
 
                 $toolLoop = $false
                 break
             }
 
-            Write-Host (" " * 40) -NoNewline
-            Write-Host "`r" -NoNewline
+            if (-not $script:Headless) {
+                Write-Host (" " * 40) -NoNewline
+                Write-Host "`r" -NoNewline
+            }
 
             $response = $powershell.EndInvoke($asyncResult)
             $hasRunspaceError = $powershell.Streams.Error.Count -gt 0
@@ -2242,8 +2248,12 @@ while ($true) {
     catch {
         Rollback-MiraTurn -History $Contents -StartCount $turnStartCount
         $errMsg = $_.Exception.Message
+        if ($script:Headless) {
+            if ($script:JsonOutput) { [Console]::Out.WriteLine((ConvertTo-Json -InputObject @{error=$errMsg} -Compress)) }
+            else { [Console]::Error.WriteLine($errMsg) }
+            exit 1
+        }
         Write-Host "`n[API Failure]: $errMsg" -ForegroundColor Red
         # Exit only this turn; the interactive CLI remains alive.
-        if ($script:Headless) { exit 1 }
     }
 }
