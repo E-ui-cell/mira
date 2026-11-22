@@ -71,6 +71,12 @@ $tools = "$env:USERPROFILE\.mira\tools"
 New-Item -ItemType Directory -Force -Path $tools | Out-Null
 iwr "https://raw.githubusercontent.com/E-ui-cell/mira/main/mira/tools/file-system.ps1" -OutFile "$tools\file-system.ps1"
 iwr "https://raw.githubusercontent.com/E-ui-cell/mira/main/mira/tools/system-info.ps1" -OutFile "$tools\system-info.ps1"
+
+# Optional repository skill playbooks
+$skills = "$env:USERPROFILE\.mira\skills"
+New-Item -ItemType Directory -Force -Path $skills | Out-Null
+iwr "https://raw.githubusercontent.com/E-ui-cell/mira/main/mira/skills/powershell-scripting.md" -OutFile "$skills\powershell-scripting.md"
+iwr "https://raw.githubusercontent.com/E-ui-cell/mira/main/mira/skills/web-research.md" -OutFile "$skills\web-research.md"
 ```
 
 Run normally from the directory containing the script:
@@ -184,7 +190,7 @@ Built-in function tools include:
 
 Function tools are available to Gemini Developer API, Antigravity OAuth, and OpenAI-compatible providers. OpenAI-compatible streaming mode omits tool declarations; turn streaming off to use tools with those providers.
 
-Repository tool modules in mira/tools add bounded file search/read and system information. User modules can be placed in %USERPROFILE%\.mira\tools; user-authored Markdown skills go in %USERPROFILE%\.mira\skills.
+Repository tool modules in mira/tools add bounded file search/read and system information. Repository skills in mira/skills provide PowerShell scripting and grounded web research playbooks. User modules can be placed in %USERPROFILE%\.mira\tools; user-authored Markdown skills go in %USERPROFILE%\.mira\skills.
 
 Use .tools, .skills, and .skill <name> to inspect the extension system. Read mira/tools/README.md before writing a tool module. PowerShell modules are executable code and must be reviewed before loading.
 
