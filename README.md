@@ -64,19 +64,19 @@ $env:GEMINI_API_KEY="YOUR_KEY"
 Download:
 
 ```powershell
-iwr "https://raw.githubusercontent.com/E-ui-cell/mira/main/mira.ps1" -OutFile "$env:USERPROFILE\Downloads\mira.ps1"
+iwr "https://raw.githubusercontent.com/E-ui-cell/mira/mira-m/mira.ps1" -OutFile "$env:USERPROFILE\Downloads\mira.ps1"
 
 # Optional bundled tool modules (the script itself remains standalone)
 $tools = "$env:USERPROFILE\.mira\tools"
 New-Item -ItemType Directory -Force -Path $tools | Out-Null
-iwr "https://raw.githubusercontent.com/E-ui-cell/mira/main/mira/tools/file-system.ps1" -OutFile "$tools\file-system.ps1"
-iwr "https://raw.githubusercontent.com/E-ui-cell/mira/main/mira/tools/system-info.ps1" -OutFile "$tools\system-info.ps1"
+iwr "https://raw.githubusercontent.com/E-ui-cell/mira/mira-m/mira/tools/file-system.ps1" -OutFile "$tools\file-system.ps1"
+iwr "https://raw.githubusercontent.com/E-ui-cell/mira/mira-m/mira/tools/system-info.ps1" -OutFile "$tools\system-info.ps1"
 
 # Optional repository skill playbooks
 $skills = "$env:USERPROFILE\.mira\skills"
 New-Item -ItemType Directory -Force -Path $skills | Out-Null
-iwr "https://raw.githubusercontent.com/E-ui-cell/mira/main/mira/skills/powershell-scripting.md" -OutFile "$skills\powershell-scripting.md"
-iwr "https://raw.githubusercontent.com/E-ui-cell/mira/main/mira/skills/web-research.md" -OutFile "$skills\web-research.md"
+iwr "https://raw.githubusercontent.com/E-ui-cell/mira/mira-m/mira/skills/powershell-scripting.md" -OutFile "$skills\powershell-scripting.md"
+iwr "https://raw.githubusercontent.com/E-ui-cell/mira/mira-m/mira/skills/web-research.md" -OutFile "$skills\web-research.md"
 ```
 
 Run normally from the directory containing the script:
