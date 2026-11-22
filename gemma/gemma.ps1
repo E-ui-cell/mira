@@ -8,6 +8,15 @@ $Host.UI.RawUI.WindowTitle = "GEMMA CLI"
 # ==============================================================================
 # CONFIGURATION & PERSONA INJECTION
 # ==============================================================================
+# ==============================================================================
+# USER CONFIGURATION — edit defaults here
+# ==============================================================================
+$MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity' or 'gemini'
+$MIRA_DEFAULT_MODEL = 'gemini-3.1-flash-lite'
+$MIRA_TEMPERATURE = $null                   # Optional numeric value; $null leaves the model default
+$MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'
+$MIRA_DEFAULT_GROUNDING = $false             # $true enables agentic Google Search at startup
+
 $API_KEY = $env:GEMINI_APIJ
 
 if (-not $API_KEY) {
@@ -20,7 +29,7 @@ if (-not $API_KEY -and -not (Test-Path -LiteralPath (Join-Path (Join-Path $HOME 
 }
 
 #$MODEL   = "gemini-flash-lite-latest"
-$MODEL   = "gemini-3.5-flash-lite"
+$MODEL   = $MIRA_DEFAULT_MODEL
 #$MODEL   = "gemini-3.6-flash"
 #$MODEL   = "gemini-2.5-computer-use-preview-10-2025"
 #$MODEL   = "gemini-3-flash-preview"
@@ -85,10 +94,10 @@ $GeminiSafetySettings = @(
             threshold = "BLOCK_NONE"
         }
     )
-$script:GoogleSearchGrounding = $false
-$script:Provider = 'gemini'
+$script:GoogleSearchGrounding = [bool]$MIRA_DEFAULT_GROUNDING
+$script:Provider = $MIRA_DEFAULT_PROVIDER
 $script:Effort = 'medium'
-$script:ExecutionPermission = 'ask'
+$script:ExecutionPermission = $MIRA_DEFAULT_PERMISSION
 $script:AntigravityProject = $null
 
 function Get-GeminiModels {
@@ -554,6 +563,11 @@ function Build-GeminiPayload {
 
     if ($null -ne $GeminiGenerationConfig) {
         $payload.generationConfig = $GeminiGenerationConfig
+    }
+
+    if ($null -ne $MIRA_TEMPERATURE) {
+        if ($null -eq $payload.generationConfig) { $payload.generationConfig = @{} }
+        $payload.generationConfig.temperature = [double]$MIRA_TEMPERATURE
     }
 
     # Gemini 3 uses thinkingLevel; Gemini 2.5 uses thinkingBudget.
@@ -1143,7 +1157,7 @@ while ($true) {
 
     if ($trimmedInput -eq ".grounding" -or $trimmedInput.StartsWith(".grounding ", [StringComparison]::OrdinalIgnoreCase)) {
         $searchArgument = ""
-        if ($trimmedInput.Length -gt 7) { $searchArgument = $trimmedInput.Substring(7).Trim() }
+        if ($trimmedInput.Length -gt ".grounding".Length) { $searchArgument = $trimmedInput.Substring(".grounding".Length).Trim() }
         Invoke-GemmaSearchCommand -Argument $searchArgument
         continue
     }
