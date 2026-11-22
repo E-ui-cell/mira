@@ -150,7 +150,6 @@ $GeminiSafetySettings = @(
 $script:GoogleSearchGrounding = [bool]$MIRA_DEFAULT_GROUNDING
 $script:AgenticWebSearchEnabled = [bool]$MIRA_ENABLE_AGENTIC_WEB_SEARCH
 $script:VerboseOutput = [bool]$MIRA_DEFAULT_VERBOSE
-$script:NativeGoogleSearchActive = $false
 $script:Provider = $MIRA_DEFAULT_PROVIDER
 $script:Effort = $MIRA_DEFAULT_EFFORT
 $script:ExecutionPermission = $MIRA_DEFAULT_PERMISSION
@@ -454,16 +453,6 @@ function Get-AntigravityModels {
     return @($result | Sort-Object name)
 }
 
-function Test-MiraNativeGoogleSearchSupport {
-    param(
-        [string]$Provider = $script:Provider,
-        [string]$Model = $script:MODEL
-    )
-    # Antigravity Search is exposed through the script's callable web_search
-    # function, executed as a separate native googleSearch OAuth request.
-    return ($script:GoogleSearchGrounding -and [string]::Equals($Provider, 'antigravity', [StringComparison]::OrdinalIgnoreCase))
-}
-
 function Invoke-GemmaAuthCommand {
     param([string]$Argument = '')
     $action = $Argument.Trim().ToLowerInvariant()
@@ -499,7 +488,7 @@ function Invoke-GemmaSearchCommand {
     if ($value -eq 'on') {
         if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) { Write-Host '[Google Search requires Antigravity OAuth. Run .auth login first.]' -ForegroundColor Yellow; return }
         $script:GoogleSearchGrounding = $true
-        Write-Host '[Google Search enabled. Native grounding is used when supported; separate Flash-Lite research is controlled by MIRA_ENABLE_AGENTIC_WEB_SEARCH.]' -ForegroundColor Green
+        Write-Host '[Google Search enabled. Antigravity models can call native web_search; Gemini API search fallback is controlled by MIRA_ENABLE_AGENTIC_WEB_SEARCH.]' -ForegroundColor Green
     } elseif ($value -eq 'off') {
         $script:GoogleSearchGrounding = $false
         Write-Host '[Google Search disabled.]' -ForegroundColor Yellow
