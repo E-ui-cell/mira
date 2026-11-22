@@ -1490,7 +1490,7 @@ if ($Search) {
 if ($Headless -and [string]::IsNullOrWhiteSpace($Prompt)) { [Console]::Error.WriteLine('Headless mode requires -Prompt or -Stdin.'); exit 2 }
 if (-not $Headless) {
 Clear-Host
-Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.provider' | '.model' | '.effort' | '.verbose' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '!<cmd>'`n" -ForegroundColor DarkGray
+Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.provider' | '.model' | '.effort' | '.verbose' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '.skills' | '.skill <name>' | '!<cmd>'`n" -ForegroundColor DarkGray
 }
 
 # ==============================================================================
@@ -1563,6 +1563,20 @@ while ($true) {
         $Contents.Clear()
         Clear-Host
         Write-Host "History reset.`n" -ForegroundColor Yellow
+        continue
+    }
+
+    if ($trimmedInput -ieq '.skills') {
+        $skillList = Get-GemmaSkill -Name 'list'
+        Write-Host ("Available skills: " + (@($skillList.skills) -join ', ')) -ForegroundColor Cyan
+        Write-Host ("User skill folder: " + $skillList.user_skill_directory) -ForegroundColor DarkGray
+        Write-Host "Create your own skill as a .md file in that folder." -ForegroundColor DarkGray
+        continue
+    }
+    if ($trimmedInput -match '^\.skill\s+([a-zA-Z0-9_-]+)$') {
+        $loadedSkill = Get-GemmaSkill -Name $matches[1]
+        if ($loadedSkill.instructions) { Write-Host $loadedSkill.instructions -ForegroundColor Gray }
+        else { Write-Host ([string]$loadedSkill.error) -ForegroundColor Yellow }
         continue
     }
 
