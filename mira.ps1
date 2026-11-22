@@ -64,7 +64,7 @@ $script:LastPromptTokens = 0
 $script:LastRequestElapsedMs = 0
 $script:LastRequestFrame = '... '
 $script:DryRunMode = $false
-$script:CliArgsImplemented = @('-d','--dry-run','-e','--execute')
+$script:CliArgsImplemented = @('-d','--dry-run','-e','--execute','-m','--model','-h','--help','--')
 $script:CliArgsNotImplemented = @()
 
 # Google Antigravity OAuth and grounding are optional providers/features.
