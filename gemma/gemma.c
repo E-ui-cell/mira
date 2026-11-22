@@ -136,7 +136,7 @@ static int savefile(const char*p,const char*s){char t[PATH_MAX];snprintf(t,sizeo
 #endif
  return 1;}
 static int64_t expiry(const char*s){if(!s||!*s)return 0;char*e;long long n=strtoll(s,&e,10);if(!*e)return n;struct tm t={0};if(sscanf(s,"%4d-%2d-%2dT%2d:%2d:%2d",&t.tm_year,&t.tm_mon,&t.tm_mday,&t.tm_hour,&t.tm_min,&t.tm_sec)!=6)return 0;t.tm_year-=1900;t.tm_mon--;
-int y=t.tm_year+1900;unsigned m=(unsigned)(t.tm_mon+1),day=(unsigned)t.tm_mday;y-=m<=2;int era=(y>=0?y:y-399)/400;unsigned yoe=(unsigned)(y-era*400);unsigned doy=(153*(m+(m>2?(unsigned)-3:9))+2)/5+day-1;unsigned doe=yoe*365+yoe/4-yoe/100+doy;int64_t days=(int64_t)era*146097+(int64_t)doe-719468;return days*86400+t.tm_hour*3600+t.tm_min*60+t.tm_sec;
+int y=t.tm_year+1900;unsigned m=(unsigned)(t.tm_mon+1),day=(unsigned)t.tm_mday;y-=m<=2;int era=(y>=0?y:y-399)/400;unsigned yoe=(unsigned)(y-era*400);unsigned mp=m>2?m-3:m+9;unsigned doy=(153*mp+2)/5+day-1;unsigned doe=yoe*365+yoe/4-yoe/100+doy;int64_t days=(int64_t)era*146097+(int64_t)doe-719468;return days*86400+t.tm_hour*3600+t.tm_min*60+t.tm_sec;
 }
 
 typedef struct{
@@ -157,7 +157,13 @@ static char *agy(State*s,const char*method,const char*body){char*a=access_token(
 #ifdef _WIN32
  snprintf(ua,sizeof ua,"User-Agent: antigravity/hub/2.17.0 (aidev_client; os_type=windows; arch=amd64)");
 #elif defined(__APPLE__)
- snprintf(ua,sizeof ua,"User-Agent: antigravity/hub/2.17.0 (aidev_client; os_type=macos; arch=%s)",sizeof(void*)==8?"amd64":"arm64");
+ snprintf(ua,sizeof ua,"User-Agent: antigravity/hub/2.17.0 (aidev_client; os_type=macos; arch=%s)",
+ #if defined(__aarch64__) || defined(__arm64__)
+ "arm64"
+ #else
+ "amd64"
+ #endif
+ );
 #else
  snprintf(ua,sizeof ua,"User-Agent: antigravity/hub/2.17.0 (aidev_client; os_type=linux; arch=%s)",sizeof(void*)==8?"amd64":"arm64");
 #endif
