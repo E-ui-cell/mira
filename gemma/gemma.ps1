@@ -33,9 +33,10 @@ $MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'; ASK prompt d
 $MIRA_DEFAULT_GROUNDING = $true              # Google Search enabled where available
 $MIRA_ENABLE_AGENTIC_WEB_SEARCH = $false      # Disable separate Gemini 3.1 Flash-Lite research-agent fallback
 $MIRA_DEFAULT_VERBOSE = $false                # Show Gemini thought summaries only when enabled with .verbose
-# Antigravity native Search support is discovered from fetchAvailableModels.webSearchModelIds.
-# Gemini Developer API grounding requires a billing-enabled project; use the independent
-# Antigravity Flash-Lite research agent for the Gemini API provider.
+# Antigravity Search uses a Search-only preflight with the selected answer model;
+# never mix googleSearch with functionDeclarations on the Antigravity endpoint.
+# Gemini Developer API models can receive the independent Flash-Lite web_search
+# function when MIRA_ENABLE_AGENTIC_WEB_SEARCH is enabled.
 $MIRA_DEFAULT_CACHED_CONTENT = if ($env:MIRA_GEMINI_CACHED_CONTENT) { $env:MIRA_GEMINI_CACHED_CONTENT } else { $null }
 $MIRA_DEFAULT_SYSTEM_PROMPT = @"
 You Professional assistant. Speak short, presice, no noncence
@@ -502,7 +503,7 @@ function Invoke-GemmaSearchCommand {
         Write-Host '[Google Search enabled. Native grounding is used when supported; separate Flash-Lite research is controlled by MIRA_ENABLE_AGENTIC_WEB_SEARCH.]' -ForegroundColor Green
     } elseif ($value -eq 'off') {
         $script:GoogleSearchGrounding = $false
-        Write-Host '[Agentic web search disabled.]' -ForegroundColor Yellow
+        Write-Host '[Google Search disabled.]' -ForegroundColor Yellow
     } elseif ($value -eq 'status' -or -not $value) {
         $state = if (-not $script:GoogleSearchGrounding) { 'OFF' } elseif (Test-MiraNativeGoogleSearchSupport) { 'ON (native model grounding)' } elseif ($script:AgenticWebSearchEnabled) { "ON (agentic Flash-Lite fallback: $MIRA_SEARCH_MODEL)" } else { 'ON, but this model has no native Search and agentic fallback is disabled' }
         Write-Host "[Google Search: $state | answer: $script:Provider/$script:MODEL]" -ForegroundColor Cyan
