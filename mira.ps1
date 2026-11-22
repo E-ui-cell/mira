@@ -77,6 +77,7 @@ You are MIRA, a concise and practical Windows assistant. Use tools when they mat
 '@
 $script:MiraHome = Join-Path $HOME '.mira'
 $script:MiraSkillsDirectory = Join-Path $script:MiraHome 'skills'
+$script:MiraRepositorySkillsDirectory = if(-not [string]::IsNullOrWhiteSpace($PSScriptRoot)){Join-Path $PSScriptRoot 'mira\skills'}else{''}
 $script:MiraToolsDirectory = Join-Path $script:MiraHome 'tools'
 $script:MiraToolRegistry = @{}
 $script:MiraToolsInitialized = $false
@@ -1162,26 +1163,32 @@ Use quick_web for narrowly scoped live lookups: weather via wttr.in (IP-region a
 function Get-MiraSkill([string]$Name='list') {
     Initialize-MiraSkills
     $key=([string]$Name).Trim().ToLowerInvariant()
+    $directories=@()
+    if($script:MiraSkillsDirectory){$directories+=@{Path=$script:MiraSkillsDirectory;Source='user'}}
+    if($script:MiraRepositorySkillsDirectory){$directories+=@{Path=$script:MiraRepositorySkillsDirectory;Source='repository'}}
     if(-not $key -or $key -eq 'list'){
         $names=New-Object System.Collections.Generic.List[string]
         foreach($n in $script:MiraSkills.Keys){[void]$names.Add([string]$n)}
-        if(Test-Path -LiteralPath $script:MiraSkillsDirectory -PathType Container){
-            foreach($file in Get-ChildItem -LiteralPath $script:MiraSkillsDirectory -Filter '*.md' -File -ErrorAction SilentlyContinue){
+        foreach($directory in $directories){
+            if(-not (Test-Path -LiteralPath $directory.Path -PathType Container)){continue}
+            foreach($file in Get-ChildItem -LiteralPath $directory.Path -Filter '*.md' -File -ErrorAction SilentlyContinue){
                 $n=[IO.Path]::GetFileNameWithoutExtension($file.Name).ToLowerInvariant()
                 if($n -match '^[a-z0-9][a-z0-9_-]{0,63}$' -and -not $names.Contains($n)){[void]$names.Add($n)}
             }
         }
-        return @{skills=@($names|Sort-Object -Unique);user_skill_directory=$script:MiraSkillsDirectory}
+        return @{skills=@($names|Sort-Object -Unique);user_skill_directory=$script:MiraSkillsDirectory;repository_skill_directory=$script:MiraRepositorySkillsDirectory}
     }
     if($key -notmatch '^[a-z0-9][a-z0-9_-]{0,63}$'){return @{error='Invalid skill name.'}}
     if($script:MiraSkills.Contains($key)){return @{skill=$key;instructions=[string]$script:MiraSkills[$key];source='built-in'}}
-    $path=Join-Path $script:MiraSkillsDirectory ($key+'.md')
-    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){return @{error=("Skill not found: "+$key)}}
-    $item=Get-Item -LiteralPath $path -ErrorAction Stop
-    if($item.Length -gt 32768){return @{error='Skill file exceeds the 32 KB limit.'}}
-    return @{skill=$key;instructions=[IO.File]::ReadAllText($path,[Text.Encoding]::UTF8);source='user'}
+    foreach($directory in $directories){
+        $path=Join-Path $directory.Path ($key+'.md')
+        if(-not (Test-Path -LiteralPath $path -PathType Leaf)){continue}
+        $item=Get-Item -LiteralPath $path -ErrorAction Stop
+        if($item.Length -gt 32768){return @{error='Skill file exceeds the 32 KB limit.'}}
+        return @{skill=$key;instructions=[IO.File]::ReadAllText($path,[Text.Encoding]::UTF8);source=$directory.Source}
+    }
+    return @{error=("Skill not found: "+$key)}
 }
-
 function Register-MiraTool {
     param(
         [Parameter(Mandatory=$true)][string]$Name,
