@@ -1393,7 +1393,10 @@ static void session_path(State*s,char*out,size_t cap) {
     if(a)*a=0;
     char *b=strrchr(p,SEP);
     if(b)*b=0;
-    snprintf(out,cap,"%s%cgemma-session.json",p,SEP);
+    const char *leaf="gemma-session.json";
+    size_t n=strlen(p),m=strlen(leaf);
+    if(n+1+m+1>cap){if(cap)out[0]=0;return;}
+    memcpy(out,p,n);out[n++]=SEP;memcpy(out+n,leaf,m+1);
 }
 static int save_session(State*s,const char*requested) {
     char path[PATH_MAX];
