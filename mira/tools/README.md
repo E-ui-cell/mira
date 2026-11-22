@@ -27,4 +27,4 @@ Security: PowerShell modules are executable code and are trusted when loaded. On
 ## Included modules
 
 - file-system.ps1: bounded search_files and permission-gated read_text_file
-- system-info.ps1: read-only get_system_info
+- system-info.ps1: approval-gated, read-only get_system_info
