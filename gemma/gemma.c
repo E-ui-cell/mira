@@ -1562,11 +1562,42 @@ static void prompt(State*s,const char*p,int command) {
     }
     else fprintf(stderr,"[Request failed]\n");
 }
+
+static int self_test(void){
+    const char *sample="{\"token\":{\"access_token\":\"a\\nb\"},\"items\":[1,2]}";
+    Doc d;
+    jp(sample,&d);
+    int token=jget(sample,&d,0,"token");
+    char *value=jval(sample,&d,token,"access_token");
+    int items=jget(sample,&d,0,"items");
+    int ok=strcmp(value,"a\nb")==0&&count(&d,items)==2;
+    free(value);
+    free(d.v);
+    ok=ok&&expiry("1970-01-01T00:00:00Z")==0;
+    ok=ok&&expiry("2000-01-01T00:00:00Z")==946684800;
+    char *array=ds("[]");
+    append_item(&array,"{\"n\":1}");
+    Doc a;
+    jp(array,&a);
+    ok=ok&&count(&a,0)==1;
+    free(a.v);
+    free(array);
+    Buf q;
+    init(&q);
+    quote(&q,"line\nquote\"");
+    ok=ok&&strcmp(q.s,"\"line\\nquote\\\"\"")==0;
+    free(q.s);
+    if(ok)puts("Gemma C self-test: PASS");
+    else fprintf(stderr,"Gemma C self-test: FAIL\n");
+    return ok?0:1;
+}
+
 int main(int argc,char**argv) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 #endif
+    if(argc>1&&!strcmp(argv[1],"--self-test"))return self_test();
     if(curl_global_init(CURL_GLOBAL_DEFAULT)!=CURLE_OK)die("libcurl init failed");
     State s;
     state_init(&s);
