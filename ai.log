@@ -32,12 +32,14 @@ Keep Google Search behavior strictly provider-specific. Antigravity OAuth models
 
 ## Diagnostics and reliability TODO
 
-- [ ] Log provider, selected answer model, and search mode clearly in `.grounding status`.
-- [ ] Keep native-grounding execution/errors distinct from client-side `web_search` execution/errors.
-- [ ] Surface grounding query strings, source count, source titles, and URLs when available; never claim a search succeeded without grounding metadata.
-- [ ] Preserve HTTP status, capacity-exhaustion reason, and retry delay in errors. A 503 `MODEL_CAPACITY_EXHAUSTED` is a model capacity issue, not an authentication or tool-configuration failure.
+- [x] Log provider, selected answer model, and search mode clearly in `.grounding status`.
+- [x] Keep native-grounding diagnostics distinct from client-side `web_search` execution diagnostics.
+- [x] Surface grounding query strings, source count, source titles, and URLs when available; never claim a search succeeded without grounding metadata.
+- [x] Preserve HTTP status and raw Google error response; additionally extract structured error reason, model, and retry delay when present. A 503 `MODEL_CAPACITY_EXHAUSTED` remains identified as a capacity issue, not an authentication or tool-configuration failure.
 - [ ] Test both provider paths with grounding ON and OFF, including a request that does not need search.
-- [ ] Run PowerShell syntax validation and live endpoint tests after changes; GitHub content verification alone is not runtime testing.
+- [ ] Run Windows PowerShell 5.1 syntax validation and live endpoint tests after changes; GitHub content verification alone is not runtime testing.
+
+Implementation note: diagnostic wiring committed to `work` in `e9c7c4f3832b1da5405afbef586db39b1fd3e80d`. Native Antigravity responses now report grounding metadata when present and explicitly say when metadata is absent; Gemini API `web_search` reports its research model, query count, source count, queries, and source URLs. Structured Google API error details are printed in addition to the raw response. These are code changes only; no live provider or Windows PowerShell runtime test has been run.
 
 ## Acceptance matrix
 
