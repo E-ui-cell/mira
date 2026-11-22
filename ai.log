@@ -230,3 +230,7 @@ Branch: mira-m, created from main.
 ## Validation status
 
 The source and GitHub branch have been updated, but this environment has no Windows PowerShell 5.1 or PowerShell 7 executable. No PowerShell parser test, Windows runtime test, OAuth exchange, live Google Search request, or model tool-call test has been run. Do not describe these features as runtime-verified until those tests pass.
+
+
+- [x] Add mira/tests/Test-Syntax.ps1, a Windows PowerShell 5.1-compatible parser check for the main script and repository tool modules.
+- [x] Document the parser check in README.md. It parses source without executing it; live OAuth/API/grounding/tool tests remain outstanding.
