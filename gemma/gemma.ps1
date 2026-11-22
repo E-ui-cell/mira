@@ -195,19 +195,17 @@ function New-GemmaRandomString {
 function Set-GemmaPrivateAcl {
     param([string]$Path, [switch]$Directory)
     if (-not (Test-Path -LiteralPath $Path)) { throw "Cannot secure missing path: $Path" }
+
+    # icacls changes the DACL only. Set-Acl can attempt to write the SACL
+    # (audit entries), which requires SeSecurityPrivilege.
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-    $sid = $identity.User
-    $acl = Get-Acl -LiteralPath $Path
-    $acl.SetAccessRuleProtection($true, $false)
-    foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleAll($rule) }
-    if ($Directory) {
-        $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, $inheritance, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
-    } else {
-        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)
+    $sid = $identity.User.Value
+    $rights = if ($Directory) { '(OI)(CI)F' } else { 'F' }
+
+    & "$env:SystemRoot\System32\icacls.exe" $Path /inheritance:r /grant:r "$($sid):$rights" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not set private DACL on '$Path' (icacls exit code $LASTEXITCODE)."
     }
-    [void]$acl.AddAccessRule($rule)
-    Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
 function Save-AntigravityToken {
@@ -216,18 +214,32 @@ function Save-AntigravityToken {
     $directory = Split-Path -Parent $path
     if (-not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
     Set-GemmaPrivateAcl -Path $directory -Directory
+
     $json = $TokenData | ConvertTo-Json -Depth 8
     $temp = $path + '.tmp-' + [guid]::NewGuid().ToString('N')
-    [System.IO.File]::WriteAllText($temp, $json, (New-Object System.Text.UTF8Encoding($false)))
+    $backup = $null
+
     try {
+        [System.IO.File]::WriteAllText($temp, $json, (New-Object System.Text.UTF8Encoding($false)))
+
         if (Test-Path -LiteralPath $path) {
-            [System.IO.File]::Replace($temp, $path, $null)
+            # File.Replace requires a valid backup path on some .NET/Windows
+            # combinations; passing $null can produce "path is not of a legal form".
+            $backup = $path + '.bak-' + [guid]::NewGuid().ToString('N')
+            [System.IO.File]::Replace($temp, $path, $backup)
+            if (Test-Path -LiteralPath $backup) {
+                Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+            }
         } else {
             [System.IO.File]::Move($temp, $path)
         }
+
         Set-GemmaPrivateAcl -Path $path
     } finally {
         if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+        if ($backup -and (Test-Path -LiteralPath $backup)) {
+            Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
