@@ -492,8 +492,9 @@ function Invoke-GemmaSearchCommand {
         $script:GoogleSearchGrounding = $false
         Write-Host '[Google Search disabled.]' -ForegroundColor Yellow
     } elseif ($value -eq 'status' -or -not $value) {
-        $state = if (-not $script:GoogleSearchGrounding) { 'OFF' } elseif ($script:Provider -eq 'antigravity') { 'ON (native Antigravity Google Search grounding)' } elseif ($script:AgenticWebSearchEnabled) { "ON (agentic web_search via Antigravity OAuth; research model: $MIRA_SEARCH_MODEL)" } else { 'ON, but the Gemini API agentic web_search tool is disabled' }
-        Write-Host "[Google Search: $state | answer: $script:Provider/$script:MODEL]" -ForegroundColor Cyan
+        $state = if (-not $script:GoogleSearchGrounding) { 'OFF' } elseif ($script:Provider -eq 'antigravity') { 'ON (native Antigravity Google Search; no client web_search function)' } elseif ($script:AgenticWebSearchEnabled) { "ON (Gemini API client web_search via Antigravity OAuth; research model: $MIRA_SEARCH_MODEL)" } else { 'ON, but Gemini API web_search is disabled by MIRA_ENABLE_AGENTIC_WEB_SEARCH' }
+        Write-Host "[Google Search: $state]" -ForegroundColor Cyan
+        Write-Host "[Provider: $script:Provider | answer model: $script:MODEL | grounding requested: $script:GoogleSearchGrounding | agentic web_search enabled: $script:AgenticWebSearchEnabled]" -ForegroundColor DarkGray
     } else { Write-Host 'Usage: .grounding on | .grounding off | .grounding status' -ForegroundColor Yellow }
 }
 
@@ -550,6 +551,55 @@ function Invoke-GemmaWebSearch {
     if ([string]::IsNullOrWhiteSpace($research)) { throw "Model '$searchModel' returned grounding metadata but no readable research or sources." }
     if ($research.Length -gt $MIRA_MAX_SEARCH_OUTPUT_CHARS) { $research = $research.Substring(0,$MIRA_MAX_SEARCH_OUTPUT_CHARS) + "`n[Search results truncated]" }
     return @{ query=$Query; research=$research; sources=@($sources); search_queries=@($metadata.webSearchQueries); search_model=$searchModel }
+}
+
+function Write-GemmaGroundingDiagnostics {
+    param(
+        [object]$Candidate,
+        [string]$Provider,
+        [string]$Model,
+        [bool]$GroundingEnabled
+    )
+
+    $mode = if (-not $GroundingEnabled) {
+        'OFF'
+    } elseif ($Provider -eq 'antigravity') {
+        'native Antigravity server-side Google Search'
+    } elseif ($script:AgenticWebSearchEnabled) {
+        "client web_search via Antigravity OAuth (research model: $MIRA_SEARCH_MODEL)"
+    } else {
+        'Gemini API grounding requested, but agentic web_search is disabled'
+    }
+    Write-Host "[Grounding diagnostics] provider=$Provider | answer_model=$Model | mode=$mode" -ForegroundColor DarkGray
+
+    $metadata = $Candidate.groundingMetadata
+    if ($null -eq $metadata) {
+        if ($Provider -eq 'antigravity' -and $GroundingEnabled) {
+            Write-Host '[Native grounding] No grounding metadata was returned with this candidate; search success is unverified.' -ForegroundColor Yellow
+        }
+        return
+    }
+
+    $queries = @($metadata.webSearchQueries | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    $sources = New-Object System.Collections.Generic.List[string]
+    $seen = @{}
+    foreach ($chunk in @($metadata.groundingChunks)) {
+        if ($chunk.web -and $chunk.web.uri) {
+            $uri = [string]$chunk.web.uri
+            if (-not $seen.ContainsKey($uri)) {
+                $seen[$uri] = $true
+                $title = if ($chunk.web.title) { [string]$chunk.web.title } else { $uri }
+                [void]$sources.Add("$title — $uri")
+            }
+        }
+    }
+
+    Write-Host ("[Grounding metadata] queries={0} | sources={1}" -f $queries.Count,$sources.Count) -ForegroundColor DarkGray
+    foreach ($query in $queries) { Write-Host "  [Search query] $query" -ForegroundColor DarkGray }
+    foreach ($source in $sources) { Write-Host "  [Search source] $source" -ForegroundColor DarkGray }
+    if ($queries.Count -eq 0 -and $sources.Count -eq 0) {
+        Write-Host '[Grounding metadata] Metadata object exists but contains no search queries or web sources.' -ForegroundColor Yellow
+    }
 }
 
 function Invoke-GemmaPermissionCommand {
@@ -1654,6 +1704,23 @@ while ($true) {
                     if ($body) {
                         Write-Host "Google API response:" -ForegroundColor Yellow
                         Write-Host $body -ForegroundColor Gray
+                        try {
+                            $errorObject = $body | ConvertFrom-Json -ErrorAction Stop
+                            $errorDetails = @($errorObject.error.details)
+                            foreach ($detail in $errorDetails) {
+                                if ($detail.reason) {
+                                    Write-Host "[API error reason] $($detail.reason)" -ForegroundColor Yellow
+                                }
+                                if ($detail.metadata.model) {
+                                    Write-Host "[API error model] $($detail.metadata.model)" -ForegroundColor Yellow
+                                }
+                                if ($detail.retryDelay) {
+                                    Write-Host "[API retry delay] $($detail.retryDelay)" -ForegroundColor Yellow
+                                }
+                            }
+                        } catch {
+                            # Preserve the raw response above when it is not Google Error JSON.
+                        }
                     } else {
                         Write-Host "Google API response: <empty>" -ForegroundColor Gray
                     }
@@ -1693,6 +1760,7 @@ while ($true) {
 
             if ($response.candidates.Count -gt 0) {
                 $candidate = $response.candidates[0]
+                Write-GemmaGroundingDiagnostics -Candidate $candidate -Provider $script:Provider -Model $script:MODEL -GroundingEnabled $script:GoogleSearchGrounding
 
                 if ($null -ne $candidate.finishReason) {
                     Write-Host "[Gemini Finish Reason]: $($candidate.finishReason)" -ForegroundColor DarkGray
@@ -1743,8 +1811,14 @@ while ($true) {
                         }
                         "web_search" {
                             $searchAllowed = ($script:Provider -eq 'gemini' -and $script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled)
-                            if (-not $searchAllowed) { $toolResult = @{ error = "Google Search is disabled or unavailable for the current provider/settings." } }
-                            else { $toolResult = Invoke-GemmaWebSearch -Query ([string]$call.args.query) }
+                            if (-not $searchAllowed) {
+                                $toolResult = @{ error = "Google Search is disabled or unavailable for the current provider/settings." }
+                            } else {
+                                $toolResult = Invoke-GemmaWebSearch -Query ([string]$call.args.query)
+                                Write-Host ("[Agentic web_search] model={0} | queries={1} | sources={2}" -f $toolResult.search_model,@($toolResult.search_queries).Count,@($toolResult.sources).Count) -ForegroundColor DarkGray
+                                foreach ($searchQuery in @($toolResult.search_queries)) { Write-Host "  [Search query] $searchQuery" -ForegroundColor DarkGray }
+                                foreach ($source in @($toolResult.sources)) { Write-Host "  [Search source] $source" -ForegroundColor DarkGray }
+                            }
                         }
                         "run_powershell" {
                             $toolResult = Invoke-GemmaPowerShellTool -Command ([string]$call.args.command)
