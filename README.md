@@ -528,6 +528,14 @@ PERPLEXITY_API_KEY
 
 Optional MIRA environment settings include history, compression, model-test and cache controls, `MIRA_ENABLE_AGENTIC_WEB_SEARCH`, and `MIRA_SEARCH_MODEL`. `AGY_GOOGLE_CLIENT_ID` and `AGY_GOOGLE_CLIENT_SECRET` can override the Antigravity OAuth client values.
 
+## Syntax validation
+
+Run the repository parser check on Windows PowerShell 5.1 (or PowerShell 7):
+
+    powershell.exe -NoProfile -File .\mira\tests\Test-Syntax.ps1
+
+The check parses mira.ps1 and every repository tool module without executing them. It is a syntax check only; it does not test OAuth, live API calls, grounding metadata, or tool execution.
+
 ## Platform
 
 Target:
