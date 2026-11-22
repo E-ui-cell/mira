@@ -1,64 +1,84 @@
-# Gemma language ports
+# Gemma C
 
-These are independent first-pass ports of `gemma.ps1`. They do not replace the Windows PowerShell implementation.
+A single-source, cross-platform C client for Google Gemini and Antigravity OAuth.
 
-## Files
+## Build
 
-- `gemma.py` — Python 3, standard library only; intended to run on Windows, macOS, and Linux.
-- `gemma.sh` — Bash implementation for Unix-like environments. Requires `bash`, `curl`, `jq`, `openssl`, and GNU `date` (Linux/WSL or another GNU userland); `python3` is used only to parse a pasted OAuth callback URL.
+The program is one C source file. It uses **libcurl** for HTTPS and **OpenSSL** for SHA-256/PKCE on Unix-like systems. JSON parsing is embedded; no JSON package, Python, Bash, PowerShell, jq, or runtime interpreter is required.
 
-## Start
-
-Python:
+Linux (Debian/Ubuntu):
 
 ```sh
-python3 gemma.py
-python3 gemma.py -p "show weather"
-python3 gemma.py -e "find notes.txt and open the file manager selecting it"
+sudo apt install build-essential libcurl4-openssl-dev libssl-dev
+cc -O2 -std=c11 gemma.c -lcurl -lcrypto -o gemma
 ```
 
-Bash:
+macOS (Homebrew):
 
 ```sh
-chmod +x gemma.sh
-./gemma.sh
-./gemma.sh -p "show weather"
-./gemma.sh -e "find notes.txt and open the file manager selecting it"
+brew install curl openssl
+cc -O2 -std=c11 gemma.c $(pkg-config --cflags --libs libcurl openssl) -o gemma
 ```
 
-`-p` makes one interactive request (tool calls and permission prompts remain enabled). `-e` asks for a command only and does not execute it.
+Windows (MSYS2 MinGW64 shell):
 
-## Authentication
+```sh
+pacman -S --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-curl mingw-w64-x86_64-openssl
+gcc -O2 -std=c11 gemma.c -lcurl -lcrypto -lbcrypt -lws2_32 -lshell32 -o gemma.exe
+```
 
-Both ports use the same Antigravity token location as the PowerShell script:
+## Run
+
+```sh
+./gemma
+./gemma -p "show weather"
+./gemma -e "find notes.txt and open the file manager selecting it"
+```
+
+- `-p`: one interactive request; local tool calls and ASK confirmations remain enabled.
+- `-e`: command suggestion only; no tools are exposed and nothing is executed.
+- `.multi`: enter multiline paste mode; finish by entering `.end` on its own line.
+
+## Commands
+
+- `.model` — fetch the current provider's model catalogue and choose by number or ID; `.model ID` selects directly.
+- `.provider antigravity|gemini`
+- `.effort low|medium|high` — Gemini 3 uses `thinkingLevel`; Gemini 2.5 uses `thinkingBudget`.
+- `.grounding on|off` — Search runs as a separate Antigravity OAuth request. It is never combined with function declarations in one request.
+- `.ask` — each local command asks for confirmation; Enter means Yes (default).
+- `.autopilot` — local commands run without per-command confirmation.
+- `.verbose on|off` — request thought summaries where supported.
+- `.auth login|status|logout`
+- `.clear`, `.help`, `.q`
+
+## Authentication and configuration
+
+Antigravity uses the shared token file:
 
 `~/.gemini/antigravity-cli/antigravity-oauth-token`
 
-They can reuse an existing token file and refresh it. Token expiry is written as ISO-8601 UTC so it remains compatible with the PowerShell implementation.
-
-For a new OAuth login, set these environment variables first:
+The client reuses and refreshes that token. For a new OAuth login, provide:
 
 - `AGY_GOOGLE_CLIENT_ID`
 - `AGY_GOOGLE_CLIENT_SECRET`
 
-Then run `.auth login`. The credentials are deliberately not duplicated in these new files. `GEMINI_APIJ` is retained as the Gemini Developer API key environment variable used by the existing PowerShell script.
+The C source intentionally contains no OAuth client credentials. This also means refresh of an expired token requires those environment variables.
 
-Optional configuration:
+Gemini Developer API uses the existing `GEMINI_APIJ` environment variable.
+
+Optional environment variables:
 
 - `GEMMA_PROVIDER=antigravity|gemini`
 - `GEMMA_MODEL=<model-id>`
-- `GEMMA_SEARCH_MODEL=<search-model-id>`
+- `GEMMA_SEARCH_MODEL=<model-id>`
+- `GEMMA_EFFORT=low|medium|high`
 
-## Initial-port scope and known gaps
+## Scope and current limitations
 
-Both ports implement the core request loop, Antigravity OAuth token refresh, model listing/switching, separate Search-only preflight, basic function tools, ASK/AUTOPILOT, `.provider`, `.grounding`, `.model`, `.auth`, `-p`, and `-e`.
+Implemented in this first C pass: Antigravity OAuth token reuse/refresh/login, Gemini API requests, model catalogue, Gemini 3/2.5 effort controls, Search-only grounding preflight, function calling, quick weather/IP/cheatsheet lookups, local shell commands with ASK/AUTOPILOT, multiline input mode, and `-p`/`-e`.
 
-They are not feature-equivalent to the 2,400-line PowerShell program yet:
+Not yet ported from the PowerShell application: Windows UI Automation and native desktop helpers, clipboard/window controls, skill loading, Explorer-specific integration, spinner, persistent sessions and session export/import. `.save` is not implemented yet. The command runner currently displays command output directly in the terminal rather than returning captured stdout to the model.
 
-- The Windows-specific UI Automation, clipboard, window management, native C# helper, skill loader, rich multiline editor, spinner, and Explorer integration are not ported.
-- Python currently has no persistent conversation history/session export and its `.clear`/ `.save` commands are placeholders.
-- Bash currently has no persistent history/session export; its `.clear` and `.save` commands are placeholders.
-- Bash uses the local Bash shell for `run_command`; the Python port uses the platform's default command shell.
-- Native Search availability depends on the Google account's `webSearchModelIds` capability list and server capacity. A 503 capacity error is not repaired by changing the client language.
+A Search capacity or account-entitlement error is a Google-side limitation; changing the implementation language cannot fix a 503 `MODEL_CAPACITY_EXHAUSTED` response.
 
-These are initial ports for review, not runtime-validated releases. Test them with a non-sensitive request before enabling AUTOPILOT.
+This source has not yet been runtime-validated on Windows, macOS, or Linux. Do not treat the C port as a tested release until the build checks pass on those platforms.
