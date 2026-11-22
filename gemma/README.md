@@ -76,10 +76,10 @@ Optional environment variables:
 
 ## Scope and current limitations
 
-Implemented in this first C pass: Antigravity OAuth token reuse/refresh/login, Gemini API requests, model catalogue, Gemini 3/2.5 effort controls, Search-only grounding preflight, function calling, quick weather/IP/cheatsheet lookups, local shell commands with ASK/AUTOPILOT, multiline input mode, and `-p`/`-e`.
+Implemented in this first C pass: Antigravity OAuth token reuse/refresh/login, Gemini API requests, model catalogue, Gemini 3/2.5 effort controls, Search-only grounding preflight, function calling, quick weather/IP/cheatsheet lookups, local shell commands with captured output and ASK/AUTOPILOT, multiline input mode, session save/load/export, and `-p`/`-e`.
 
-Not yet ported from the PowerShell application: Windows UI Automation and native desktop helpers, clipboard/window controls, skill loading, Explorer-specific integration, spinner, Windows UI Automation and native desktop helpers, clipboard/window controls, skill loading, Explorer-specific integration, and spinner. The command runner captures and returns stdout/stderr (up to 20,000 characters) while also displaying it in the terminal.
+Not yet ported from the PowerShell application: Windows UI Automation and native desktop helpers, clipboard/window controls, skill loading, Explorer-specific integration, and spinner.
 
 A Search capacity or account-entitlement error is a Google-side limitation; changing the implementation language cannot fix a 503 `MODEL_CAPACITY_EXHAUSTED` response.
 
-This source has not yet been runtime-validated on Windows, macOS, or Linux. Do not treat the C port as a tested release until the build checks pass on those platforms.
+The GitHub Actions build matrix compiles the source on Windows, macOS, and Linux. Live OAuth, model requests, Search availability, and local command execution still require runtime testing on each target system.
