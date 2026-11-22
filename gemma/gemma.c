@@ -944,7 +944,7 @@ static char *tool(State*s,const char*n,const char*a) {
                 return ds("{\"denied\":true}");
             }
         }
-                Buf shell;
+        Buf shell;
         init(&shell);
         put(&shell,cmd);
         put(&shell," 2>&1");
@@ -956,12 +956,19 @@ static char *tool(State*s,const char*n,const char*a) {
         init(&output);
         char chunk[2048];
         int truncated=0;
-        while(fgets(chunk,sizeof chunk,pipe)){
+        while(fgets(chunk,sizeof chunk,pipe)) {
             size_t left=MAX_OUTPUT-output.n;
             size_t z=strlen(chunk);
-            if(z>left){putn(&output,chunk,left);truncated=1;continue;}
+            if(z>left) {
+                putn(&output,chunk,left);
+                truncated=1;
+                continue;
+            }
             putn(&output,chunk,z);
-            if(output.n>=MAX_OUTPUT){truncated=1;continue;}
+            if(output.n>=MAX_OUTPUT) {
+                truncated=1;
+                continue;
+            }
         }
         int status=pclose(pipe);
         int rc=status;
@@ -969,7 +976,10 @@ static char *tool(State*s,const char*n,const char*a) {
         if(status>=0&&WIFEXITED(status))rc=WEXITSTATUS(status);
         else if(status>=0&&WIFSIGNALED(status))rc=128+WTERMSIG(status);
 #endif
-        if(output.n){fputs(output.s,stdout);fflush(stdout);}
+        if(output.n) {
+            fputs(output.s,stdout);
+            fflush(stdout);
+        }
         Buf result;
         init(&result);
         fmt(&result,"{\"exit_code\":%d,\"stdout\":",rc);
@@ -1359,8 +1369,7 @@ static void help(void) {
     puts("          .auth login|status|logout .save .exportsession [path] .loadsession [path]");
     puts("Options:   -p \"request\" (one tool-enabled request)  -e \"request\" (command only; never executes)");
 }
-
-static void session_path(State*s,char*out,size_t cap){
+static void session_path(State*s,char*out,size_t cap) {
     char p[PATH_MAX];
     snprintf(p,sizeof p,"%s",s->token);
     char *a=strrchr(p,SEP);
@@ -1369,16 +1378,23 @@ static void session_path(State*s,char*out,size_t cap){
     if(b)*b=0;
     snprintf(out,cap,"%s%cgemma-session.json",p,SEP);
 }
-static int save_session(State*s,const char*requested){
+static int save_session(State*s,const char*requested) {
     char path[PATH_MAX];
     if(requested&&*requested)snprintf(path,sizeof path,"%s",requested);
     else session_path(s,path,sizeof path);
-    Buf b;init(&b);
-    put(&b,"{\"version\":1,\"provider\":");quote(&b,s->provider);
-    put(&b,",\"model\":");quote(&b,s->model);
-    put(&b,",\"effort\":");quote(&b,s->effort);
+    Buf b;
+    init(&b);
+    put(&b,"{\"version\":1,\"provider\":");
+    quote(&b,s->provider);
+    put(&b,",\"model\":");
+    quote(&b,s->model);
+    put(&b,",\"effort\":");
+    quote(&b,s->effort);
     put(&b,",\"history\":[");
-    for(int i=0;i<s->nh;i++){if(i)put(&b,",");put(&b,s->hist[i]);}
+    for(int i=0;i<s->nh;i++) {
+        if(i)put(&b,",");
+        put(&b,s->hist[i]);
+    }
     put(&b,"]}");
     int ok=savefile(path,b.s);
     if(ok)printf("[Session saved: %s]\n",path);
@@ -1386,27 +1402,53 @@ static int save_session(State*s,const char*requested){
     free(b.s);
     return ok;
 }
-static int load_session(State*s,const char*requested){
+static int load_session(State*s,const char*requested) {
     char path[PATH_MAX];
     if(requested&&*requested)snprintf(path,sizeof path,"%s",requested);
     else session_path(s,path,sizeof path);
     char*r=readfile(path);
-    if(!r){fprintf(stderr,"Could not read session: %s\n",path);return 0;}
-    Doc d;jp(r,&d);
+    if(!r) {
+        fprintf(stderr,"Could not read session: %s\n",path);
+        return 0;
+    }
+    Doc d;
+    jp(r,&d);
     int h=jget(r,&d,0,"history");
-    if(h<0){fprintf(stderr,"Session file has no history array.\n");free(d.v);free(r);return 0;}
+    if(h<0) {
+        fprintf(stderr,"Session file has no history array.\n");
+        free(d.v);
+        free(r);
+        return 0;
+    }
     hclear(s);
-    for(int i=h+1;i<d.n&&d.v[i].a<d.v[h].z;i=next(&d,i)){
-        char*x=raw(r,&d,i);hadd(s,x);free(x);
+    for(int i=h+1;i<d.n&&d.v[i].a<d.v[h].z;i=next(&d,i)) {
+        char*x=raw(r,&d,i);
+        hadd(s,x);
+        free(x);
     }
     char*v=jval(r,&d,0,"provider");
-    if(*v&&(eq(v,"antigravity")||eq(v,"gemini"))){free(s->provider);s->provider=ds(v);}free(v);
-    v=jval(r,&d,0,"model");if(*v){free(s->model);s->model=ds(v);}free(v);
-    v=jval(r,&d,0,"effort");if(eq(v,"low")||eq(v,"medium")||eq(v,"high")){free(s->effort);s->effort=ds(v);}free(v);
+    if(*v&&(eq(v,"antigravity")||eq(v,"gemini"))) {
+        free(s->provider);
+        s->provider=ds(v);
+    }
+    free(v);
+    v=jval(r,&d,0,"model");
+    if(*v) {
+        free(s->model);
+        s->model=ds(v);
+    }
+    free(v);
+    v=jval(r,&d,0,"effort");
+    if(eq(v,"low")||eq(v,"medium")||eq(v,"high")) {
+        free(s->effort);
+        s->effort=ds(v);
+    }
+    free(v);
     printf("[Session loaded: %d messages from %s]\n",s->nh,path);
-    free(d.v);free(r);return 1;
+    free(d.v);
+    free(r);
+    return 1;
 }
-
 static void prompt(State*s,const char*p,int command);
 static void multiline(State*s) {
     Buf b;
