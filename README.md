@@ -182,6 +182,8 @@ Built-in function tools include:
 - get_skill — load a task playbook on demand
 - web_search — Gemini Developer API only, when agentic web search is enabled
 
+Function tools are available to Gemini Developer API, Antigravity OAuth, and OpenAI-compatible providers. OpenAI-compatible streaming mode omits tool declarations; turn streaming off to use tools with those providers.
+
 Repository tool modules in mira/tools add bounded file search/read and system information. User modules can be placed in %USERPROFILE%\.mira\tools; user-authored Markdown skills go in %USERPROFILE%\.mira\skills.
 
 Use .tools, .skills, and .skill <name> to inspect the extension system. Read mira/tools/README.md before writing a tool module. PowerShell modules are executable code and must be reviewed before loading.
