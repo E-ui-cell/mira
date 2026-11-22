@@ -140,10 +140,6 @@ function Invoke-GeminiModelSwitcher {
         }
         if ($null -eq $chosen) { Write-Host "[Unknown selection. Model unchanged: $script:MODEL]" -ForegroundColor Red; return }
         $script:MODEL = [string]$chosen.name -replace '^models/', ''
-        if ($script:GoogleSearchGrounding -and $script:MODEL -ine "gemini-3.1-flash-lite") {
-            $script:GoogleSearchGrounding = $false
-            Write-Host "[Google Search grounding disabled because the selected model is not on the verified support list.]" -ForegroundColor Yellow
-        }
         Write-Host "`n[Model switched to: $script:MODEL]" -ForegroundColor Green
     } catch {
         Write-Host "`n[Could not fetch/switch models]: $($_.Exception.Message)" -ForegroundColor Red
@@ -437,6 +433,7 @@ function Invoke-GemmaWebSearch {
     if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) { throw 'Web search requires Antigravity OAuth. Run .auth login.' }
     if ([string]::IsNullOrWhiteSpace($Query)) { throw 'web_search requires a non-empty query.' }
     $payload = @{
+        systemInstruction = @{ role = 'user'; parts = @(@{ text = 'You are a web research agent. Search with Google Search and return a concise factual brief with relevant source references.' }) }
         contents = @(@{ role = 'user'; parts = @(@{ text = "Search the web for this query. Return a concise factual research brief and relevant sources. Query: $Query" }) })
         tools = @(@{ googleSearch = @{} })
         toolConfig = @{ includeServerSideToolInvocations = $true }
