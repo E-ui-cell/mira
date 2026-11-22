@@ -572,6 +572,7 @@ function Write-GemmaGroundingDiagnostics {
         [string]$Model,
         [bool]$GroundingEnabled
     )
+    if ($script:Headless) { return }
 
     $mode = if (-not $GroundingEnabled) {
         'OFF'
@@ -627,8 +628,7 @@ function Invoke-GemmaPermissionCommand {
 function Invoke-GemmaPowerShellTool {
     param([string]$Command)
     if ([string]::IsNullOrWhiteSpace($Command)) { throw 'run_powershell requires a command.' }
-    Write-Host "`n[PowerShell requested by model]:" -ForegroundColor DarkYellow
-    Write-Host $Command -ForegroundColor Gray
+    if (-not $script:Headless) { Write-Host "`n[PowerShell requested by model]:" -ForegroundColor DarkYellow; Write-Host $Command -ForegroundColor Gray }
     if ($script:ExecutionPermission -eq 'ask') {
         if ($script:Headless) { return @{ approved=$false; output='Permission required; headless ASK mode cannot prompt. Use interactive mode or explicitly pass -Autopilot.' } }
         $approval = Read-Host 'Execute this PowerShell command? [Y/n]'
@@ -821,6 +821,7 @@ function Invoke-GemmaDirectCommand {
     param([string]$Name,[string]$Argument)
     Initialize-GemmaNativeWindows
     switch ($Name.Trim().ToLowerInvariant()) {
+        'help' { return "Commands: system-info, process-list, clipboard-read, clipboard-write, window-list, window-activate, ui-tree, ui-action, app-launch, settings-open, network-check, file-search. Skills: `$HOME\.gemma\skills\<name>.md. AI: -Headless -Prompt <text> [-Json], -Stdin, -Search <query>. Use -Autopilot only when explicitly intended." }
         'system-info' {
             $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystem; $cpu=Get-CimInstance Win32_Processor|Select-Object -First 1
             return [pscustomobject]@{Computer=$cs.Name;Manufacturer=$cs.Manufacturer;Model=$cs.Model;OS=$os.Caption;Version=$os.Version;Build=$os.BuildNumber;Architecture=$os.OSArchitecture;CPU=$cpu.Name;RAM_GB=[math]::Round($cs.TotalPhysicalMemory/1GB,2);PowerShell=$PSVersionTable.PSVersion.ToString()}
@@ -847,6 +848,14 @@ function Invoke-GemmaDirectCommand {
             $handle=if($Argument.StartsWith('0x')){[Convert]::ToInt64($Argument.Substring(2),16)}else{[long]$Argument}
             if (-not (Confirm-GemmaDirectAction "Activate window $Argument")) { throw 'Window activation not approved.' }
             return @{activated=[GemmaNativeWindows]::Activate($handle);handle=$Argument}
+        }
+        'settings-open' {
+            $allowed=@('display','sound','network-wifi','network-ethernet','appsfeatures','windowsupdate','privacy','bluetooth','printers','storagesense','startupapps','about','activation','notifications','personalization','windowssecurity')
+            $page=$Argument.Trim().ToLowerInvariant()
+            if($page -notin $allowed){throw ('Unsupported settings page. Allowed: '+($allowed -join ', '))}
+            if(-not (Confirm-GemmaDirectAction "Open Windows Settings page: $page")){throw 'Settings launch not approved.'}
+            Start-Process -FilePath ("ms-settings:"+$page) -ErrorAction Stop
+            return @{opened=$true;page=$page}
         }
         'app-launch' {
             if ([string]::IsNullOrWhiteSpace($Argument)) { throw 'Provide an application path or name.' }
@@ -906,7 +915,7 @@ function Invoke-GemmaDirectCommand {
             }
             return @($items)
         }
-        default { throw "Unknown direct command '$Name'. Available: system-info, process-list, clipboard-read, clipboard-write, window-list, window-activate, ui-tree, ui-action, app-launch, network-check, file-search." }
+        default { throw "Unknown direct command '$Name'. Available: help, system-info, process-list, clipboard-read, clipboard-write, window-list, window-activate, ui-tree, ui-action, app-launch, settings-open, network-check, file-search." }
     }
 }
 
@@ -2076,11 +2085,11 @@ while ($true) {
                 $candidate = $response.candidates[0]
                 Write-GemmaGroundingDiagnostics -Candidate $candidate -Provider $script:Provider -Model $script:MODEL -GroundingEnabled $script:GoogleSearchGrounding
 
-                if ($null -ne $candidate.finishReason) {
+                if (-not $script:Headless -and $null -ne $candidate.finishReason) {
                     Write-Host "[Gemini Finish Reason]: $($candidate.finishReason)" -ForegroundColor DarkGray
                 }
 
-                if ($null -ne $candidate.safetyRatings) {
+                if (-not $script:Headless -and $null -ne $candidate.safetyRatings) {
                     foreach ($rating in $candidate.safetyRatings) {
                         Write-Host "[Safety] $($rating.category) = $($rating.probability) | blocked=$($rating.blocked)" -ForegroundColor DarkGray
                     }
@@ -2129,9 +2138,11 @@ while ($true) {
                                 $toolResult = @{ error = "Google Search is disabled or unavailable for the current provider/settings." }
                             } else {
                                 $toolResult = Invoke-GemmaWebSearch -Query ([string]$call.args.query)
-                                Write-Host ("[Agentic web_search] model={0} | queries={1} | sources={2}" -f $toolResult.search_model,@($toolResult.search_queries).Count,@($toolResult.sources).Count) -ForegroundColor DarkGray
-                                foreach ($searchQuery in @($toolResult.search_queries)) { Write-Host "  [Search query] $searchQuery" -ForegroundColor DarkGray }
-                                foreach ($source in @($toolResult.sources)) { Write-Host "  [Search source] $source" -ForegroundColor DarkGray }
+                                if (-not $script:Headless) {
+                                    Write-Host ("[Agentic web_search] model={0} | queries={1} | sources={2}" -f $toolResult.search_model,@($toolResult.search_queries).Count,@($toolResult.sources).Count) -ForegroundColor DarkGray
+                                    foreach ($searchQuery in @($toolResult.search_queries)) { Write-Host "  [Search query] $searchQuery" -ForegroundColor DarkGray }
+                                    foreach ($source in @($toolResult.sources)) { Write-Host "  [Search source] $source" -ForegroundColor DarkGray }
+                                }
                             }
                         }
                         "run_powershell" {
@@ -2147,7 +2158,7 @@ while ($true) {
                         }
                     }
 
-                    Write-Host "`n[Gemini tool call: $toolName]" -ForegroundColor DarkYellow
+                    if (-not $script:Headless) { Write-Host "`n[Gemini tool call: $toolName]" -ForegroundColor DarkYellow }
 
                     $functionResponse = @{
                         name     = $toolName
