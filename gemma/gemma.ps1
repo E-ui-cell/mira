@@ -1256,7 +1256,9 @@ while ($true) {
         try {
             $cmdOutput = Invoke-Expression $commandToRun 2>&1 | Out-String
             Write-Host $cmdOutput -ForegroundColor Gray
-            $userParts = @( @{ text = "Executed PowerShell Command: $commandToRun`nOutput:`n$cmdOutput" } )
+            $modelCmdOutput = $cmdOutput
+            if ($modelCmdOutput.Length -gt 20000) { $modelCmdOutput = $modelCmdOutput.Substring(0,20000) + "`n[Command output truncated before sending to the model]" }
+            $userParts = @( @{ text = "Executed PowerShell Command: $commandToRun`nOutput:`n$modelCmdOutput" } )
         } catch {
             $errOutput = $_.Exception.Message
             Write-Host "[Error]: $errOutput" -ForegroundColor Red
