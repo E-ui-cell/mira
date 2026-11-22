@@ -202,7 +202,12 @@ function Set-GemmaPrivateAcl {
     $sid = $identity.User.Value
     $rights = if ($Directory) { '(OI)(CI)F' } else { 'F' }
 
-    & "$env:SystemRoot\System32\icacls.exe" $Path /inheritance:r /grant:r "$($sid):$rights" | Out-Null
+    $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+    & $icacls $Path /reset | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not reset DACL on '$Path' (icacls exit code $LASTEXITCODE)."
+    }
+    & $icacls $Path /inheritance:r /grant:r "$($sid):$rights" | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "Could not set private DACL on '$Path' (icacls exit code $LASTEXITCODE)."
     }
