@@ -3,7 +3,6 @@
 # ==============================================================================
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$Host.UI.RawUI.WindowTitle = $MIRA_CONSOLE_TITLE
 
 # ==============================================================================
 # CONFIGURATION & PERSONA INJECTION
@@ -13,7 +12,7 @@ $Host.UI.RawUI.WindowTitle = $MIRA_CONSOLE_TITLE
 # ==============================================================================
 # Answer provider and model
 $MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity' or 'gemini'; no automatic provider switching
-$MIRA_DEFAULT_MODEL = $MIRA_SEARCH_MODEL
+$MIRA_DEFAULT_MODEL = 'gemini-3.1-flash-lite'
 $MIRA_DEFAULT_EFFORT = 'high'                # 'low', 'medium', or 'high'
 $MIRA_SEARCH_MODEL = 'gemini-3.1-flash-lite' # Dedicated search engine; independent of answer provider/model
 
@@ -50,6 +49,7 @@ $MIRA_MAX_HISTORY = 500
 $MIRA_POWERSHELL_OUTPUT_WIDTH = 240
 $MIRA_SPINNER_INTERVAL_MS = 150
 $MIRA_CONSOLE_TITLE = 'GEMMA CLI'
+$Host.UI.RawUI.WindowTitle = $MIRA_CONSOLE_TITLE
 
 $API_KEY = $env:GEMINI_APIJ
 
@@ -469,7 +469,7 @@ function Invoke-GemmaSearchCommand {
         Write-Host '[Agentic web search disabled.]' -ForegroundColor Yellow
     } elseif ($value -eq 'status' -or -not $value) {
         $state = if ($script:GoogleSearchGrounding) { 'ON' } else { 'OFF' }
-        Write-Host "[Agentic web search: $state | search model: gemini-3.1-flash-lite | answer: $script:Provider/$script:MODEL]" -ForegroundColor Cyan
+        Write-Host "[Agentic web search: $state | search model: $MIRA_SEARCH_MODEL | answer: $script:Provider/$script:MODEL]" -ForegroundColor Cyan
     } else { Write-Host 'Usage: .grounding on | .grounding off | .grounding status' -ForegroundColor Yellow }
 }
 
@@ -494,7 +494,7 @@ function Invoke-GemmaWebSearch {
         tools = @(@{ googleSearch = @{} })
         toolConfig = @{ includeServerSideToolInvocations = $true }
     }
-    $result = Invoke-GemmaAntigravityRequest -Payload $payload -Model 'gemini-3.1-flash-lite'
+    $result = Invoke-GemmaAntigravityRequest -Payload $payload -Model $MIRA_SEARCH_MODEL
     if ($null -eq $result.response -or $null -eq $result.response.candidates -or $result.response.candidates.Count -eq 0) { throw 'Gemini 3.1 Flash-Lite search returned no candidates.' }
     $candidate = $result.response.candidates[0]
     $parts = @($candidate.content.parts | Where-Object { $_.text } | ForEach-Object { [string]$_.text.Trim() })
@@ -509,7 +509,7 @@ function Invoke-GemmaWebSearch {
     if ($sources.Count -gt 0) { $research += "`n`nSources:`n" + [string]::Join("`n",$sources) }
     if ([string]::IsNullOrWhiteSpace($research)) { throw 'Search returned no readable research.' }
     if ($research.Length -gt $MIRA_MAX_SEARCH_OUTPUT_CHARS) { $research = $research.Substring(0,$MIRA_MAX_SEARCH_OUTPUT_CHARS) + "`n[Search results truncated]" }
-    return @{ query=$Query; research=$research; sources=@($sources); search_model='gemini-3.1-flash-lite' }
+    return @{ query=$Query; research=$research; sources=@($sources); search_model=$MIRA_SEARCH_MODEL }
 }
 
 function Invoke-GemmaPermissionCommand {
