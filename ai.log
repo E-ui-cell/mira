@@ -163,3 +163,70 @@ Static GitHub content checks can verify source structure but cannot replace Wind
 - Do not claim Windows runtime validation until tested on Windows.
 
 Status: standalone headless entry points, user-authored skill loading, direct Win32 clipboard/window helpers, UI Automation inspection/actions, and local Windows commands are implemented on `work`. Windows runtime/parser validation remains outstanding.
+
+
+# MIRA implementation: Antigravity OAuth, grounding, modular tools and skills
+
+Branch: mira-m, created from main.
+
+## Baseline review and repair
+
+- [x] Review the existing mira.ps1 before feature work.
+- [x] Remove the unreachable duplicated script tail and second TUI entry point; retain one copy of each function and one interactive startup.
+- [x] Remove the embedded OpenRouter placeholder key and make API-key lookup use only each provider's configured environment variable.
+- [x] Preserve the existing MIRA TUI, readline, one-shot/session behavior, provider catalogues, CLI parsing, Windows PowerShell 5.1 target, and Windows 7 compatibility intent.
+- [x] Do not add ACL, ownership, file-permission, or elevation operations.
+
+## Antigravity OAuth
+
+- [x] Add Antigravity as a distinct provider, separate from Gemini Developer API.
+- [x] Implement Google OAuth authorization-code + PKCE, token refresh, token status/logout, and model catalogue discovery.
+- [x] Reuse the shared Gemma token path: %USERPROFILE%\.gemini\antigravity-cli\antigravity-oauth-token.
+- [x] Support AGY_GOOGLE_CLIENT_ID and AGY_GOOGLE_CLIENT_SECRET overrides.
+- [x] Add .auth login|status|logout and .provider antigravity.
+- [x] Add .models refresh [provider] and native OAuth catalogue refresh for Antigravity.
+- [ ] Validate OAuth login, refresh, logout, project loading and model discovery against a real Google account.
+
+## Grounding split
+
+- [x] Antigravity answer requests use native googleSearch: {} when grounding is enabled.
+- [x] Antigravity requests set toolConfig.includeServerSideToolInvocations = true when native grounding is enabled.
+- [x] Do not expose a client-side web_search function to Antigravity answer models.
+- [x] Gemini Developer API requests do not receive Antigravity's native googleSearch.
+- [x] Add an optional Gemini API web_search function, enabled only when grounding is ON and MIRA_ENABLE_AGENTIC_WEB_SEARCH is true.
+- [x] Route that Gemini API function to a separate Antigravity OAuth Search-only request using MIRA_SEARCH_MODEL (default gemini-3.1-flash-lite).
+- [x] Require returned grounding metadata (queries and/or sources) before reporting a web search as successful.
+- [x] Display native grounding metadata and source URLs when Google returns them.
+- [x] Add .grounding on|off|status.
+- [ ] Live-test both provider paths with grounding ON/OFF and verify source metadata.
+
+## Modular tools and skills
+
+- [x] Add a generic Gemini function-call loop with a 12-round safety limit.
+- [x] Preserve model tool-call parts and IDs and return tool results through functionResponse.
+- [x] Add built-in tools: get_current_datetime, run_powershell, quick_web, and get_skill.
+- [x] Add permission mode ASK (default) and AUTOPILOT. ASK confirmation defaults to Yes; .ask restores it and .autopilot allows model-requested tool calls without confirmation.
+- [x] Add on-demand built-in skills: file-management, windows-settings, desktop-gui, clipboard, system-inspection, and quick-web-tools.
+- [x] Add user Markdown skills from %USERPROFILE%\.mira\skills\*.md, with name validation and a 32 KB limit.
+- [x] Add modular PowerShell tool registration through Register-MiraTool.
+- [x] Load trusted tool modules from repository mira\tools\*.ps1 and %USERPROFILE%\.mira\tools\*.ps1.
+- [x] Add repository modules file-system.ps1 (search_files, permission-gated read_text_file) and system-info.ps1 (get_system_info).
+- [x] Add .tools, .skills, .skill <name>, .ask, and .autopilot.
+- [x] Treat file/web/skill results as untrusted data; skills never grant permissions.
+- [x] Require approval for PowerShell execution, file reads/searches, and system information; quick lookups and skill retrieval are read-only.
+- [ ] Validate module loading and tool schemas on Windows PowerShell 5.1.
+- [ ] Test ASK default-Yes, denial handling, AUTOPILOT, tool-loop limits, and session history with tool-call turns.
+
+## Files changed
+
+- mira.ps1
+- mira/tools/file-system.ps1
+- mira/tools/system-info.ps1
+- mira/tools/README.md
+- mira/skills/README.md
+- README.md
+- ai.log
+
+## Validation status
+
+The source and GitHub branch have been updated, but this environment has no Windows PowerShell 5.1 or PowerShell 7 executable. No PowerShell parser test, Windows runtime test, OAuth exchange, live Google Search request, or model tool-call test has been run. Do not describe these features as runtime-verified until those tests pass.
