@@ -21,7 +21,8 @@ refresh(){
  rt="$(jq -r '.token.refresh_token // empty' "$TOKEN")"
  [[ -n "$CID" && -n "$CSECRET" && -n "$rt" ]] || { echo "Set AGY_GOOGLE_CLIENT_ID/SECRET" >&2; return 1; }
  r="$(curl -fsS https://oauth2.googleapis.com/token -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode "refresh_token=$rt" --data-urlencode "client_id=$CID" --data-urlencode "client_secret=$CSECRET" --data-urlencode 'grant_type=refresh_token')" || return 1
- jq --arg a "$(jq -r .access_token <<<"$r")" --argjson e "$((now+$(jq -r '.expires_in // 3600' <<<"$r")))" '.token.access_token=$a|.token.expiry=$e' "$TOKEN" > "$TOKEN.tmp" && mv "$TOKEN.tmp" "$TOKEN"
+ new_exp="$(date -u -d "@$((now+$(jq -r '.expires_in // 3600' <<<"$r")))" +%Y-%m-%dT%H:%M:%SZ)"
+  jq --arg a "$(jq -r .access_token <<<"$r")" --arg e "$new_exp" '.token.access_token=$a|.token.expiry=$e' "$TOKEN" > "$TOKEN.tmp" && mv "$TOKEN.tmp" "$TOKEN"
  chmod 600 "$TOKEN"
 }
 agy(){
@@ -52,7 +53,8 @@ login(){
   [[ -z "$got" || "$got" == "$st" ]] || { echo "OAuth state mismatch"; return 1; }
  else code="$v"; fi
  r="$(curl -fsS https://oauth2.googleapis.com/token -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode "code=$code" --data-urlencode "client_id=$CID" --data-urlencode "client_secret=$CSECRET" --data-urlencode 'redirect_uri=https://antigravity.google/oauth-callback' --data-urlencode 'grant_type=authorization_code' --data-urlencode "code_verifier=$vf")" || return 1
- jq --argjson e "$(($(date +%s)+$(jq -r '.expires_in // 3600' <<<"$r")))" '{auth_method:"consumer",token:{access_token:.access_token,refresh_token:.refresh_token,token_type:(.token_type//"Bearer"),expiry:$e}}' <<<"$r" > "$TOKEN"
+ expiry="$(date -u -d "@$(($(date +%s)+$(jq -r '.expires_in // 3600' <<<"$r")))" +%Y-%m-%dT%H:%M:%SZ)"
+  jq --arg e "$expiry" '{auth_method:"consumer",token:{access_token:.access_token,refresh_token:.refresh_token,token_type:(.token_type//"Bearer"),expiry:$e}}' <<<"$r" > "$TOKEN"
  chmod 600 "$TOKEN"; echo "[OAuth saved] $TOKEN"
 }
 models(){
