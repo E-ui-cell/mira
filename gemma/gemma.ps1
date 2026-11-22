@@ -125,12 +125,11 @@ function Invoke-GeminiModelSwitcher {
         for ($i = 0; $i -lt $availableModels.Count; $i++) {
             $item = $availableModels[$i]
             $id = [string]$item.name -replace '^models/', ''
-            $display = if ($item.displayName) { [string]$item.displayName } else { $id }
             $marker = if ($id -ieq $script:MODEL) { "  [CURRENT]" } else { "" }
-            Write-Host ("  {0,2}. {1}  ({2}){3}" -f ($i + 1), $display, $id, $marker)
+            Write-Host ("  {0,2}. {1}{2}" -f ($i + 1), $id, $marker)
         }
         $selection = $RequestedModel
-        if ([string]::IsNullOrWhiteSpace($selection)) { $selection = Read-Host "`nEnter model number or model ID (Enter to cancel)" }
+        if ([string]::IsNullOrWhiteSpace($selection)) { $selection = Read-Host "`nSelect model number (or enter exact model ID; Enter to cancel)" }
         if ([string]::IsNullOrWhiteSpace($selection)) { Write-Host "[Model unchanged: $script:MODEL]" -ForegroundColor Yellow; return }
         $selection = $selection.Trim() -replace '^models/', ''
         $chosen = $null
@@ -371,7 +370,7 @@ function Get-AntigravityModels {
         }
     }
     if ($result.Count -eq 0) { throw 'Antigravity returned no selectable models.' }
-    return @($result | Sort-Object displayName, name)
+    return @($result | Sort-Object name)
 }
 
 function Invoke-GemmaAuthCommand {
