@@ -8,11 +8,16 @@ $Host.UI.RawUI.WindowTitle = "GEMMA CLI"
 # ==============================================================================
 # CONFIGURATION & PERSONA INJECTION
 # ==============================================================================
-$API_KEY = $env:GEMINI_APIJ
+$API_KEY = if (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API)) {
+    $env:GEMINI_API
+} elseif (-not [string]::IsNullOrWhiteSpace($env:GEMINI_APIJ)) {
+    $env:GEMINI_APIJ # Legacy fallback
+} else {
+    $null
+}
 
 if (-not $API_KEY) {
-    Write-Error "GEMINI_API environment variable is not set!"
-    
+    Write-Error "Set GEMINI_API (or legacy GEMINI_APIJ) before making Gemini requests."
 }
 
 #$MODEL   = "gemini-flash-lite-latest"
@@ -108,7 +113,7 @@ function Get-GeminiModels {
             throw "Google model list exceeded 100 pages; stopping to avoid an endless pagination loop."
         }
     } while (-not [string]::IsNullOrWhiteSpace($pageToken))
-    return ,@($allModels.ToArray())
+    return $allModels.ToArray()
 }
 
 function Invoke-GeminiModelSwitcher {
