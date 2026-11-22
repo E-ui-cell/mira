@@ -1,14 +1,11 @@
 [CmdletBinding()]
 param(
-    [switch]$Headless,
-    [string]$Prompt,
-    [switch]$Stdin,
-    [switch]$Json,
-    [string]$Search,
-    [string]$Command,
-    [string]$CommandArgument,
-    [switch]$Autopilot
+    [Alias('p')][string]$Prompt,
+    [Alias('e')][string]$ExplainCommand
 )
+$script:OneShot = [bool](-not [string]::IsNullOrWhiteSpace($Prompt) -or -not [string]::IsNullOrWhiteSpace($ExplainCommand))
+$script:CommandMode = -not [string]::IsNullOrWhiteSpace($ExplainCommand)
+if ($script:CommandMode) { $Prompt = $ExplainCommand }
 
 # ==============================================================================
 # WINDOWS POWERSHELL 5.1
@@ -93,6 +90,17 @@ $SystemInstruction = @{
     parts = @(
         @{ text = $MIRA_DEFAULT_SYSTEM_PROMPT }
     )
+}
+if ($script:CommandMode) {
+    $SystemInstruction.parts[0].text += @"
+
+COMMAND GENERATION MODE:
+Return only the best ready-to-run Windows PowerShell command or short command chain for the user's request.
+Do not execute commands, call tools, inspect the machine, or claim anything was executed.
+Use PowerShell syntax, not Bash or CMD syntax. Prefer concise native commands.
+For locating a file and showing it in Explorer, use Get-ChildItem and explorer.exe /select, with a quoted full path.
+Output no Markdown fences, no explanation, and no alternatives unless one command cannot safely express the task.
+"@
 }
 
 
@@ -573,7 +581,7 @@ function Write-GemmaGroundingDiagnostics {
         [string]$Model,
         [bool]$GroundingEnabled
     )
-    if ($script:Headless) { return }
+    if ($script:OneShot) { return }
 
     $mode = if (-not $GroundingEnabled) {
         'OFF'
@@ -629,9 +637,9 @@ function Invoke-GemmaPermissionCommand {
 function Invoke-GemmaPowerShellTool {
     param([string]$Command)
     if ([string]::IsNullOrWhiteSpace($Command)) { throw 'run_powershell requires a command.' }
-    if (-not $script:Headless) { Write-Host "`n[PowerShell requested by model]:" -ForegroundColor DarkYellow; Write-Host $Command -ForegroundColor Gray }
+    if (-not $script:OneShot) { Write-Host "`n[PowerShell requested by model]:" -ForegroundColor DarkYellow; Write-Host $Command -ForegroundColor Gray }
     if ($script:ExecutionPermission -eq 'ask') {
-        if ($script:Headless) { return @{ approved=$false; output='Permission required; headless ASK mode cannot prompt. Use interactive mode or explicitly pass -Autopilot.' } }
+        if ($script:OneShot) { return @{ approved=$false; output='Permission required; headless ASK mode cannot prompt. Use interactive mode or explicitly pass -Autopilot.' } }
         $approval = Read-Host 'Execute this PowerShell command? [Y/n]'
         if ($approval -match '^(?i:n|no)$') { return @{ approved=$false; output='User declined command execution.' } }
     }
@@ -820,7 +828,7 @@ function Confirm-GemmaDirectAction {
     param([string]$Description)
     if ($script:InApprovedPowerShellTool) { return $true }
     if ($script:ExecutionPermission -eq 'autopilot') { return $true }
-    if ($script:Headless) { [Console]::Error.WriteLine("Permission required in headless ASK mode: $Description"); return $false }
+    if ($script:OneShot) { [Console]::Error.WriteLine("Permission required in headless ASK mode: $Description"); return $false }
     Write-Host "[Action] $Description" -ForegroundColor Yellow
     return ((Read-Host 'Proceed? [Y/n]') -notmatch '^(?i:n|no)$')
 }
@@ -828,7 +836,7 @@ function Invoke-GemmaDirectCommand {
     param([string]$Name,[string]$Argument)
     if ($Name.Trim().ToLowerInvariant() -in @('clipboard-read','clipboard-write','window-list','window-activate')) { Initialize-GemmaNativeWindows }
     switch ($Name.Trim().ToLowerInvariant()) {
-        'help' { return "Commands: system-info, process-list, clipboard-read, clipboard-write, window-list, window-activate, ui-tree, ui-action, app-launch, settings-open, network-check, file-search. Skills: `$HOME\.gemma\skills\<name>.md. AI: -Headless -Prompt <text> [-Json], -Stdin, -Search <query>. Use -Autopilot only when explicitly intended." }
+        'help' { return "Commands: system-info, process-list, clipboard-read, clipboard-write, window-list, window-activate, ui-tree, ui-action, app-launch, settings-open, network-check, file-search. Skills: `$HOME\.gemma\skills\<name>.md. CLI: -p <request> | -e <command request>. Interactive permissions apply." }
         'system-info' {
             $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystem; $cpu=Get-CimInstance Win32_Processor|Select-Object -First 1
             return [pscustomobject]@{Computer=$cs.Name;Manufacturer=$cs.Manufacturer;Model=$cs.Model;OS=$os.Caption;Version=$os.Version;Build=$os.BuildNumber;Architecture=$os.OSArchitecture;CPU=$cpu.Name;RAM_GB=[math]::Round($cs.TotalPhysicalMemory/1GB,2);PowerShell=$PSVersionTable.PSVersion.ToString()}
@@ -1463,42 +1471,8 @@ function Save-GeminiCodeBlocks {
     }
 }
 
-# CLI entry points. Direct commands and quick Search avoid model round-trips.
-$script:Headless = [bool]$Headless
-$script:JsonOutput = [bool]$Json
-if ($Autopilot) { $script:ExecutionPermission = 'autopilot' }
-if ($Stdin) {
-    $stdinText = [Console]::In.ReadToEnd()
-    if ($Prompt) { $Prompt = $Prompt + "`n`n" + $stdinText } else { $Prompt = $stdinText }
-}
-if ($Command) {
-    try {
-        $directResult = Invoke-GemmaDirectCommand -Name $Command -Argument $CommandArgument
-        if ($Json) { [Console]::Out.WriteLine((ConvertTo-Json -InputObject $directResult -Depth 10 -Compress)) }
-        else { $directResult | Format-List | Out-String -Width 240 | ForEach-Object { [Console]::Out.Write($_) } }
-        exit 0
-    } catch {
-        if ($Json) { [Console]::Out.WriteLine((ConvertTo-Json -InputObject @{error=$_.Exception.Message} -Compress)) } else { [Console]::Error.WriteLine($_.Exception.Message) }
-        exit 1
-    }
-}
-if ($Search) {
-    try {
-        if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) { throw 'Quick Search requires Antigravity OAuth; run .auth login first.' }
-        $searchResult = Invoke-GemmaWebSearch -Query $Search
-        if ($Json) { [Console]::Out.WriteLine((ConvertTo-Json -InputObject $searchResult -Depth 12 -Compress)) }
-        else { [Console]::Out.WriteLine([string]$searchResult.research); foreach ($source in @($searchResult.sources)) { [Console]::Out.WriteLine("SOURCE: $source") } }
-        exit 0
-    } catch {
-        if ($Json) { [Console]::Out.WriteLine((ConvertTo-Json -InputObject @{error=$_.Exception.Message} -Compress)) } else { [Console]::Error.WriteLine($_.Exception.Message) }
-        exit 1
-    }
-}
-if ($Headless -and [string]::IsNullOrWhiteSpace($Prompt)) { [Console]::Error.WriteLine('Headless mode requires -Prompt or -Stdin.'); exit 2 }
-if (-not $Headless) {
-Clear-Host
-Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.provider' | '.model' | '.effort' | '.verbose' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '.skills' | '.skill <name>' | '!<cmd>'`n" -ForegroundColor DarkGray
-}
+# Short interactive entry points: -p asks Mira; -e generates a command without running it.
+if ($script:OneShot -and -not $script:CommandMode -and [string]::IsNullOrWhiteSpace($Prompt)) { throw 'Usage: gemma -p "your request" or gemma -e "describe a command".' }
 
 # ==============================================================================
 # ==============================================================================
@@ -1541,9 +1515,9 @@ function Normalize-MiraReply {
 # MAIN CHAT LOOP
 # ==============================================================================
 while ($true) {
-    if ($script:HeadlessCompleted) { break }
+    if ($script:OneShotCompleted) { break }
     # Single owner of the interactive input buffer.
-    if ($script:Headless) { $firstLine = $Prompt; $Prompt = $null } else { $firstLine = Read-GemLineFallback }
+    if ($script:OneShot) { $firstLine = $Prompt; $Prompt = $null } else { $firstLine = Read-GemLineFallback }
     if ([string]::IsNullOrWhiteSpace($firstLine)) { continue }
 
     $lineBuffer = [System.Collections.Generic.List[string]]::new()
@@ -1974,7 +1948,7 @@ while ($true) {
             $i = 0
             $sw = [Diagnostics.Stopwatch]::StartNew()
 
-            if (-not $script:Headless) {
+            if (-not $script:OneShot) {
                 $oldTreatControlCAsInput = [Console]::TreatControlCAsInput
                 [Console]::TreatControlCAsInput = $true
             }
@@ -1991,7 +1965,7 @@ while ($true) {
 
             $cancelled = $false
             while (-not $asyncResult.IsCompleted) {
-                if (-not $script:Headless) {
+                if (-not $script:OneShot) {
                     if ([Console]::KeyAvailable) {
                         $key = [Console]::ReadKey($true)
                         if ($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
@@ -2017,7 +1991,7 @@ while ($true) {
 
                 Rollback-MiraTurn -History $Contents -StartCount $turnStartCount
 
-                if (-not $script:Headless) {
+                if (-not $script:OneShot) {
                     Write-Host "`r" -NoNewline
                     Write-Host (" " * 60) -NoNewline
                     Write-Host "`r[Request cancelled]" -ForegroundColor Yellow
@@ -2027,7 +2001,7 @@ while ($true) {
                 break
             }
 
-            if (-not $script:Headless) {
+            if (-not $script:OneShot) {
                 Write-Host (" " * 40) -NoNewline
                 Write-Host "`r" -NoNewline
             }
@@ -2112,11 +2086,11 @@ while ($true) {
                 $candidate = $response.candidates[0]
                 Write-GemmaGroundingDiagnostics -Candidate $candidate -Provider $script:Provider -Model $script:MODEL -GroundingEnabled $script:GoogleSearchGrounding
 
-                if (-not $script:Headless -and $null -ne $candidate.finishReason) {
+                if (-not $script:OneShot -and $null -ne $candidate.finishReason) {
                     Write-Host "[Gemini Finish Reason]: $($candidate.finishReason)" -ForegroundColor DarkGray
                 }
 
-                if (-not $script:Headless -and $null -ne $candidate.safetyRatings) {
+                if (-not $script:OneShot -and $null -ne $candidate.safetyRatings) {
                     foreach ($rating in $candidate.safetyRatings) {
                         Write-Host "[Safety] $($rating.category) = $($rating.probability) | blocked=$($rating.blocked)" -ForegroundColor DarkGray
                     }
@@ -2165,7 +2139,7 @@ while ($true) {
                                 $toolResult = @{ error = "Google Search is disabled or unavailable for the current provider/settings." }
                             } else {
                                 $toolResult = Invoke-GemmaWebSearch -Query ([string]$call.args.query)
-                                if (-not $script:Headless) {
+                                if (-not $script:OneShot) {
                                     Write-Host ("[Agentic web_search] model={0} | queries={1} | sources={2}" -f $toolResult.search_model,@($toolResult.search_queries).Count,@($toolResult.sources).Count) -ForegroundColor DarkGray
                                     foreach ($searchQuery in @($toolResult.search_queries)) { Write-Host "  [Search query] $searchQuery" -ForegroundColor DarkGray }
                                     foreach ($source in @($toolResult.sources)) { Write-Host "  [Search source] $source" -ForegroundColor DarkGray }
@@ -2185,7 +2159,7 @@ while ($true) {
                         }
                     }
 
-                    if (-not $script:Headless) { Write-Host "`n[Gemini tool call: $toolName]" -ForegroundColor DarkYellow }
+                    if (-not $script:OneShot) { Write-Host "`n[Gemini tool call: $toolName]" -ForegroundColor DarkYellow }
 
                     $functionResponse = @{
                         name     = $toolName
@@ -2222,9 +2196,9 @@ while ($true) {
             $reply = Normalize-MiraReply ($replyTextParts -join "`n")
 
             try {
-                if ($script:Headless) { $width = 80 } else { $width = [Console]::WindowWidth }
+                if ($script:OneShot) { $width = 80 } else { $width = [Console]::WindowWidth }
             } catch {
-                if ($script:Headless) { $width = 80 } else { $width = $Host.UI.RawUI.WindowWidth }
+                if ($script:OneShot) { $width = 80 } else { $width = $Host.UI.RawUI.WindowWidth }
             }
             if ($width -le 10) { $width = 80 }
 
@@ -2232,12 +2206,12 @@ while ($true) {
             $topBoxLine    = [string]([char]0x250C) + [string]([char]0x2500) + [string]([char]0x2500) + " GEMMA " + "".PadRight([Math]::Max(0, $boxWidth - 10), [char]0x2500) + [string]([char]0x2510)
             $bottomBoxLine = [string]([char]0x2514) + "".PadRight([Math]::Max(0, $boxWidth - 1), [char]0x2500) + [string]([char]0x2518)
 
-            if ($script:JsonOutput) { [Console]::Out.WriteLine((ConvertTo-Json -InputObject @{text=$reply;provider=$script:Provider;model=$script:MODEL;grounding=$script:GoogleSearchGrounding} -Compress)) }
-            elseif ($script:Headless) { [Console]::Out.WriteLine($reply) }
+            if ($script:CommandMode) { [Console]::Out.WriteLine($reply) }
+            elseif ($script:OneShot) { Write-Host $reply -ForegroundColor Cyan }
             else { Write-Host "`n$topBoxLine" -ForegroundColor DarkGray; Write-Host $reply -ForegroundColor cyan; Write-Host "$bottomBoxLine`n" -ForegroundColor DarkGray }
             $modelTurn = @{ role = "model"; parts = @( @{ text = $reply } ) }
             [void]$Contents.Add($modelTurn)
-            if ($script:Headless) { $script:HeadlessCompleted = $true }
+            if ($script:OneShot) { $script:OneShotCompleted = $true }
         }
         finally {
             if ($null -ne $oldTreatControlCAsInput) {
@@ -2255,12 +2229,8 @@ while ($true) {
     catch {
         Rollback-MiraTurn -History $Contents -StartCount $turnStartCount
         $errMsg = $_.Exception.Message
-        if ($script:Headless) {
-            if ($script:JsonOutput) { [Console]::Out.WriteLine((ConvertTo-Json -InputObject @{error=$errMsg} -Compress)) }
-            else { [Console]::Error.WriteLine($errMsg) }
-            exit 1
-        }
         Write-Host "`n[API Failure]: $errMsg" -ForegroundColor Red
+        if ($script:OneShot) { $script:OneShotCompleted = $true }
         # Exit only this turn; the interactive CLI remains alive.
     }
 }
