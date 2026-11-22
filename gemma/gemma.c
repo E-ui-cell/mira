@@ -6,6 +6,7 @@
  * Runtime requirements: libcurl + OpenSSL (SHA-256); JSON parser is embedded.
  */
 #define _CRT_SECURE_NO_WARNINGS
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
@@ -192,7 +193,7 @@ static char *ask(State*s,const char*prompt,int cmd){
  for(int round=0;round<MAX_ROUNDS;round++){
   char*p=payload(s,c,!cmd,cmd),*r=generate(s,p);free(p);if(!r){free(c);return NULL;}Doc d;jp(r,&d);int ca=jget(r,&d,0,"candidates"),cand=ca>=0?ca+1:-1;if(cand<0||cand>=d.n){int e=jget(r,&d,0,"error");if(e>=0){char*x=raw(r,&d,e);fprintf(stderr,"%s\n",x);free(x);}else fprintf(stderr,"Response contained no candidates.\n");free(d.v);free(r);free(c);return NULL;}
   int content=jget(r,&d,cand,"content"),parts=jget(r,&d,content,"parts"),calls=0;for(int i=parts+1;parts>=0&&i<d.n&&d.v[i].a<d.v[parts].z;i=next(&d,i))if(jget(r,&d,i,"functionCall")>=0)calls++;
-  if(!calls){char*out=textparts(r,&d,cand);if(!cmd){char*model=raw(r,&d,content);Buf item;init(&item);put(&item,"{\"role\":\"model\",\"parts\":");put(&item,model);put(&item,"}");hadd(s,item.s);free(item.s);free(model);Buf user;init(&user);put(&user,"{\"role\":\"user\",\"parts\":[{\"text\":");quote(&user,prompt);put(&user,"}]}");/* user turn is already represented in the request; store it before model instead below */free(user.s);}free(d.v);free(r);free(c);return out;}
+  if(!calls){char*out=textparts(r,&d,cand);if(!cmd){char*model=raw(r,&d,content);Buf item;init(&item);put(&item,"{\"role\":\"model\",\"parts\":");put(&item,model);put(&item,"}");hadd(s,item.s);free(item.s);free(model);}free(d.v);free(r);free(c);return out;}
   char*model=raw(r,&d,content);Buf item;init(&item);put(&item,"{\"role\":\"model\",\"parts\":");put(&item,model);put(&item,"}");free(model);append_item(&c,item.s);free(item.s);
   Buf responses;init(&responses);put(&responses,"{\"role\":\"user\",\"parts\":[");int first=1;
   for(int i=parts+1;parts>=0&&i<d.n&&d.v[i].a<d.v[parts].z;i=next(&d,i)){int fc=jget(r,&d,i,"functionCall");if(fc<0)continue;char*n=jval(r,&d,fc,"name"),*a=raw(r,&d,jget(r,&d,fc,"args"));fprintf(stderr,"[Tool] %s\n",n);char*result=tool(s,n,a);if(!first)put(&responses,",");first=0;put(&responses,"{\"functionResponse\":{\"name\":");quote(&responses,n);put(&responses,",\"response\":");put(&responses,result);put(&responses,"}}");free(n);free(a);free(result);}
