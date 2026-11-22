@@ -2065,50 +2065,59 @@ function Build-GeminiPayload($messages,$summary){
     foreach($m in $messages){
         $role=if([string]$m.role -eq 'assistant'){'model'}else{'user'}
         $parts=@()
-        if($null -ne $m.parts){
+        if($null -ne $m.PSObject.Properties['geminiParts']){
+            $parts=@($m.geminiParts)
+        }elseif($null -ne $m.parts){
             foreach($p in @($m.parts)){
                 if([string]$p.kind -eq 'image'){
                     $parts += [ordered]@{inlineData=[ordered]@{mimeType=[string]$p.mimeType;data=[string]$p.data}}
-                }else{
-                    $parts += [ordered]@{text=[string]$p.text}
-                }
+                }else{$parts += [ordered]@{text=[string]$p.text}}
             }
-        }else{
-            $parts += [ordered]@{text=[string]$m.text}
-        }
+        }else{$parts += [ordered]@{text=[string]$m.text}}
         $contents += [ordered]@{role=$role;parts=$parts}
     }
-    $payload=[ordered]@{contents=$contents}
-    if($null -ne $script:Providers){
+    $systemText=[string]$script:MiraSystemPrompt
+    if(-not [string]::IsNullOrWhiteSpace($summary)){
+        if($systemText){$systemText+=[Environment]::NewLine+[Environment]::NewLine}
+        $systemText+=[string]$summary
+    }
+    $payload=[ordered]@{systemInstruction=[ordered]@{role='user';parts=@([ordered]@{text=$systemText})};contents=$contents}
+    if($script:CurrentProviderName -eq 'gemini'){
         $provider=Get-Provider 'gemini'
         if($null -ne $provider -and $null -ne $provider.safetySettings){$payload.safetySettings=@($provider.safetySettings)}
     }
-    if(-not [string]::IsNullOrWhiteSpace($summary)){
-        $payload.systemInstruction=[ordered]@{parts=@([ordered]@{text=$summary})}
+    $declarations=@(Get-MiraFunctionDeclarations)
+    $tools=@()
+    if($declarations.Count -gt 0){$tools+=@{functionDeclarations=$declarations}}
+    if($script:CurrentProviderName -eq 'antigravity' -and $script:GoogleSearchGrounding){
+        # Native server-side Google Search; do not expose a client web_search function.
+        $tools+=@{googleSearch=@{}}
+    }
+    if($tools.Count -gt 0){
+        $payload.tools=$tools
+        $payload.toolConfig=@{functionCallingConfig=@{mode='AUTO'}}
+        if($script:CurrentProviderName -eq 'antigravity' -and $script:GoogleSearchGrounding){$payload.toolConfig.includeServerSideToolInvocations=$true}
     }
     return $payload
 }
-
 function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary){
     $msg=@()
+    $systemText=[string]$script:MiraSystemPrompt
     if(-not [string]::IsNullOrWhiteSpace($summary)){
-        $msg += [ordered]@{role='system';content=$summary}
+        if($systemText){$systemText+=[Environment]::NewLine+[Environment]::NewLine}
+        $systemText+=[string]$summary
     }
+    if(-not [string]::IsNullOrWhiteSpace($systemText)){$msg += [ordered]@{role='system';content=$systemText}}
     foreach($m in $messages){
         $entry=[ordered]@{role=[string]$m.role}
         if($null -ne $m.parts){
             $content=@()
             foreach($p in @($m.parts)){
-                if([string]$p.kind -eq 'image'){
-                    $content += [ordered]@{type='image_url';image_url=[ordered]@{url=('data:'+([string]$p.mimeType)+';base64,'+([string]$p.data))}}
-                }else{
-                    $content += [ordered]@{type='text';text=[string]$p.text}
-                }
+                if([string]$p.kind -eq 'image'){$content += [ordered]@{type='image_url';image_url=[ordered]@{url=('data:'+([string]$p.mimeType)+';base64,'+([string]$p.data))}}}
+                else{$content += [ordered]@{type='text';text=[string]$p.text}}
             }
             $entry.content=$content
-        }else{
-            $entry.content=[string]$m.text
-        }
+        }else{$entry.content=[string]$m.text}
         if([string]$m.role -eq 'assistant' -and $null -ne $m.reasoning_details){
             $rd=@($m.reasoning_details)
             if($rd.Count -gt 0){$entry.reasoning_details=$rd}
@@ -2119,7 +2128,6 @@ function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary){
     if($script:ShowReasoning){$payload.reasoning=[ordered]@{enabled=$true}}
     return $payload
 }
-
 function Start-MiraRequestUi(){
     $script:RequestUiActive=$true
     $script:RequestUiLineOpen=$true
@@ -2375,23 +2383,30 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
 function Send-ProviderPayload($provider,$model,$payload){
     $apiKey=Get-ProviderKey $provider
     $type=[string]$provider.type
+    $requestBody=$payload
     if($type -eq 'gemini'){
         $base=[string]$provider.api_base
         $url=$base.TrimEnd('/')+'/models/'+$model+':generateContent'
-        if(-not [string]::IsNullOrWhiteSpace($apiKey)){$url += '?key='+[uri]::EscapeDataString($apiKey)}
+        if(-not [string]::IsNullOrWhiteSpace($apiKey)){$url+='?key='+[uri]::EscapeDataString($apiKey)}
         $headers=@{}
+    }elseif($type -eq 'antigravity'){
+        $token=Get-MiraAntigravityAccessToken
+        $project=Get-MiraAntigravityProject
+        if($null -ne $payload.systemInstruction){$payload.systemInstruction.role='user'}
+        if($payload.Contains('safetySettings')){[void]$payload.Remove('safetySettings')}
+        $requestBody=@{project=$project;requestId='agent-'+[guid]::NewGuid().ToString('N');request=$payload;model=$model;userAgent='antigravity';requestType='agent'}
+        $url='https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent'
+        $headers=Get-MiraAntigravityHeaders $token
     }elseif($type -eq 'openai-compatible'){
         $url=([string]$provider.api_base).TrimEnd('/')+'/chat/completions'
         $headers=@{}
         if(-not [string]::IsNullOrWhiteSpace($apiKey)){$headers['Authorization']='Bearer '+$apiKey}
         if($null -ne $provider.headers){foreach($prop in $provider.headers.PSObject.Properties){$headers[[string]$prop.Name]=[string]$prop.Value}}
     }else{throw ('unsupported provider type: '+$type)}
-
-    $json=$payload | ConvertTo-Json -Depth 30
+    $json=$requestBody|ConvertTo-Json -Depth 40
     $bytes=[Text.Encoding]::UTF8.GetBytes($json)
     $params=@{Uri=$url;Method='Post';ContentType='application/json';Body=$bytes;TimeoutSec=120;ErrorAction='Stop'}
     if($headers.Count -gt 0){$params.Headers=$headers}
-
     $oldTreatControlCAsInput=$null;$runspace=$null;$powershell=$null;$asyncResult=$null;$cancelled=$false
     try{
         try{$oldTreatControlCAsInput=[Console]::TreatControlCAsInput;[Console]::TreatControlCAsInput=$true}catch{}
@@ -2432,10 +2447,18 @@ function Send-ProviderPayload($provider,$model,$payload){
             throw [string]$err.Exception.Message
         }
         if($response.Count -eq 0 -or $null -eq $response[0]){throw 'The provider returned an empty response.'}
-        $final=$response[0];$tokensIn=0;$tokensOut=0
+        $final=$response[0]
+        if($type -eq 'antigravity'){
+            if($null -eq $final.response){throw 'Antigravity returned an invalid response envelope.'}
+            $final=$final.response
+        }
+        $tokensIn=0;$tokensOut=0
         try{
-            if($type -eq 'gemini'){if($null -ne $final.usageMetadata){if($null -ne $final.usageMetadata.promptTokenCount){$tokensIn=[int]$final.usageMetadata.promptTokenCount};if($null -ne $final.usageMetadata.candidatesTokenCount){$tokensOut=[int]$final.usageMetadata.candidatesTokenCount}}}
-            else{if($null -ne $final.usage){if($null -ne $final.usage.prompt_tokens){$tokensIn=[int]$final.usage.prompt_tokens};if($null -ne $final.usage.completion_tokens){$tokensOut=[int]$final.usage.completion_tokens}}}
+            if($type -eq 'gemini' -or $type -eq 'antigravity'){
+                if($null -ne $final.usageMetadata){if($null -ne $final.usageMetadata.promptTokenCount){$tokensIn=[int]$final.usageMetadata.promptTokenCount};if($null -ne $final.usageMetadata.candidatesTokenCount){$tokensOut=[int]$final.usageMetadata.candidatesTokenCount}}
+            }else{
+                if($null -ne $final.usage){if($null -ne $final.usage.prompt_tokens){$tokensIn=[int]$final.usage.prompt_tokens};if($null -ne $final.usage.completion_tokens){$tokensOut=[int]$final.usage.completion_tokens}}
+            }
         }catch{}
         Stop-MiraRequestUi $tokensIn $tokensOut
         return $final
@@ -3971,9 +3994,8 @@ function Write-MarkupText([string]$Text){
 }
 
 function Show-Response($response,$providerType){
-    $tokensIn=0
-    $tokensOut=0
-    if($providerType -eq 'gemini'){
+    $tokensIn=0;$tokensOut=0
+    if($providerType -eq 'gemini' -or $providerType -eq 'antigravity'){
         if($null -ne $response.usageMetadata){
             if($null -ne $response.usageMetadata.promptTokenCount){$tokensIn=[int]$response.usageMetadata.promptTokenCount}
             if($null -ne $response.usageMetadata.candidatesTokenCount){$tokensOut=[int]$response.usageMetadata.candidatesTokenCount}
@@ -3983,43 +4005,34 @@ function Show-Response($response,$providerType){
         if($candidates.Count -eq 0){
             $reply='[NO CANDIDATES RETURNED]'
             if($null -ne $response.promptFeedback -and $null -ne $response.promptFeedback.safetyRatings){
-                foreach($rating in $response.promptFeedback.safetyRatings){$reply += "`n$($rating.category): $($rating.probability)"}
+                foreach($rating in $response.promptFeedback.safetyRatings){$reply+=[Environment]::NewLine+$rating.category+': '+$rating.probability}
             }
-            return [pscustomobject]@{Text=$reply;Display="$tokenString`n$reply";FinishReason='';PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+            return [pscustomobject]@{Text=$reply;Display=($tokenString+[Environment]::NewLine+$reply);FinishReason='';PromptTokens=$tokensIn;CompletionTokens=$tokensOut;GroundingMetadata=$null}
         }
-        $candidate=$candidates[0]
-        $reply=''
-        if($null -ne $candidate.content -and $null -ne $candidate.content.parts){$reply=(@($candidate.content.parts | ForEach-Object {[string]$_.text}) -join '')}
+        $candidate=$candidates[0];$reply=''
+        if($null -ne $candidate.content -and $null -ne $candidate.content.parts){
+            $reply=(@($candidate.content.parts|Where-Object{$null -ne $_.text}|ForEach-Object{[string]$_.text}) -join '')
+        }
         $finish=[string]$candidate.finishReason
-        if($finish -eq 'MAX_TOKENS'){$reply += "`n`n[WARNING: Response truncated due to token limit]"}
+        if($finish -eq 'MAX_TOKENS'){$reply+=[Environment]::NewLine+[Environment]::NewLine+'[WARNING: Response truncated due to token limit]'}
         elseif($finish -eq 'SAFETY'){
             $reply='[BLOCKED BY SAFETY FILTERS]'
-            if($null -ne $candidate.safetyRatings){foreach($rating in $candidate.safetyRatings){$reply += "`n$($rating.category): $($rating.probability)"}}
+            if($null -ne $candidate.safetyRatings){foreach($rating in $candidate.safetyRatings){$reply+=[Environment]::NewLine+$rating.category+': '+$rating.probability}}
         }
-        return [pscustomobject]@{Text=$reply;Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+        return [pscustomobject]@{Text=$reply;Display=($tokenString+[Environment]::NewLine+$reply);FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut;GroundingMetadata=$candidate.groundingMetadata}
     }
-
     if($null -ne $response.usage){
         if($null -ne $response.usage.prompt_tokens){$tokensIn=[int]$response.usage.prompt_tokens}
         if($null -ne $response.usage.completion_tokens){$tokensOut=[int]$response.usage.completion_tokens}
     }
     $tokenString="[Tokens: $tokensIn in, $tokensOut out]"
     $choices=@($response.choices)
-    if($choices.Count -eq 0){
-        $reply='[NO CHOICES RETURNED]'
-        return [pscustomobject]@{Text=$reply;Display="$tokenString`n$reply";FinishReason='';PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
-    }
-    $choice=$choices[0]
-    $reply=''
-    $reasoning=''
-    $reasoningDetails=@()
+    if($choices.Count -eq 0){$reply='[NO CHOICES RETURNED]';return [pscustomobject]@{Text=$reply;Display=($tokenString+[Environment]::NewLine+$reply);FinishReason='';PromptTokens=$tokensIn;CompletionTokens=$tokensOut}}
+    $choice=$choices[0];$reply='';$reasoning='';$reasoningDetails=@()
     if($null -ne $choice.message){
         $content=$choice.message.content
-        if($content -is [string]){
-            $reply=[string]$content
-        }
+        if($content -is [string]){$reply=[string]$content}
         elseif($null -ne $content){
-            # Some compatible providers return content as an array of typed parts.
             $chunks=New-Object System.Collections.Generic.List[string]
             foreach($part in @($content)){
                 if($part -is [string]){[void]$chunks.Add([string]$part);continue}
@@ -4032,10 +4045,9 @@ function Show-Response($response,$providerType){
         if($null -ne $choice.message.reasoning_details){$reasoningDetails=@($choice.message.reasoning_details)}
     }
     $finish=[string]$choice.finish_reason
-    if($finish -eq 'length'){$reply += "`n`n[WARNING: Response truncated due to token limit]"}
-    return [pscustomobject]@{Text=$reply;Reasoning=$reasoning;ReasoningDetails=$reasoningDetails;Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+    if($finish -eq 'length'){$reply+=[Environment]::NewLine+[Environment]::NewLine+'[WARNING: Response truncated due to token limit]'}
+    return [pscustomobject]@{Text=$reply;Reasoning=$reasoning;ReasoningDetails=$reasoningDetails;Display=($tokenString+[Environment]::NewLine+$reply);FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
 }
-
 function Invoke-Provider($text,$parts=$null){
     $provider=Get-Provider $script:CurrentProviderName
     if($null -eq $provider){W ('[provider error] unknown provider: '+$script:CurrentProviderName) Red;return $false}
