@@ -89,8 +89,9 @@ $GeminiSafetySettings = @(
 $LastGeminiRequestJson = $null
 
 function Get-GeminiModels {
+    if (Test-Path -LiteralPath (Get-AntigravityTokenPath)) { return Get-AntigravityModels }
     if ([string]::IsNullOrWhiteSpace($API_KEY)) {
-        throw "Gemini API key is empty. Set GEMINI_API (or legacy GEMINI_APIJ) before fetching models."
+        throw "No Antigravity OAuth token or Gemini API key found. Run .auth login or set GEMINI_API."
     }
     $allModels = New-Object 'System.Collections.Generic.List[object]'
     $pageToken = $null
@@ -539,7 +540,7 @@ $script:MiraHistoryMax = 500
 # Mira owns the console input buffer through Read-GemLineFallback.
 $script:UsePSReadLine = $false
 
-$script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.requests','.requestkeys','.model','.mira-update')
+$script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.requests','.requestkeys','.model','.auth','.search','.mira-update')
 
 function Get-GemCommands([string]$p) {
     @(
@@ -937,7 +938,7 @@ function Save-GeminiCodeBlocks {
 }
 
 Clear-Host
-Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.requests' | '.requestkeys' | '.model' | '.mira-update' | '!<cmd>'`n" -ForegroundColor DarkGray
+Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.requests' | '.requestkeys' | '.model' | '.auth' | '.search' | '.mira-update' | '!<cmd>'`n" -ForegroundColor DarkGray
 
 # ==============================================================================
 # ==============================================================================
@@ -1025,6 +1026,19 @@ while ($true) {
 
     if ($trimmedInput -eq ".requestkeys") {
         Show-LastGeminiRequestKeys -Json $LastGeminiRequestJson
+        continue
+    }
+    if ($trimmedInput -eq ".auth" -or $trimmedInput.StartsWith(".auth ", [StringComparison]::OrdinalIgnoreCase)) {
+        $authArgument = ""
+        if ($trimmedInput.Length -gt 5) { $authArgument = $trimmedInput.Substring(5).Trim() }
+        Invoke-GemmaAuthCommand -Argument $authArgument
+        continue
+    }
+
+    if ($trimmedInput -eq ".search" -or $trimmedInput.StartsWith(".search ", [StringComparison]::OrdinalIgnoreCase)) {
+        $searchArgument = ""
+        if ($trimmedInput.Length -gt 7) { $searchArgument = $trimmedInput.Substring(7).Trim() }
+        Invoke-GemmaSearchCommand -Argument $searchArgument
         continue
     }
     if ($trimmedInput -eq ".model" -or $trimmedInput.StartsWith(".model ", [StringComparison]::OrdinalIgnoreCase)) {
@@ -1296,6 +1310,7 @@ while ($true) {
     $maxToolRounds = 8
 
     try {
+        if ($script:GoogleSearchGrounding) { Invoke-GemmaGoogleSearchPreflight }
         while ($toolLoop) {
         $toolRounds++
         if ($toolRounds -gt $maxToolRounds) {
@@ -1306,10 +1321,31 @@ while ($true) {
             -SystemInstruction $SystemInstruction `
             -Contents $Contents
 
-        $jsonPayload = $payloadObj | ConvertTo-Json -Depth 20
-        # Keep the last raw request in memory only. .requests writes it explicitly.
+        $usingAntigravityOAuth = Test-Path -LiteralPath (Get-AntigravityTokenPath)
+        if ($usingAntigravityOAuth) {
+            $accessToken = Get-AntigravityAccessToken
+            $project = Get-AntigravityProject
+            $payloadObj.systemInstruction.role = "user"
+            if ($payloadObj.Contains("safetySettings")) { [void]$payloadObj.Remove("safetySettings") }
+            $requestEnvelope = @{
+                project = $project
+                requestId = "agent-" + [guid]::NewGuid().ToString("N")
+                request = $payloadObj
+                model = $MODEL
+                userAgent = "antigravity"
+                requestType = "agent"
+            }
+            $jsonPayload = $requestEnvelope | ConvertTo-Json -Depth 30
+            $url = "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
+            $requestHeaders = Get-AntigravityHeaders -AccessToken $accessToken
+        } else {
+            if ([string]::IsNullOrWhiteSpace($API_KEY)) { throw "Not authenticated. Run .auth login or set GEMINI_API." }
+            $jsonPayload = $payloadObj | ConvertTo-Json -Depth 20
+            $url = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL`:generateContent"
+            $requestHeaders = @{ "x-goog-api-key" = $API_KEY }
+        }
+        # Keep the exact provider request in memory only. .requests writes it explicitly.
         $LastGeminiRequestJson = $jsonPayload
-        $url = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL`:generateContent?key=$([uri]::EscapeDataString($API_KEY))"
 
         $oldTreatControlCAsInput = $null
         $runspace = $null
@@ -1329,9 +1365,9 @@ while ($true) {
             $powershell = [Management.Automation.PowerShell]::Create()
             $powershell.Runspace = $runspace
             [void]$powershell.AddScript({
-                param($u, $b)
-                Invoke-RestMethod -Uri $u -Method Post -ContentType "application/json; charset=utf-8" -Body $b
-            }).AddArgument($url).AddArgument($utf8Bytes)
+                param($u, $b, $h)
+                Invoke-RestMethod -Uri $u -Method Post -Headers $h -ContentType "application/json; charset=utf-8" -Body $b -ErrorAction Stop
+            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders)
             $asyncResult = $powershell.BeginInvoke()
 
             $cancelled = $false
@@ -1374,6 +1410,10 @@ while ($true) {
             Write-Host "`r" -NoNewline
 
             $response = $powershell.EndInvoke($asyncResult)
+            if ($usingAntigravityOAuth) {
+                if ($null -eq $response.response) { throw "Antigravity returned an invalid response envelope." }
+                $response = $response.response
+            }
             $hasRunspaceError = $powershell.Streams.Error.Count -gt 0
             $runspaceErrors = @($powershell.Streams.Error)
 
