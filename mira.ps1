@@ -4156,8 +4156,8 @@ function Invoke-Provider($text,$parts=$null){
                 $functionCalls=@($modelParts|Where-Object{$null -ne $_.functionCall}|ForEach-Object{$_.functionCall})
                 if($functionCalls.Count -eq 0){break}
                 if($round -ge $script:MiraMaxToolRounds){throw ('Tool loop reached the '+$script:MiraMaxToolRounds+' round limit.')}
-                # Preserve the complete model tool-call turn, including IDs and part metadata.
-                $modelTurn=[pscustomobject]@{role='assistant';text='';parts=$null;geminiParts=$modelParts}
+                $callNames=@($functionCalls|ForEach-Object{[string]$_.name})
+                $modelTurn=[pscustomobject]@{role='assistant';text=('Function calls: '+($callNames -join ', '));parts=$null;geminiParts=$modelParts}
                 $messages+= $modelTurn
                 foreach($call in $functionCalls){
                     $toolName=[string]$call.name
@@ -4167,12 +4167,49 @@ function Invoke-Provider($text,$parts=$null){
                     $toolResult=Invoke-MiraTool $toolName $toolArgs
                     try{
                         $toolJson=$toolResult|ConvertTo-Json -Depth 12
-                        if($toolJson.Length -gt 24000){$toolResult=@{error='Tool result exceeded 24 KB and was omitted.'}}
-                    }catch{$toolResult=@{error='Tool result could not be serialized.'}}
+                        if($toolJson.Length -gt 24000){$toolResult=@{error='Tool result exceeded 24 KB and was omitted.'};$toolJson=$toolResult|ConvertTo-Json -Compress}
+                    }catch{$toolResult=@{error='Tool result could not be serialized.'};$toolJson=$toolResult|ConvertTo-Json -Compress}
                     $functionResponse=@{name=$toolName;response=$toolResult}
                     if($null -ne $call.id -and -not [string]::IsNullOrWhiteSpace([string]$call.id)){$functionResponse.id=[string]$call.id}
                     $toolPart=@{functionResponse=$functionResponse}
-                    $toolTurn=[pscustomobject]@{role='user';text='';parts=$null;geminiParts=@($toolPart)}
+                    $toolTurn=[pscustomobject]@{role='user';text=('Tool result for '+$toolName+': '+$toolJson);parts=$null;geminiParts=@($toolPart)}
+                    $messages+= $toolTurn
+                }
+            }
+            $result=Show-Response $response $type
+        }elseif($type -eq 'openai-compatible'){
+            $round=0
+            while($true){
+                ++$round
+                if($round -gt $script:MiraMaxToolRounds){throw ('Tool loop exceeded '+$script:MiraMaxToolRounds+' rounds; stopping to prevent an infinite request cycle.')}
+                $payload=Build-OpenAICompatiblePayload $provider $messages $script:CurrentModel $script:SessionSummary
+                $payload.stream=$false
+                $jsonPayload=$payload|ConvertTo-Json -Depth 40
+                $script:LastRequest=$jsonPayload
+                $response=Send-ProviderPayload $provider $script:CurrentModel $payload
+                $choices=@($response.choices)
+                if($choices.Count -eq 0){break}
+                $message=$choices[0].message
+                $toolCalls=@()
+                if($null -ne $message -and $null -ne $message.tool_calls){$toolCalls=@($message.tool_calls)}
+                if($toolCalls.Count -eq 0){break}
+                if($round -ge $script:MiraMaxToolRounds){throw ('Tool loop reached the '+$script:MiraMaxToolRounds+' round limit.')}
+                $assistantText=if($null -ne $message.content){[string]$message.content}else{''}
+                $modelTurn=[pscustomobject]@{role='assistant';text=$assistantText;parts=$null;openAIToolCalls=$toolCalls;reasoning_details=$message.reasoning_details}
+                $messages+= $modelTurn
+                foreach($call in $toolCalls){
+                    $toolName=[string]$call.function.name
+                    $toolArgs=@{}
+                    $argumentText=[string]$call.function.arguments
+                    try{if($argumentText){$toolArgs=$argumentText|ConvertFrom-Json -ErrorAction Stop}}catch{$toolArgs=$null}
+                    W ('[tool call] '+$toolName) DarkYellow
+                    if($null -eq $toolArgs){$toolResult=@{error='Tool arguments were not valid JSON.'}}
+                    else{$toolResult=Invoke-MiraTool $toolName $toolArgs}
+                    try{
+                        $toolJson=$toolResult|ConvertTo-Json -Compress -Depth 12
+                        if($toolJson.Length -gt 24000){$toolJson='{"error":"Tool result exceeded 24 KB and was omitted."}'}
+                    }catch{$toolJson='{"error":"Tool result could not be serialized."}'}
+                    $toolTurn=[pscustomobject]@{role='tool';text=$toolJson;parts=$null;toolCallId=[string]$call.id}
                     $messages+= $toolTurn
                 }
             }
