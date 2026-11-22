@@ -1356,7 +1356,7 @@ static void help(void) {
     puts("\nGemma C — Gemini API + Antigravity OAuth");
     puts("Commands: .help .q .clear .multi .model [ID] .provider antigravity|gemini");
     puts("          .effort low|medium|high .grounding on|off .ask .autopilot .verbose on|off");
-    puts("          .auth login|status|logout");
+    puts("          .auth login|status|logout .save .exportsession [path] .loadsession [path]");
     puts("Options:   -p \"request\" (one tool-enabled request)  -e \"request\" (command only; never executes)");
 }
 
