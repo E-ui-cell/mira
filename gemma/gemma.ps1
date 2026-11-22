@@ -192,34 +192,11 @@ function New-GemmaRandomString {
     return ConvertTo-GemmaBase64Url -Bytes $bytes
 }
 
-function Set-GemmaPrivateAcl {
-    param([string]$Path, [switch]$Directory)
-    if (-not (Test-Path -LiteralPath $Path)) { throw "Cannot secure missing path: $Path" }
-
-    # icacls changes the DACL only. Set-Acl can attempt to write the SACL
-    # (audit entries), which requires SeSecurityPrivilege.
-    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-    $sid = $identity.User.Value
-    $rights = if ($Directory) { '(OI)(CI)F' } else { 'F' }
-
-    $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
-    & $icacls $Path /reset | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not reset DACL on '$Path' (icacls exit code $LASTEXITCODE)."
-    }
-    & $icacls $Path /inheritance:r /grant:r "$($sid):$rights" | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not set private DACL on '$Path' (icacls exit code $LASTEXITCODE)."
-    }
-}
-
 function Save-AntigravityToken {
     param([hashtable]$TokenData)
     $path = Get-AntigravityTokenPath
     $directory = Split-Path -Parent $path
     if (-not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
-    Set-GemmaPrivateAcl -Path $directory -Directory
-
     $json = $TokenData | ConvertTo-Json -Depth 8
     $temp = $path + '.tmp-' + [guid]::NewGuid().ToString('N')
     $backup = $null
@@ -238,8 +215,6 @@ function Save-AntigravityToken {
         } else {
             [System.IO.File]::Move($temp, $path)
         }
-
-        Set-GemmaPrivateAcl -Path $path
     } finally {
         if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
         if ($backup -and (Test-Path -LiteralPath $backup)) {
