@@ -137,7 +137,7 @@ function Invoke-GeminiModelSwitcher {
             $index = [int]$selection - 1
             if ($index -ge 0 -and $index -lt $availableModels.Count) { $chosen = $availableModels[$index] }
         } else {
-            $chosen = $availableModels | Where-Object { ([string]$_.name -replace '^models/', '') -ieq $selection -or [string]$_.displayName -ieq $selection } | Select-Object -First 1
+            $chosen = $availableModels | Where-Object { ([string]$_.name -replace '^models/', '') -ieq $selection } | Select-Object -First 1
         }
         if ($null -eq $chosen) { Write-Host "[Unknown selection. Model unchanged: $script:MODEL]" -ForegroundColor Red; return }
         $script:MODEL = [string]$chosen.name -replace '^models/', ''
