@@ -236,3 +236,5 @@ The source and GitHub branch have been updated, but this environment has no Wind
 - [x] Document the parser check in README.md. It parses source without executing it; live OAuth/API/grounding/tool tests remain outstanding.
 
 - [x] Add OpenAI-compatible Chat Completions function calling for non-streaming requests; preserve tool-call IDs and tool messages in session history. Streaming mode intentionally omits tool declarations.
+
+- [x] Load repository Markdown skills from mira/skills as well as user skills from %USERPROFILE%\.mira\skills; add PowerShell scripting and grounded web research playbooks.
