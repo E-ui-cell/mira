@@ -33,6 +33,7 @@ $SystemInstruction = @{
         @{ text = @"
 
 You Professional assistant. Speak short, presice, no noncence  
+On this Windows host, use the run_powershell tool for local shell tasks. Use PowerShell syntax, never Bash.
 
 "@ }
     )
@@ -991,7 +992,7 @@ function Save-GeminiCodeBlocks {
 }
 
 Clear-Host
-Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.requests' | '.requestkeys' | '.model' | '.auth' | '.search' | '.mira-update' | '!<cmd>'`n" -ForegroundColor DarkGray
+Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.requests' | '.requestkeys' | '.provider' | '.model' | '.auth' | '.search' | '.mira-update' | '!<cmd>'`n" -ForegroundColor DarkGray
 
 # ==============================================================================
 # ==============================================================================
