@@ -1,4 +1,4 @@
-﻿﻿[CmdletBinding()]
+﻿﻿﻿[CmdletBinding()]
 param(
     [Alias('p')][string]$Prompt,
     [Alias('e')][string]$ExplainCommand
@@ -40,7 +40,7 @@ $MIRA_STOP_SEQUENCES = $null                # e.g. @('END')
 # Runtime behavior
 $MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'; ASK prompt defaults to Yes
 $MIRA_DEFAULT_GROUNDING = $true              # Google Search enabled where available
-$MIRA_ENABLE_AGENTIC_WEB_SEARCH = $false      # Disable separate Gemini 3.1 Flash-Lite research-agent fallback
+$MIRA_ENABLE_AGENTIC_WEB_SEARCH = $true       # Gemini API provider uses web_search via the Antigravity OAuth Search-only backend
 $MIRA_DEFAULT_VERBOSE = $false                # Show Gemini thought summaries only when enabled with .verbose
 # Antigravity OAuth models use Google's native server-side Google Search grounding.
 # They do not receive the script-defined web_search function.
@@ -503,7 +503,7 @@ function Invoke-GemmaAuthCommand {
 }
 
 function Test-GemmaAntigravityNativeSearchSupport {
-    param([string]$Model = $script:MODEL)
+    param([string]$Model = $MIRA_SEARCH_MODEL)
     return ([string]$Model).Trim().ToLowerInvariant() -eq 'gemini-3.1-flash-lite'
 }
 
@@ -513,10 +513,10 @@ function Invoke-GemmaSearchCommand {
     if ($value -eq 'on') {
         if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) { Write-Host '[Google Search requires Antigravity OAuth. Run .auth login first.]' -ForegroundColor Yellow; return }
         $script:GoogleSearchGrounding = $true
-        if ($script:Provider -eq 'antigravity' -and -not (Test-GemmaAntigravityNativeSearchSupport)) {
-            Write-Host "[Google Search is not supported by Antigravity model '$script:MODEL'. Chat remains enabled; select gemini-3.1-flash-lite for native Google Search.]" -ForegroundColor Yellow
+        if ($script:Provider -eq 'antigravity' -and -not (Test-GemmaAntigravityNativeSearchSupport -Model $MIRA_SEARCH_MODEL)) {
+            Write-Host "[Google Search is unavailable: Antigravity search model '$MIRA_SEARCH_MODEL' is not supported. Chat remains enabled.]" -ForegroundColor Yellow
         } elseif ($script:Provider -eq 'antigravity') {
-            Write-Host '[Google Search enabled. Antigravity runs a separate Search-only preflight; function tools remain on the normal answer request.]' -ForegroundColor Green
+            Write-Host "[Google Search enabled. Antigravity runs a separate Search-only preflight with '$MIRA_SEARCH_MODEL'; answer model '$script:MODEL' keeps its function tools.] " -ForegroundColor Green
         } else {
             Write-Host '[Google Search enabled. Gemini API exposes web_search only when MIRA_ENABLE_AGENTIC_WEB_SEARCH is enabled.]' -ForegroundColor Green
         }
@@ -525,8 +525,8 @@ function Invoke-GemmaSearchCommand {
         Write-Host '[Google Search disabled.]' -ForegroundColor Yellow
     } elseif ($value -eq 'status' -or -not $value) {
         if (-not $script:GoogleSearchGrounding) { $state = 'OFF' }
-        elseif ($script:Provider -eq 'antigravity' -and (Test-GemmaAntigravityNativeSearchSupport)) { $state = 'ON (separate native Antigravity Search-only preflight)' }
-        elseif ($script:Provider -eq 'antigravity') { $state = "REQUESTED, UNSUPPORTED for $script:MODEL; chat continues without grounding" }
+        elseif ($script:Provider -eq 'antigravity' -and (Test-GemmaAntigravityNativeSearchSupport -Model $MIRA_SEARCH_MODEL)) { $state = "ON (native Antigravity Search-only preflight via $MIRA_SEARCH_MODEL)" }
+        elseif ($script:Provider -eq 'antigravity') { $state = "REQUESTED, UNSUPPORTED search model $MIRA_SEARCH_MODEL; chat continues without grounding" }
         elseif ($script:AgenticWebSearchEnabled) { $state = "ON (Gemini API client web_search via Antigravity OAuth; research model: $MIRA_SEARCH_MODEL)" }
         else { $state = 'ON, but Gemini API web_search is disabled by MIRA_ENABLE_AGENTIC_WEB_SEARCH' }
         Write-Host "[Google Search: $state]" -ForegroundColor Cyan
@@ -548,7 +548,7 @@ function Invoke-GemmaAntigravityRequest {
 function Invoke-GemmaNativeGoogleSearchPreflight {
     param(
         [System.Collections.IList]$Conversation,
-        [string]$Model = $script:MODEL
+        [string]$Model = $MIRA_SEARCH_MODEL
     )
     if (-not (Test-GemmaAntigravityNativeSearchSupport -Model $Model)) {
         throw "Native Google Search is not supported by Antigravity model '$Model'."
@@ -674,10 +674,10 @@ function Write-GemmaGroundingDiagnostics {
     if ($script:CommandMode) { return }
     $mode = if (-not $GroundingEnabled) {
         'OFF'
-    } elseif ($Provider -eq 'antigravity' -and (Test-GemmaAntigravityNativeSearchSupport -Model $Model)) {
-        'native Antigravity Search-only preflight'
+    } elseif ($Provider -eq 'antigravity' -and (Test-GemmaAntigravityNativeSearchSupport -Model $MIRA_SEARCH_MODEL)) {
+        "native Antigravity Search-only preflight via $MIRA_SEARCH_MODEL"
     } elseif ($Provider -eq 'antigravity') {
-        "requested but unsupported by Antigravity model $Model"
+        "requested but unsupported search model $MIRA_SEARCH_MODEL"
     } elseif ($script:AgenticWebSearchEnabled) {
         "client web_search via Antigravity OAuth (research model: $MIRA_SEARCH_MODEL)"
     } else {
@@ -687,8 +687,8 @@ function Write-GemmaGroundingDiagnostics {
 
     $metadata = $Candidate.groundingMetadata
     if ($null -eq $metadata) {
-        if ($Provider -eq 'antigravity' -and $GroundingEnabled -and (Test-GemmaAntigravityNativeSearchSupport -Model $Model)) {
-            Write-Host '[Native grounding] Search runs in a separate preflight; final answer candidate has no direct grounding metadata.' -ForegroundColor DarkGray
+        if ($Provider -eq 'antigravity' -and $GroundingEnabled -and (Test-GemmaAntigravityNativeSearchSupport -Model $MIRA_SEARCH_MODEL)) {
+            Write-Host "[Native grounding] Search ran separately through $MIRA_SEARCH_MODEL; final answer candidate has no direct grounding metadata." -ForegroundColor DarkGray
         }
         return
     }
@@ -2056,9 +2056,9 @@ while ($true) {
         if (-not $script:CommandMode -and
             $script:Provider -eq 'antigravity' -and
             $script:GoogleSearchGrounding -and
-            (Test-GemmaAntigravityNativeSearchSupport -Model $script:MODEL)) {
+            (Test-GemmaAntigravityNativeSearchSupport -Model $MIRA_SEARCH_MODEL)) {
             try {
-                [void](Invoke-GemmaNativeGoogleSearchPreflight -Conversation $Contents -Model $script:MODEL)
+                [void](Invoke-GemmaNativeGoogleSearchPreflight -Conversation $Contents -Model $MIRA_SEARCH_MODEL)
             } catch {
                 # Search outages must not take down ordinary chat. Explicitly
                 # disclose the failed preflight and continue without grounding.
