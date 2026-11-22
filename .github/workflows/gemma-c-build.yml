@@ -24,6 +24,7 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: gemma
         run: cc -Wall -Wextra -O2 -std=c11 gemma.c $(pkg-config --cflags --libs libcurl openssl) -o gemma
+          ./gemma --self-test
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: brew install curl openssl pkg-config
@@ -44,3 +45,4 @@ jobs:
         shell: msys2 {0}
         working-directory: gemma
         run: gcc -Wall -Wextra -O2 -std=c11 gemma.c -lcurl -lcrypto -lbcrypt -lws2_32 -lshell32 -o gemma.exe
+          ./gemma.exe --self-test
