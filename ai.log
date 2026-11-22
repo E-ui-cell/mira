@@ -1,0 +1,165 @@
+# AI Plan & TODO — gemma.ps1
+
+Branch: `work`
+Repository: `E-ui-cell/mira`
+Scope: `gemma/gemma.ps1`
+
+## Goal
+
+Keep Google Search behavior strictly provider-specific. Antigravity OAuth models must use Google's own native, server-side grounding. Gemini Developer API models must use the script's agentic `web_search` function, backed by the Antigravity OAuth Google Search endpoint, because the Gemini Developer API provider does not get that free Antigravity-native grounding.
+
+## Required provider behavior
+
+### Antigravity OAuth
+
+- [x] Do not expose the script-defined/client-side `web_search` function.
+- [x] Add native `googleSearch: {}` to the Antigravity model request when `.grounding on`.
+- [x] Enable `toolConfig.includeServerSideToolInvocations = true` for Antigravity requests with native grounding and function calling.
+- [ ] Test that the selected Antigravity model performs native Search internally when it decides Search is needed.
+- [ ] Confirm that no `[Gemini tool call: web_search]` appears for Antigravity.
+- [ ] Confirm that grounding-off requests omit native `googleSearch` and do not search.
+- [ ] Inspect returned grounding metadata (queries, source titles/URLs) where available; do not mistake a model's answer or a tool-cycle STOP for proof of successful grounding.
+
+### Gemini Developer API
+
+- [x] Expose the script-defined `web_search` function only when provider is `gemini`, grounding is ON, and `MIRA_ENABLE_AGENTIC_WEB_SEARCH = $true`.
+- [x] Keep native `googleSearch: {}` out of Gemini Developer API answer requests.
+- [x] Route the agentic search function to the Antigravity OAuth endpoint, using the configured research model `MIRA_SEARCH_MODEL`.
+- [ ] Test that a Gemini API model can decide to call `web_search`.
+- [ ] Verify the Antigravity OAuth search response contains actual grounding metadata and source URLs.
+- [ ] Verify the research result is returned to the Gemini API model and used in its final answer.
+- [ ] Verify the tool is absent when `MIRA_ENABLE_AGENTIC_WEB_SEARCH = $false` or grounding is OFF.
+
+## Diagnostics and reliability TODO
+
+- [x] Log provider, selected answer model, and search mode clearly in `.grounding status`.
+- [x] Keep native-grounding diagnostics distinct from client-side `web_search` execution diagnostics.
+- [x] Surface grounding query strings, source count, source titles, and URLs when available; never claim a search succeeded without grounding metadata.
+- [x] Preserve HTTP status and raw Google error response; additionally extract structured error reason, model, and retry delay when present. A 503 `MODEL_CAPACITY_EXHAUSTED` remains identified as a capacity issue, not an authentication or tool-configuration failure.
+- [ ] Test both provider paths with grounding ON and OFF, including a request that does not need search.
+- [ ] Run Windows PowerShell 5.1 syntax validation and live endpoint tests after changes; GitHub content verification alone is not runtime testing.
+
+Implementation note: diagnostic wiring committed to `work` in `e9c7c4f3832b1da5405afbef586db39b1fd3e80d`. Native Antigravity responses now report grounding metadata when present and explicitly say when metadata is absent; Gemini API `web_search` reports its research model, query count, source count, queries, and source URLs. Structured Google API error details are printed in addition to the raw response. These are code changes only; no live provider or Windows PowerShell runtime test has been run.
+
+## Acceptance matrix
+
+| Provider / setting | Expected behavior |
+|---|---|
+| Antigravity OAuth + grounding ON | Native Google Search grounding; no client `web_search` function |
+| Antigravity OAuth + grounding OFF | No native Search tool |
+| Gemini Developer API + grounding ON + agentic search enabled | Client `web_search` function; search executed through Antigravity OAuth |
+| Gemini Developer API + grounding ON + agentic search disabled | No `web_search` function |
+| Gemini Developer API + grounding OFF | No `web_search` function |
+
+## Constraints
+
+- Work only on branch `work`; do not modify `main` or create/switch branches unless explicitly requested.
+- Preserve the protected API-key block exactly, including `$env:GEMINI_APIJ` and its existing error text.
+- Do not add ACL, ownership, or file-permission operations.
+- Do not claim runtime success until tested against the actual Windows PowerShell script and live provider endpoints.
+
+## Current implementation checkpoint
+
+The provider separation and native Antigravity `googleSearch` wiring were committed to `work` in commit `0d38abf4f3d43a63a52b815643d7969cc0375c2c`. The updated file blob was verified on GitHub. Runtime behavior has not yet been validated; the checklist above records the remaining tests.
+
+
+## Standalone Windows assistant and built-in skills
+
+Direction: keep `gemma.ps1` self-contained and compact. Windows capabilities are exposed to the model through a small skill system; task-specific instructions are loaded on demand, while execution continues through the existing PowerShell tool and permission gate. Do not create a large mandatory helper-module tree.
+
+### Implemented on branch `work`
+
+- [x] Add an on-demand `get_skill` model tool. `get_skill("list")` returns available skills; requesting a named skill returns its task playbook.
+- [x] Add built-in `file-management` skill: inspect first, plan file moves, detect collisions, avoid overwrite/deletion by default, verify results.
+- [x] Add built-in `windows-settings` skill: use supported `ms-settings:` pages and supported cmdlets; distinguish opening a page from actually changing a setting.
+- [x] Add built-in `desktop-gui` skill: launch apps, identify windows, use Win32 window APIs and semantic UI Automation, avoid uncertain coordinate clicks.
+- [x] Add built-in `clipboard` skill: task-scoped Unicode clipboard read/write guidance, native Win32 API guidance, no polling, no startup reads, no clipboard logging.
+- [x] Add built-in `system-inspection` skill: read-only CIM, process, service, storage, network and installed-app diagnostics.
+- [x] Update the system instruction to load the relevant skill before Windows file/configuration/GUI/clipboard/system tasks.
+- [x] Keep all actual command execution behind existing `run_powershell` and ASK/AUTOPILOT permission handling.
+- [x] Preserve the protected API-key block exactly. No ACL, ownership, permission changes, or elevation code added.
+
+Implementation commit: `9e95428bf7beb289be85527271ad0175f4af567f`. File blob verified as `329b4c55d6f0a4b40b5789143ef09b211041207a`.
+
+### Implemented standalone CLI and Windows integration on `work`
+
+#### User-facing command line
+
+- [x] Replace batch-oriented flags with two short interactive options:
+  - `gemma -p "show weather"` — one-shot interactive assistant request. Normal spinner, tool execution, and ASK confirmations remain active; final response is ordinary human-readable text.
+  - `gemma -e "find notes.txt and open Explorer selecting it"` — one-shot command-generation mode. Return a concise Windows PowerShell command only; never execute it or call tools.
+- [x] Keep no-argument `gemma` as the normal interactive chat.
+- [x] Remove public `-Headless`, `-Prompt`, `-Json`, `-Stdin`, `-Search`, `-Command`, and `-CommandArgument` entry points. No machine-readable or redirected-input mode is part of the user-facing CLI.
+- [x] Keep ASK as the normal permission mode. `-p` remains interactive and can ask the user before running a local PowerShell action.
+- [x] In `-e` mode disable all model tools and Google grounding, explicitly instruct the model not to execute anything, and strip accidental Markdown code fences from the generated command.
+
+#### Dedicated quick web mini-tool
+
+- [x] Add a restricted `quick_web` tool, implemented with `curl.exe` when available (fallback: `Invoke-WebRequest`).
+- [x] `weather`: fetch `https://wttr.in/?format=3`; no location argument means wttr.in chooses the region from the caller's IP. A user-specified city can be passed explicitly.
+- [x] `public-ip`: fetch `https://api.ipify.org`.
+- [x] `cheatsheet`: fetch `https://cht.sh/` for its home page, or a topic-specific `cht.sh` path.
+- [x] Restrict the helper to these three fixed services, use request timeouts and response-size limits, and report curl/network failures.
+- [x] Add the `quick-web-tools` skill and system guidance so Mira chooses this mini-tool for weather, public-IP and quick command-help requests instead of broad Google Search.
+
+#### Native Windows integration
+
+- [x] Add direct local commands: `system-info`, `process-list`, `clipboard-read`, `clipboard-write`, `window-list`, `window-activate`, `ui-tree`, `ui-action`, `app-launch`, `settings-open`, `network-check`, and `file-search`.
+- [x] Implement lazy-loaded Win32 Unicode clipboard read/write and visible top-level window discovery/activation.
+- [x] Implement UI Automation control-tree inspection and guarded `Invoke`, `Toggle`, and `SetValue` actions.
+- [x] Add whitelist-based Windows Settings launching and application launching.
+- [x] Add built-in skills: `file-management`, `windows-settings`, `desktop-gui`, `clipboard`, `system-inspection`, and `quick-web-tools`.
+- [x] Add user-authored Markdown skills from `$HOME\.gemma\skills\`; validate skill names, limit files to 32 KB, and treat contents as untrusted guidance.
+- [x] Add interactive `.skills` and `.skill <name>` commands.
+- [x] Keep normal model-requested PowerShell execution behind ASK/AUTOPILOT. Clipboard writes and GUI actions also use the permission policy.
+
+#### Usage examples
+
+```powershell
+# Ask Mira to use a mini-tool / Windows capability as needed
+gemma -p 'show weather'
+gemma -p 'show my ip'
+gemma -p 'show help with curl cht.sh/'
+gemma -p 'find my notes.txt and open Explorer selecting that file'
+
+# Generate a command only; it is printed, never executed
+gemma -e 'find notes.txt and open Explorer selecting that file'
+
+# Normal interactive chat
+gemma
+```
+
+#### Implementation commits
+
+- `f5f1c571cd9dc31009c70da0949790341fed1596` — replace batch flags with `-p` and `-e`.
+- `a5a005d1a7547f68cf8c8174b6b3748439c10f04` — keep one-shot modes interactive.
+- `d0050736bb26f0818e6af7299b52394671d5dab7` — add the dedicated curl-based quick web mini-tool.
+- `ceade7a34d5010f7bc14c39cdd86c95d686e27eb` — polish command-only output and quick-tool guidance.
+- `1464c0ca0427a05931dda77fe2aee446e2a33850` — restore normal interactive startup and keep `-e` output clean.
+
+#### Remaining validation
+
+- [ ] Run Windows PowerShell 5.1 parser validation and test parameter aliases `-p` and `-e`.
+- [ ] Test `-e` command generation: no tools invoked, no command executed, no extra output around the command.
+- [ ] Test `-p` weather using wttr.in IP-based location, public IP via api.ipify.org, and cht.sh root/topic help.
+- [ ] Test `-p` file discovery plus Explorer selection with ASK confirmation for any action that changes state.
+- [ ] Test spinner, Ctrl+C cancellation, tool approval prompts, and ordinary no-argument interactive chat.
+- [ ] Test quick_web timeout, oversized response, curl missing, and HTTP failure behavior.
+- [ ] Re-run Windows clipboard/UI Automation tests and the provider-grounding ON/OFF matrix.
+- [ ] Confirm Windows PowerShell 5.1 and PowerShell 7 compatibility.
+
+Static GitHub content checks can verify source structure but cannot replace Windows runtime testing. No PowerShell runtime/parser is available in the editing environment; the new CLI and quick-web tool have not been executed live here.
+
+
+### Safety and design invariants
+
+- No background clipboard monitoring or automatic clipboard reads.
+- Never log clipboard contents, OAuth tokens, API keys, or credentials.
+- No silent administrator elevation, UAC bypass, ACL/ownership/file-permission changes.
+- Read-only inspection by default; preview changes before applying them.
+- File moves, writes, settings changes, process termination, and GUI interaction use the existing permission model.
+- Prefer native PowerShell/.NET/Win32 and UI Automation; use CMD/VBScript only for a demonstrated compatibility requirement.
+- Skills are guidance, not permission grants. Every action still passes through the same execution and confirmation path.
+- Do not claim Windows runtime validation until tested on Windows.
+
+Status: standalone headless entry points, user-authored skill loading, direct Win32 clipboard/window helpers, UI Automation inspection/actions, and local Windows commands are implemented on `work`. Windows runtime/parser validation remains outstanding.
