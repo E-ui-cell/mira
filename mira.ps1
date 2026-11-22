@@ -2143,14 +2143,20 @@ function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary){
     if(-not [string]::IsNullOrWhiteSpace($systemText)){$msg += [ordered]@{role='system';content=$systemText}}
     foreach($m in $messages){
         $entry=[ordered]@{role=[string]$m.role}
-        if($null -ne $m.parts){
-            $content=@()
-            foreach($p in @($m.parts)){
-                if([string]$p.kind -eq 'image'){$content += [ordered]@{type='image_url';image_url=[ordered]@{url=('data:'+([string]$p.mimeType)+';base64,'+([string]$p.data))}}}
-                else{$content += [ordered]@{type='text';text=[string]$p.text}}
-            }
-            $entry.content=$content
-        }else{$entry.content=[string]$m.text}
+        if($null -ne $m.PSObject.Properties['toolCallId']){
+            $entry.tool_call_id=[string]$m.toolCallId
+            $entry.content=[string]$m.text
+        }else{
+            if($null -ne $m.parts){
+                $content=@()
+                foreach($p in @($m.parts)){
+                    if([string]$p.kind -eq 'image'){$content += [ordered]@{type='image_url';image_url=[ordered]@{url=('data:'+([string]$p.mimeType)+';base64,'+([string]$p.data))}}}
+                    else{$content += [ordered]@{type='text';text=[string]$p.text}}
+                }
+                $entry.content=$content
+            }else{$entry.content=[string]$m.text}
+            if($null -ne $m.PSObject.Properties['openAIToolCalls']){$entry.tool_calls=@($m.openAIToolCalls)}
+        }
         if([string]$m.role -eq 'assistant' -and $null -ne $m.reasoning_details){
             $rd=@($m.reasoning_details)
             if($rd.Count -gt 0){$entry.reasoning_details=$rd}
@@ -2159,6 +2165,14 @@ function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary){
     }
     $payload=[ordered]@{model=$model;messages=$msg;stream=$script:StreamResponses}
     if($script:ShowReasoning){$payload.reasoning=[ordered]@{enabled=$true}}
+    if(-not $script:StreamResponses){
+        $declarations=@(Get-MiraFunctionDeclarations)
+        $tools=@()
+        foreach($declaration in $declarations){
+            $tools+=@{type='function';function=@{name=[string]$declaration.name;description=[string]$declaration.description;parameters=$declaration.parameters}}
+        }
+        if($tools.Count -gt 0){$payload.tools=$tools;$payload.tool_choice='auto'}
+    }
     return $payload
 }
 function Start-MiraRequestUi(){
