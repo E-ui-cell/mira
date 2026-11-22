@@ -477,11 +477,19 @@ function Invoke-GemmaPowerShellTool {
         $approval = Read-Host 'Execute this PowerShell command? [Y/n]'
         if ($approval -match '^(?i:n|no)$') { return @{ approved=$false; output='User declined command execution.' } }
     }
+    $previousProgressPreference = $ProgressPreference
+    $previousInformationPreference = $InformationPreference
     try {
-        $output = Invoke-Expression $Command 2>&1 | Out-String -Width 240
+        $ProgressPreference = 'SilentlyContinue'
+        $InformationPreference = 'SilentlyContinue'
+        $output = Invoke-Expression $Command *>&1 | Out-String -Width 240
         if ($output.Length -gt 20000) { $output = $output.Substring(0,20000) + "`n[PowerShell output truncated]" }
         return @{ approved=$true; output=$output; current_location=(Get-Location).Path }
     } catch { return @{ approved=$true; error=$_.Exception.Message } }
+    finally {
+        $ProgressPreference = $previousProgressPreference
+        $InformationPreference = $previousInformationPreference
+    }
 }
 
 function Invoke-GemmaEffortCommand {
