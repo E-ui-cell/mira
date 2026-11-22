@@ -1,4 +1,4 @@
-﻿﻿﻿﻿[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Alias('p')][string]$Prompt,
     [Alias('e')][string]$ExplainCommand,
