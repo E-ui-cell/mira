@@ -1,0 +1,46 @@
+name: Gemma C build
+
+on:
+  push:
+    branches: [gemma-c]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libcurl4-openssl-dev libssl-dev pkg-config
+      - name: Build on Linux
+        if: runner.os == 'Linux'
+        working-directory: gemma
+        run: cc -Wall -Wextra -O2 -std=c11 gemma.c $(pkg-config --cflags --libs libcurl openssl) -o gemma
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install curl openssl pkg-config
+      - name: Build on macOS
+        if: runner.os == 'macOS'
+        working-directory: gemma
+        run: |
+          export PKG_CONFIG_PATH="$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix openssl)/lib/pkgconfig:$PKG_CONFIG_PATH"
+          cc -Wall -Wextra -O2 -std=c11 gemma.c $(pkg-config --cflags --libs libcurl openssl) -o gemma
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-curl mingw-w64-x86_64-openssl
+      - name: Build on Windows
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        working-directory: gemma
+        run: gcc -Wall -Wextra -O2 -std=c11 gemma.c -lcurl -lcrypto -lbcrypt -lws2_32 -lshell32 -o gemma.exe
