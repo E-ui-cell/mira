@@ -3,7 +3,7 @@
 import argparse, base64, hashlib, json, os, platform, secrets, subprocess, time
 import urllib.parse, urllib.request, urllib.error, webbrowser
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 API_KEY=os.getenv("GEMINI_APIJ","")
 CLIENT_ID=os.getenv("AGY_GOOGLE_CLIENT_ID","")
@@ -62,16 +62,20 @@ def login():
     if not v: raise RuntimeError("No authorization code")
     t=oauth(dict(code=v,client_id=CLIENT_ID,client_secret=CLIENT_SECRET,redirect_uri=REDIRECT,grant_type="authorization_code",code_verifier=verifier))
     if not t.get("access_token") or not t.get("refresh_token"): raise RuntimeError("Google did not return both tokens")
-    token_save({"auth_method":"consumer","token":{"access_token":t["access_token"],"refresh_token":t["refresh_token"],"token_type":t.get("token_type","Bearer"),"expiry":time.time()+int(t.get("expires_in",3600))}})
+    token_save({"auth_method":"consumer","token":{"access_token":t["access_token"],"refresh_token":t["refresh_token"],"token_type":t.get("token_type","Bearer"),"expiry":datetime.fromtimestamp(time.time()+int(t.get("expires_in",3600)),timezone.utc).isoformat().replace("+00:00","Z")}})
     print("[OAuth saved]",TOKEN)
 def access():
     d=token_read()
     if not d or not d.get("token"): raise RuntimeError("Not signed in; use .auth login")
     t=d["token"]
-    if t.get("access_token") and float(t.get("expiry",0))>time.time()+60: return t["access_token"]
+    expiry=t.get("expiry",0)
+    try:
+        exp=datetime.fromisoformat(str(expiry).replace("Z","+00:00")).timestamp() if isinstance(expiry,str) else float(expiry)
+    except Exception: exp=0
+    if t.get("access_token") and exp>time.time()+60: return t["access_token"]
     n=oauth(dict(refresh_token=t.get("refresh_token",""),client_id=CLIENT_ID,client_secret=CLIENT_SECRET,grant_type="refresh_token"))
     if not n.get("access_token"): raise RuntimeError("OAuth refresh returned no access token")
-    t["access_token"]=n["access_token"]; t["expiry"]=time.time()+int(n.get("expires_in",3600))
+    t["access_token"]=n["access_token"]; t["expiry"]=datetime.fromtimestamp(time.time()+int(n.get("expires_in",3600)),timezone.utc).isoformat().replace("+00:00","Z")
     if n.get("refresh_token"): t["refresh_token"]=n["refresh_token"]
     token_save(d); return t["access_token"]
 def agy_headers():
@@ -137,8 +141,9 @@ def tool(name,args):
         p=subprocess.run(shell,capture_output=True,text=True,timeout=180)
         return {"exit_code":p.returncode,"stdout":p.stdout[-20000:],"stderr":p.stderr[-20000:]}
     return {"error":"Unknown tool "+name}
-def generate(contents):
-    p={"systemInstruction":{"parts":[{"text":SYSTEM}]},"contents":contents,"tools":TOOLS,"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}}}
+def generate(contents,command_mode=False):
+    p={"systemInstruction":{"parts":[{"text":SYSTEM}]},"contents":contents}
+    if not command_mode: p.update({"tools":TOOLS,"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}}})
     if S["provider"]=="antigravity":return agy_generate(p,S["model"]).get("response",{})
     if not API_KEY:raise RuntimeError("GEMINI_APIJ is not set")
     return post(API+"/models/"+urllib.parse.quote(S["model"])+":generateContent?key="+urllib.parse.quote(API_KEY),p)
@@ -148,7 +153,7 @@ def ask(text,command=False):
         try:search(contents)
         except Exception as e:print("[Search unavailable]",e);contents.append({"role":"user","parts":[{"text":"Search failed. Do not claim current web information was verified."}]})
     for _ in range(32):
-        r=generate(contents);c=(r.get("candidates") or [{}])[0];parts=c.get("content",{}).get("parts",[])
+        r=generate(contents,command);c=(r.get("candidates") or [{}])[0];parts=c.get("content",{}).get("parts",[])
         calls=[p["functionCall"] for p in parts if p.get("functionCall")]
         if not calls:return candidate_text(c).strip()
         contents.append({"role":"model","parts":parts});responses=[]
