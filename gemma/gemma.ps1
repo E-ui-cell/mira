@@ -3,19 +3,53 @@
 # ==============================================================================
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$Host.UI.RawUI.WindowTitle = "GEMMA CLI"
+$Host.UI.RawUI.WindowTitle = $MIRA_CONSOLE_TITLE
 
 # ==============================================================================
 # CONFIGURATION & PERSONA INJECTION
 # ==============================================================================
 # ==============================================================================
-# USER CONFIGURATION — edit defaults here
+# USER CONFIGURATION — all runtime defaults are centralized here
 # ==============================================================================
-$MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity' or 'gemini'
-$MIRA_DEFAULT_MODEL = 'gemini-3.1-flash-lite'
-$MIRA_TEMPERATURE = $null                   # Optional numeric value; $null leaves the model default
-$MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'
-$MIRA_DEFAULT_GROUNDING = $true              # Agentic Google Search via Antigravity is enabled for every answer provider/model
+# Answer provider and model
+$MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity' or 'gemini'; no automatic provider switching
+$MIRA_DEFAULT_MODEL = $MIRA_SEARCH_MODEL
+$MIRA_DEFAULT_EFFORT = 'high'                # 'low', 'medium', or 'high'
+$MIRA_SEARCH_MODEL = 'gemini-3.1-flash-lite' # Dedicated search engine; independent of answer provider/model
+
+# Generation defaults ($null means: let the selected model use its own default)
+$MIRA_TEMPERATURE = $null                   # 0.0–2.0 where supported
+$MIRA_TOP_P = $null
+$MIRA_TOP_K = $null
+$MIRA_MAX_OUTPUT_TOKENS = $null
+$MIRA_CANDIDATE_COUNT = $null
+$MIRA_PRESENCE_PENALTY = $null
+$MIRA_FREQUENCY_PENALTY = $null
+$MIRA_SEED = $null
+$MIRA_RESPONSE_MIME_TYPE = $null            # e.g. 'text/plain' or 'application/json'
+$MIRA_STOP_SEQUENCES = $null                # e.g. @('END')
+
+# Runtime behavior
+$MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'; ASK prompt defaults to Yes
+$MIRA_DEFAULT_GROUNDING = $true              # Agentic Google Search enabled for every answer provider/model
+$MIRA_DEFAULT_CACHED_CONTENT = if ($env:MIRA_GEMINI_CACHED_CONTENT) { $env:MIRA_GEMINI_CACHED_CONTENT } else { $null }
+$MIRA_DEFAULT_SYSTEM_PROMPT = @"
+You Professional assistant. Speak short, presice, no noncence
+On this Windows host, use the run_powershell tool for local shell tasks. Use PowerShell syntax, never Bash.
+"@
+
+# Safety defaults (kept at the script's existing values; editable here)
+$MIRA_DEFAULT_SAFETY_THRESHOLD = 'BLOCK_NONE'
+
+# Limits and console behavior
+$MIRA_MAX_TOOL_ROUNDS = 32
+$MIRA_MAX_POWERSHELL_OUTPUT_CHARS = 20000
+$MIRA_MAX_COMMAND_OUTPUT_CHARS = 20000
+$MIRA_MAX_SEARCH_OUTPUT_CHARS = 24000
+$MIRA_MAX_HISTORY = 500
+$MIRA_POWERSHELL_OUTPUT_WIDTH = 240
+$MIRA_SPINNER_INTERVAL_MS = 150
+$MIRA_CONSOLE_TITLE = 'GEMMA CLI'
 
 $API_KEY = $env:GEMINI_APIJ
 
@@ -39,12 +73,7 @@ $MODEL   = $MIRA_DEFAULT_MODEL
 
 $SystemInstruction = @{
     parts = @(
-        @{ text = @"
-
-You Professional assistant. Speak short, presice, no noncence  
-On this Windows host, use the run_powershell tool for local shell tasks. Use PowerShell syntax, never Bash.
-
-"@ }
+        @{ text = $MIRA_DEFAULT_SYSTEM_PROMPT }
     )
 }
 
@@ -74,12 +103,29 @@ On this Windows host, use the run_powershell tool for local shell tasks. Use Pow
 # ==============================================================================
 $GeminiTools = $null
 $GeminiToolConfig = $null
-$GeminiCachedContent = if ($env:MIRA_GEMINI_CACHED_CONTENT) { $env:MIRA_GEMINI_CACHED_CONTENT } else { $null }
-$GeminiGenerationConfig = $null
+$GeminiCachedContent = $MIRA_DEFAULT_CACHED_CONTENT
+$GeminiGenerationConfig = @{}
+foreach ($setting in @(
+    @{ Name = 'temperature'; Value = $MIRA_TEMPERATURE },
+    @{ Name = 'topP'; Value = $MIRA_TOP_P },
+    @{ Name = 'topK'; Value = $MIRA_TOP_K },
+    @{ Name = 'maxOutputTokens'; Value = $MIRA_MAX_OUTPUT_TOKENS },
+    @{ Name = 'candidateCount'; Value = $MIRA_CANDIDATE_COUNT },
+    @{ Name = 'presencePenalty'; Value = $MIRA_PRESENCE_PENALTY },
+    @{ Name = 'frequencyPenalty'; Value = $MIRA_FREQUENCY_PENALTY },
+    @{ Name = 'seed'; Value = $MIRA_SEED },
+    @{ Name = 'responseMimeType'; Value = $MIRA_RESPONSE_MIME_TYPE },
+    @{ Name = 'stopSequences'; Value = $MIRA_STOP_SEQUENCES }
+)) {
+    if ($null -ne $setting.Value) {
+        $GeminiGenerationConfig[$setting.Name] = $setting.Value
+    }
+}
+if ($GeminiGenerationConfig.Count -eq 0) { $GeminiGenerationConfig = $null }
 $GeminiSafetySettings = @(
         @{
             category  = "HARM_CATEGORY_SEXUALLY_EXPLICIT"
-            threshold = "BLOCK_NONE"
+            threshold = $MIRA_DEFAULT_SAFETY_THRESHOLD
         },
         @{
             category  = "HARM_CATEGORY_HATE_SPEECH"
@@ -96,7 +142,7 @@ $GeminiSafetySettings = @(
     )
 $script:GoogleSearchGrounding = [bool]$MIRA_DEFAULT_GROUNDING
 $script:Provider = $MIRA_DEFAULT_PROVIDER
-$script:Effort = 'high'
+$script:Effort = $MIRA_DEFAULT_EFFORT
 $script:ExecutionPermission = $MIRA_DEFAULT_PERMISSION
 $script:AntigravityProject = $null
 
@@ -462,7 +508,7 @@ function Invoke-GemmaWebSearch {
     $research = [string]::Join("`n`n",$parts)
     if ($sources.Count -gt 0) { $research += "`n`nSources:`n" + [string]::Join("`n",$sources) }
     if ([string]::IsNullOrWhiteSpace($research)) { throw 'Search returned no readable research.' }
-    if ($research.Length -gt 24000) { $research = $research.Substring(0,24000) + "`n[Search results truncated]" }
+    if ($research.Length -gt $MIRA_MAX_SEARCH_OUTPUT_CHARS) { $research = $research.Substring(0,$MIRA_MAX_SEARCH_OUTPUT_CHARS) + "`n[Search results truncated]" }
     return @{ query=$Query; research=$research; sources=@($sources); search_model='gemini-3.1-flash-lite' }
 }
 
@@ -490,8 +536,8 @@ function Invoke-GemmaPowerShellTool {
     try {
         $ProgressPreference = 'SilentlyContinue'
         $InformationPreference = 'SilentlyContinue'
-        $output = Invoke-Expression $Command *>&1 | Out-String -Width 240
-        if ($output.Length -gt 20000) { $output = $output.Substring(0,20000) + "`n[PowerShell output truncated]" }
+        $output = Invoke-Expression $Command *>&1 | Out-String -Width $MIRA_POWERSHELL_OUTPUT_WIDTH
+        if ($output.Length -gt $MIRA_MAX_POWERSHELL_OUTPUT_CHARS) { $output = $output.Substring(0,$MIRA_MAX_POWERSHELL_OUTPUT_CHARS) + "`n[PowerShell output truncated]" }
         return @{ approved=$true; output=$output; current_location=(Get-Location).Path }
     } catch { return @{ approved=$true; error=$_.Exception.Message } }
     finally {
@@ -557,11 +603,6 @@ function Build-GeminiPayload {
         $payload.generationConfig = $GeminiGenerationConfig
     }
 
-    if ($null -ne $MIRA_TEMPERATURE) {
-        if ($null -eq $payload.generationConfig) { $payload.generationConfig = @{} }
-        $payload.generationConfig.temperature = [double]$MIRA_TEMPERATURE
-    }
-
     # Gemini 3 uses thinkingLevel; Gemini 2.5 uses thinkingBudget.
     # This payload is shared by Gemini Developer API and Antigravity OAuth.
     if ($script:MODEL -match '(?i)gemini[-.]?3') {
@@ -601,7 +642,7 @@ $Contents = [System.Collections.ArrayList]::new()
 $script:MiraInputHistory = [System.Collections.Generic.List[string]]::new()
 $script:MiraHistoryIndex = -1
 $script:MiraHistoryDraft = ''
-$script:MiraHistoryMax = 500
+$script:MiraHistoryMax = $MIRA_MAX_HISTORY
 # ==============================================================================
 # TAB COMPLETION
 # ==============================================================================
@@ -1220,7 +1261,7 @@ while ($true) {
             $cmdOutput = Invoke-Expression $commandToRun 2>&1 | Out-String
             Write-Host $cmdOutput -ForegroundColor Gray
             $modelCmdOutput = $cmdOutput
-            if ($modelCmdOutput.Length -gt 20000) { $modelCmdOutput = $modelCmdOutput.Substring(0,20000) + "`n[Command output truncated before sending to the model]" }
+            if ($modelCmdOutput.Length -gt $MIRA_MAX_COMMAND_OUTPUT_CHARS) { $modelCmdOutput = $modelCmdOutput.Substring(0,$MIRA_MAX_COMMAND_OUTPUT_CHARS) + "`n[Command output truncated before sending to the model]" }
             $userParts = @( @{ text = "Executed PowerShell Command: $commandToRun`nOutput:`n$modelCmdOutput" } )
         } catch {
             $errOutput = $_.Exception.Message
@@ -1428,7 +1469,7 @@ while ($true) {
     # final answer. Keep the tool exchange inside the same user turn.
     $toolLoop = $true
     $toolRounds = 0
-    $maxToolRounds = 32
+    $maxToolRounds = $MIRA_MAX_TOOL_ROUNDS
 
     try {
         while ($toolLoop) {
@@ -1504,7 +1545,7 @@ while ($true) {
                 $frame = $frames[$i % $frames.Length]
                 $elapsed = [int]$sw.ElapsedMilliseconds
                 Write-Host "`r$frame  $([math]::Round($elapsed/1000, 1))s " -NoNewline -ForegroundColor DarkGray
-                Start-Sleep -Milliseconds 150
+                Start-Sleep -Milliseconds $MIRA_SPINNER_INTERVAL_MS
                 $i++
             }
             $sw.Stop()
