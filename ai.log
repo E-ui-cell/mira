@@ -173,4 +173,4 @@ Implementation is committed to `work`; live Windows runtime validation has not b
 - Skills are guidance, not permission grants. Every action still passes through the same execution and confirmation path.
 - Do not claim Windows runtime validation until tested on Windows.
 
-Status: the first built-in skill layer is implemented. Headless mode and direct native Windows helpers remain TODO; the current skills guide the model to use existing PowerShell capabilities and do not yet constitute separately tested Win32/UIA implementations.
+Status: standalone headless entry points, user-authored skill loading, direct Win32 clipboard/window helpers, UI Automation inspection/actions, and local Windows commands are implemented on `work`. Windows runtime/parser validation remains outstanding.
