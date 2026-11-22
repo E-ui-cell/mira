@@ -459,30 +459,9 @@ function Test-MiraNativeGoogleSearchSupport {
     )
     if (-not $script:GoogleSearchGrounding) { return $false }
 
-    # Gemini Developer API Search grounding is unavailable to free-tier projects.
-    # Keep its search path on the independent Antigravity research agent.
-    if (-not [string]::Equals($Provider, 'antigravity', [StringComparison]::OrdinalIgnoreCase)) {
-        return $false
-    }
-
-    # Fetch the capability catalogue once if .model has not already loaded it.
-    if ($null -eq $script:AntigravityWebSearchModelIds -and -not $script:AntigravityCapabilityProbeAttempted) {
-        try {
-            [void](Get-AntigravityModels)
-        } catch {
-            # Unknown capability must fail closed to the independent search agent.
-            $script:AntigravityCapabilityProbeAttempted = $true
-        }
-    }
-
-    if ($null -eq $script:AntigravityWebSearchModelIds) { return $false }
-    foreach ($supportedModel in @($script:AntigravityWebSearchModelIds)) {
-        $normalizedModel = ([string]$supportedModel).Trim() -replace '^models/',''
-        if ([string]::Equals($normalizedModel, [string]$Model, [StringComparison]::OrdinalIgnoreCase)) {
-            return $true
-        }
-    }
-    return $false
+    # Antigravity models are assumed to have their own internal Google Search.
+    # Never expose the separate agentic web_search function to this provider.
+    return [string]::Equals($Provider, 'antigravity', [StringComparison]::OrdinalIgnoreCase)
 }
 
 function Invoke-GemmaAuthCommand {
@@ -1501,8 +1480,9 @@ while ($true) {
     # The model may request this function when it needs the real local date/time.
     # Gemini does NOT execute it; this PowerShell wrapper does.
     # ===========================================================================
-    # Choose exactly one search path per model: native Google Search or the
-    # independent Flash-Lite research tool. Never pay for both on one turn.
+    # Antigravity models use their assumed internal Google Search; never expose
+    # agentic web_search to them. Only Gemini Developer API models can use the
+    # independent Flash-Lite research-agent fallback.
     $script:NativeGoogleSearchActive = Test-MiraNativeGoogleSearchSupport
     $functionDeclarations = @(
         @{
@@ -1516,7 +1496,7 @@ while ($true) {
             parameters = @{ type = "object"; properties = @{ command = @{ type = "string"; description = "PowerShell command to execute on the Windows host." } }; required = @("command") }
         }
     )
-    if ($script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled -and -not $script:NativeGoogleSearchActive) {
+    if ($script:Provider -eq 'gemini' -and $script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled) {
         $functionDeclarations += @{
             name = "web_search"
             description = "Search the web with the dedicated Gemini 3.1 Flash-Lite Google Search research agent. Use for current information and source discovery."
@@ -1750,7 +1730,7 @@ while ($true) {
                             }
                         }
                         "web_search" {
-                            if (-not $script:GoogleSearchGrounding -or -not $script:AgenticWebSearchEnabled) { $toolResult = @{ error = "Agentic web search is disabled in settings. Use native Google Search if this model supports it." } }
+                            if ($script:Provider -ne 'gemini' -or -not $script:GoogleSearchGrounding -or -not $script:AgenticWebSearchEnabled) { $toolResult = @{ error = "Agentic web search is available only for the Gemini Developer API provider when enabled in settings." } }
                             else { $toolResult = Invoke-GemmaWebSearch -Query ([string]$call.args.query) }
                         }
                         "run_powershell" {
