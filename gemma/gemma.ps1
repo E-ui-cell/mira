@@ -1,8 +1,29 @@
 ﻿﻿﻿﻿[CmdletBinding()]
 param(
     [Alias('p')][string]$Prompt,
-    [Alias('e')][string]$ExplainCommand
+    [Alias('e')][string]$ExplainCommand,
+    [Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArgs
 )
+
+# Explorer's legacy "Run with PowerShell" association can append an
+# execution-policy wrapper after -File. Capture and remove only that exact
+# suffix before Gemma processes any remaining CLI arguments.
+function Get-GemmaCliArgs {
+    param([object[]]$RawArgs)
+
+    $a = @($RawArgs | ForEach-Object { [string]$_ })
+    if ($a.Count -ge 2 -and $a[0] -ieq '-Command') {
+        $cmd = ([string]$a[1]).Replace(' ', '').Replace([string][char]9, '').Replace([string][char]13, '').Replace([string][char]10, '')
+        $expected = 'if((Get-ExecutionPolicy)-neAllSigned){Set-ExecutionPolicy-ScopeProcessBypass}'
+        if ($cmd -ieq $expected) {
+            return @($a | Select-Object -Skip 2)
+        }
+    }
+
+    return $a
+}
+
+$script:RemainingCliArgs = @(Get-GemmaCliArgs $RemainingArgs)
 $script:OneShot = [bool](-not [string]::IsNullOrWhiteSpace($Prompt) -or -not [string]::IsNullOrWhiteSpace($ExplainCommand))
 $script:CommandMode = -not [string]::IsNullOrWhiteSpace($ExplainCommand)
 if ($script:CommandMode) { $Prompt = $ExplainCommand }
