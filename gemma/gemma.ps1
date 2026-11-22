@@ -90,28 +90,21 @@ $LastGeminiRequestJson = $null
 
 function Get-GeminiModels {
     if ([string]::IsNullOrWhiteSpace($API_KEY)) {
-        throw "Gemini API key is empty. Set GEMINI_APIJ before fetching models."
+        throw "Gemini API key is empty. Set GEMINI_API (or legacy GEMINI_APIJ) before fetching models."
     }
-
     $allModels = New-Object 'System.Collections.Generic.List[object]'
     $pageToken = $null
     $pageCount = 0
     do {
         $uri = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100"
-        if (-not [string]::IsNullOrWhiteSpace($pageToken)) {
-            $uri += "&pageToken=$([uri]::EscapeDataString($pageToken))"
-        }
+        if (-not [string]::IsNullOrWhiteSpace($pageToken)) { $uri += "&pageToken=$([uri]::EscapeDataString($pageToken))" }
         $page = Invoke-RestMethod -Uri $uri -Method Get -Headers @{ "x-goog-api-key" = $API_KEY } -ErrorAction Stop
         foreach ($item in @($page.models)) {
-            if ($null -ne $item -and @($item.supportedGenerationMethods) -contains "generateContent") {
-                [void]$allModels.Add($item)
-            }
+            if ($null -ne $item -and @($item.supportedGenerationMethods) -contains "generateContent") { [void]$allModels.Add($item) }
         }
         $pageToken = [string]$page.nextPageToken
         $pageCount++
-        if ($pageCount -ge 100) {
-            throw "Google model list exceeded 100 pages; stopping to avoid an endless pagination loop."
-        }
+        if ($pageCount -ge 100) { throw "Google model list exceeded 100 pages; stopping to avoid an endless pagination loop." }
     } while (-not [string]::IsNullOrWhiteSpace($pageToken))
     return $allModels.ToArray()
 }
@@ -121,10 +114,7 @@ function Invoke-GeminiModelSwitcher {
     try {
         Write-Host "`nFetching models from Google..." -ForegroundColor DarkGray
         $availableModels = @(Get-GeminiModels)
-        if ($availableModels.Count -eq 0) {
-            Write-Host "[Google returned no models supporting generateContent.]" -ForegroundColor Yellow
-            return
-        }
+        if ($availableModels.Count -eq 0) { Write-Host "[Google returned no models supporting generateContent.]" -ForegroundColor Yellow; return }
         Write-Host "`nAvailable Gemini models (generateContent):" -ForegroundColor Cyan
         for ($i = 0; $i -lt $availableModels.Count; $i++) {
             $item = $availableModels[$i]
@@ -134,13 +124,8 @@ function Invoke-GeminiModelSwitcher {
             Write-Host ("  {0,2}. {1}  ({2}){3}" -f ($i + 1), $display, $id, $marker)
         }
         $selection = $RequestedModel
-        if ([string]::IsNullOrWhiteSpace($selection)) {
-            $selection = Read-Host "`nEnter model number or model ID (Enter to cancel)"
-        }
-        if ([string]::IsNullOrWhiteSpace($selection)) {
-            Write-Host "[Model unchanged: $script:MODEL]" -ForegroundColor Yellow
-            return
-        }
+        if ([string]::IsNullOrWhiteSpace($selection)) { $selection = Read-Host "`nEnter model number or model ID (Enter to cancel)" }
+        if ([string]::IsNullOrWhiteSpace($selection)) { Write-Host "[Model unchanged: $script:MODEL]" -ForegroundColor Yellow; return }
         $selection = $selection.Trim() -replace '^models/', ''
         $chosen = $null
         if ($selection -match '^\d+
@@ -1258,14 +1243,9 @@ while ($true) {
             $index = [int]$selection - 1
             if ($index -ge 0 -and $index -lt $availableModels.Count) { $chosen = $availableModels[$index] }
         } else {
-            $chosen = $availableModels | Where-Object {
-                ([string]$_.name -replace '^models/', '') -ieq $selection -or [string]$_.displayName -ieq $selection
-            } | Select-Object -First 1
+            $chosen = $availableModels | Where-Object { ([string]$_.name -replace '^models/', '') -ieq $selection -or [string]$_.displayName -ieq $selection } | Select-Object -First 1
         }
-        if ($null -eq $chosen) {
-            Write-Host "[Unknown selection. Model unchanged: $script:MODEL]" -ForegroundColor Red
-            return
-        }
+        if ($null -eq $chosen) { Write-Host "[Unknown selection. Model unchanged: $script:MODEL]" -ForegroundColor Red; return }
         $script:MODEL = [string]$chosen.name -replace '^models/', ''
         Write-Host "`n[Model switched to: $script:MODEL]" -ForegroundColor Green
     } catch {
