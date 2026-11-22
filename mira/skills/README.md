@@ -9,7 +9,7 @@ MIRA includes built-in task playbooks:
 - system-inspection
 - quick-web-tools
 
-User-authored skills are Markdown files stored in:
+Repository skills are Markdown files in mira/skills/*.md and load with the repository copy of mira.ps1. User-authored skills are Markdown files stored in:
 
 %USERPROFILE%\.mira\skills\<skill-name>.md
 
