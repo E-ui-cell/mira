@@ -49,6 +49,7 @@ gcc -O2 -std=c11 gemma.c -lcurl -lcrypto -lbcrypt -lws2_32 -lshell32 -o gemma.ex
 - `.autopilot` — local commands run without per-command confirmation.
 - `.verbose on|off` — request thought summaries where supported.
 - `.auth login|status|logout`
+- `.save` saves the current session; `.exportsession PATH` and `.loadsession PATH` export/import it. The default is `~/.gemini/gemma-session.json`.
 - `.clear`, `.help`, `.q`
 
 ## Authentication and configuration
@@ -77,7 +78,7 @@ Optional environment variables:
 
 Implemented in this first C pass: Antigravity OAuth token reuse/refresh/login, Gemini API requests, model catalogue, Gemini 3/2.5 effort controls, Search-only grounding preflight, function calling, quick weather/IP/cheatsheet lookups, local shell commands with ASK/AUTOPILOT, multiline input mode, and `-p`/`-e`.
 
-Not yet ported from the PowerShell application: Windows UI Automation and native desktop helpers, clipboard/window controls, skill loading, Explorer-specific integration, spinner, persistent sessions and session export/import. `.save` is not implemented yet. The command runner currently displays command output directly in the terminal rather than returning captured stdout to the model.
+Not yet ported from the PowerShell application: Windows UI Automation and native desktop helpers, clipboard/window controls, skill loading, Explorer-specific integration, spinner, Windows UI Automation and native desktop helpers, clipboard/window controls, skill loading, Explorer-specific integration, and spinner. The command runner captures and returns stdout/stderr (up to 20,000 characters) while also displaying it in the terminal.
 
 A Search capacity or account-entitlement error is a Google-side limitation; changing the implementation language cannot fix a 503 `MODEL_CAPACITY_EXHAUSTED` response.
 
