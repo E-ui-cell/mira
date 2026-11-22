@@ -69,7 +69,19 @@ $script:CliArgsNotImplemented = @()
 
 # Google Antigravity OAuth and grounding are optional providers/features.
 $script:GoogleSearchGrounding = $true
-$script:AgenticWebSearchEnabled = ($env:MIRA_ENABLE_AGENTIC_WEB_SEARCH -match '^(?i:1|true|yes|on)
+$script:AgenticWebSearchEnabled = ($env:MIRA_ENABLE_AGENTIC_WEB_SEARCH -match '^(?i:1|true|yes|on)$')
+$script:SearchModel = if(-not [string]::IsNullOrWhiteSpace($env:MIRA_SEARCH_MODEL)){$env:MIRA_SEARCH_MODEL}else{'gemini-3.1-flash-lite'}
+$script:ExecutionPermission = 'ask'
+$script:MiraSystemPrompt = @'
+You are MIRA, a concise and practical Windows assistant. Use tools when they materially help. Load a relevant skill before complex local file, settings, desktop, clipboard, or system tasks. Skills are guidance, not permissions. Never use Bash on this Windows host. Inspect before changing; ask before state-changing actions unless AUTOPILOT is enabled. Do not claim a tool action succeeded unless its result confirms success.
+'@
+$script:MiraHome = Join-Path $HOME '.mira'
+$script:MiraSkillsDirectory = Join-Path $script:MiraHome 'skills'
+$script:MiraToolsDirectory = Join-Path $script:MiraHome 'tools'
+$script:MiraToolRegistry = @{}
+$script:MiraToolsInitialized = $false
+$script:MiraAntigravityProject = $null
+$script:MiraMaxToolRounds = 12
 # -----------------------------------------------------------------------------
 # UI RUNTIME SWITCHES
 # These affect only the visual renderer. Raw .copy/.grab/.save data is unchanged.
