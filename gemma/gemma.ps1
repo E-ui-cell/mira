@@ -15,7 +15,7 @@ $MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity' or 'gemini'
 $MIRA_DEFAULT_MODEL = 'gemini-3.1-flash-lite'
 $MIRA_TEMPERATURE = $null                   # Optional numeric value; $null leaves the model default
 $MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'
-$MIRA_DEFAULT_GROUNDING = $false             # $true enables agentic Google Search at startup
+$MIRA_DEFAULT_GROUNDING = $true              # Agentic Google Search via Antigravity is enabled for every answer provider/model
 
 $API_KEY = $env:GEMINI_APIJ
 
