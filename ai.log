@@ -61,3 +61,49 @@ Implementation note: diagnostic wiring committed to `work` in `e9c7c4f3832b1da54
 ## Current implementation checkpoint
 
 The provider separation and native Antigravity `googleSearch` wiring were committed to `work` in commit `0d38abf4f3d43a63a52b815643d7969cc0375c2c`. The updated file blob was verified on GitHub. Runtime behavior has not yet been validated; the checklist above records the remaining tests.
+
+
+## New TODO — Windows OS integration tools (PLAN ONLY; do not implement yet)
+
+Goal: give Mira useful, native Windows capabilities for assisting with operating-system setup and selected GUI tasks, without turning `gemma.ps1` into a large monolithic script.
+
+### Architecture and packaging
+
+- [ ] Design a small, modular Windows-tools layer kept outside the main chat script (for example, a `gemma/windows-tools/` folder with focused helper scripts/modules).
+- [ ] Keep `gemma.ps1` limited to tool declarations, dispatch, permission checks, and result handling; load helper code only when needed.
+- [ ] Prefer PowerShell and .NET/Win32 APIs for Windows-native operations. Use standalone `.cmd`/batch or VBScript helpers only when they provide a clear compatibility or GUI advantage; avoid adding multiple scripting languages without a concrete need.
+- [ ] Define a stable input/output contract for helpers (structured parameters and structured results, preferably JSON), with clear error and cancellation reporting.
+- [ ] Make the tools Windows-version-aware and check capability availability before invoking optional APIs.
+
+### Candidate Windows capabilities
+
+- [ ] Clipboard read through native Windows APIs (Win32) with Unicode text support; report unsupported formats cleanly.
+- [ ] Optional clipboard write/set-text capability, separately permissioned from clipboard reading.
+- [ ] GUI assistance for common setup flows: open the relevant Windows settings page, launch a selected application, and guide the user through steps.
+- [ ] Window and process discovery: list visible windows and relevant process details; allow selecting a target window by title/process rather than guessing.
+- [ ] Basic GUI automation using supported Windows UI Automation (UIA) patterns where practical; prefer semantic controls over fragile screen-coordinate clicks.
+- [ ] Dialog assistance for file/folder selection and other standard Windows dialogs, with user confirmation before committing changes.
+- [ ] Read-only system inspection useful for troubleshooting (Windows version/build, display information, environment variables, installed capabilities, and selected device/status information where APIs permit).
+- [ ] Setup helpers for narrowly scoped, reversible configuration tasks, with a preview of the exact changes before applying them.
+
+### Permission, privacy, and reliability requirements
+
+- [ ] Every operation that changes system state must go through the existing permission model: ASK by default (Enter = Yes); AUTOPILOT only when the user explicitly enabled it.
+- [ ] Separate read-only inspection from actions that modify settings, install software, change startup behavior, terminate processes, or write files.
+- [ ] Never silently elevate privileges, bypass UAC, change ACLs/ownership, or alter file permissions. If an operation requires elevation, explain why and let the user handle the Windows prompt themselves.
+- [ ] Clipboard access must be explicit and task-scoped: never poll or monitor the clipboard in the background, never read it automatically on startup, and warn that it may contain passwords, tokens, or other sensitive data.
+- [ ] Show the target, intended action, and expected effect before GUI automation or system changes; support cancellation and timeouts.
+- [ ] Avoid destructive defaults. Require stronger confirmation for deletion, process termination, registry edits, software installation, network changes, or security-setting changes.
+- [ ] Log the requested operation and outcome without logging clipboard contents, credentials, or other sensitive payloads.
+- [ ] Validate helper arguments, quote paths safely, avoid shell-string concatenation where structured process arguments are available, and return actionable errors.
+
+### Implementation and test plan (future work)
+
+- [ ] First produce a tool inventory and threat/safety review; do not start implementation until that design is reviewed.
+- [ ] Prototype clipboard text read as an isolated helper and test Unicode, empty clipboard, locked clipboard, and unsupported formats.
+- [ ] Prototype opening a Windows Settings page and a UIA-based interaction with one harmless standard control; include cancellation and timeout tests.
+- [ ] Test on Windows PowerShell 5.1 and PowerShell 7 where supported; document Windows build/API requirements and fallbacks.
+- [ ] Add integration tests for ASK approval, AUTOPILOT behavior, denied actions, helper failures, and sensitive-data redaction.
+- [ ] Keep all helper code and tests separate from `gemma.ps1`; only add thin dispatch/registration glue to the main script after the helpers are proven.
+
+Status: planning only. No Windows helper scripts, VBScript, CMD files, clipboard access, GUI automation, or operating-system changes have been implemented or executed as part of this TODO update.
