@@ -1086,84 +1086,64 @@ static char *ask(State*s,const char*prompt,int cmd) {
     fprintf(stderr,"Tool loop exceeded %d rounds.\n",MAX_ROUNDS);
     return NULL;
 }
-static int models(State*s,char***out) {
+static void model_add(char***out,int*n,int*cap,char*id){
+    if(!id||!*id){free(id);return;}
+    if(starts(id,"models/"))memmove(id,id+7,strlen(id+7)+1);
+    for(int i=0;i<*n;i++)if(eq((*out)[i],id)){free(id);return;}
+    if(*n==*cap){*cap=*cap?*cap*2:32;*out=xr(*out,(size_t)*cap*sizeof(char*));}
+    (*out)[(*n)++]=id;
+}
+static int models(State*s,char***out){
     *out=NULL;
     int n=0,cap=0;
     char*r=NULL;
-    if(eq(s->provider,"antigravity")) {
+    if(eq(s->provider,"antigravity")){
         char*p=project(s);
         if(!p)return 0;
-        Buf b;
-        init(&b);
-        put(&b,"{\"project\":");
-        quote(&b,p);
-        put(&b,"}");
-        r=agy(s,"fetchAvailableModels",b.s);
-        free(b.s);
-    }
-    else {
-        if(!*s->api) {
-            fprintf(stderr,"Set GEMINI_APIJ first.\n");
-            return 0;
-        }
+        Buf b;init(&b);put(&b,"{\"project\":");quote(&b,p);put(&b,"}");
+        r=agy(s,"fetchAvailableModels",b.s);free(b.s);
+    }else{
+        if(!*s->api){fprintf(stderr,"Set GEMINI_APIJ first.\n");return 0;}
         char u[512],h[4096];
         snprintf(u,sizeof u,"%s/models?pageSize=100",API);
         snprintf(h,sizeof h,"x-goog-api-key: %s",s->api);
-        const char*hs[]= {
-            h
-        };
-        r=http(u,"GET",NULL,hs,1);
+        const char*hs[]={h};r=http(u,"GET",NULL,hs,1);
     }
     if(!r)return 0;
-    Doc d;
-    jp(r,&d);
+    Doc d;jp(r,&d);
     int a=jget(r,&d,0,"models");
     if(a<0)a=jget(r,&d,0,"modelInfos");
     if(a<0)a=jget(r,&d,0,"availableModels");
     if(a<0)a=jget(r,&d,0,"availableModelInfos");
-    for(int i=a+1;a>=0&&i<d.n&&d.v[i].a<d.v[a].z;i=next(&d,i)) {
-        char*id=NULL;
-        if(r[d.v[i].a]=='"')id=jstr(r,&d,i);
-        else {
-            const char*k[]= {
-                "catalogId","catalogID","modelId","modelID","id","slug","model","name"
-            };
-            for(int z=0;z<8;z++) {
-                int v=jget(r,&d,i,k[z]);
-                if(v>=0) {
-                    id=jstr(r,&d,v);
-                    if(*id)break;
-                    free(id);
-                    id=NULL;
+    if(a>=0&&r[d.v[a].a]=='{'){
+        for(int i=a+1;i<d.n&&d.v[i].a<d.v[a].z;){
+            char*id=jstr(r,&d,i);
+            int value=i+1;
+            model_add(out,&n,&cap,id);
+            i=next(&d,value);
+        }
+    }else{
+        for(int i=a+1;a>=0&&i<d.n&&d.v[i].a<d.v[a].z;i=next(&d,i)){
+            char*id=NULL;
+            if(r[d.v[i].a]=='"')id=jstr(r,&d,i);
+            else{
+                const char*k[]={"catalogId","catalogID","modelId","modelID","id","slug","model","name"};
+                for(int z=0;z<8;z++){
+                    int v=jget(r,&d,i,k[z]);
+                    if(v>=0){id=jstr(r,&d,v);if(*id)break;free(id);id=NULL;}
                 }
             }
-        }
-        if(!id||!*id) {
-            free(id);
-            continue;
-        }
-        if(starts(id,"models/"))memmove(id,id+7,strlen(id+7)+1);
-        if(eq(s->provider,"gemini")) {
-            int m=jget(r,&d,i,"supportedGenerationMethods"),ok=0;
-            for(int z=m+1;m>=0&&z<d.n&&d.v[z].a<d.v[m].z;z=next(&d,z)) {
-                char*x=jstr(r,&d,z);
-                if(eq(x,"generateContent"))ok=1;
-                free(x);
+            if(eq(s->provider,"gemini")){
+                int m=jget(r,&d,i,"supportedGenerationMethods"),ok=0;
+                for(int z=m+1;m>=0&&z<d.n&&d.v[z].a<d.v[m].z;z=next(&d,z)){
+                    char*x=jstr(r,&d,z);if(eq(x,"generateContent"))ok=1;free(x);
+                }
+                if(!ok){free(id);continue;}
             }
-            if(!ok) {
-                free(id);
-                continue;
-            }
+            model_add(out,&n,&cap,id);
         }
-        if(n==cap) {
-            cap=cap?cap*2:32;
-            *out=xr(*out,(size_t)cap*sizeof(char*));
-        }
-        (*out)[n++]=id;
     }
-    free(d.v);
-    free(r);
-    return n;
+    free(d.v);free(r);return n;
 }
 static void switch_model(State*s) {
     char**m;
