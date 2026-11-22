@@ -61,8 +61,7 @@ On this Windows host, use the run_powershell tool for local shell tasks. Use Pow
 
 # ==============================================================================
 # GEMINI API REQUEST STATE / OPTIONAL REQUEST FIELDS
-# Requests are kept in memory. Nothing is written automatically.
-# .requests explicitly saves the last raw request to disk.
+# Request payload configuration.
 # ==============================================================================
 $GeminiTools = $null
 $GeminiToolConfig = $null
@@ -86,7 +85,6 @@ $GeminiSafetySettings = @(
             threshold = "BLOCK_NONE"
         }
     )
-$LastGeminiRequestJson = $null
 $script:GoogleSearchGrounding = $false
 $script:Provider = 'gemini'
 $script:Effort = 'medium'
@@ -117,6 +115,16 @@ function Get-GeminiModels {
 
 function Invoke-GeminiModelSwitcher {
     param([string]$RequestedModel = "")
+
+    # A model ID supplied on the command line is selected directly. Do not
+    # fetch or print the catalogue for an explicit choice.
+    if (-not [string]::IsNullOrWhiteSpace($RequestedModel)) {
+        $selectedModel = $RequestedModel.Trim() -replace '^models/', ''
+        $script:MODEL = $selectedModel
+        Write-Host "`n[Model switched to: $script:MODEL]" -ForegroundColor Green
+        return
+    }
+
     try {
         Write-Host "`nFetching models from Google..." -ForegroundColor DarkGray
         $availableModels = @(Get-GeminiModels)
@@ -129,8 +137,7 @@ function Invoke-GeminiModelSwitcher {
             $marker = if ($id -ieq $script:MODEL) { "  [CURRENT]" } else { "" }
             Write-Host ("  {0,2}. {1}{2}" -f ($i + 1), $id, $marker)
         }
-        $selection = $RequestedModel
-        if ([string]::IsNullOrWhiteSpace($selection)) { $selection = Read-Host "`nSelect model number (or enter exact model ID; Enter to cancel)" }
+        $selection = Read-Host "`nSelect model number or exact model ID; Enter to cancel"
         if ([string]::IsNullOrWhiteSpace($selection)) { Write-Host "[Model unchanged: $script:MODEL]" -ForegroundColor Yellow; return }
         $selection = $selection.Trim() -replace '^models/', ''
         $chosen = $null
@@ -571,40 +578,6 @@ function Build-GeminiPayload {
     return $payload
 }
 
-function Save-LastGeminiRequest {
-    param([string]$Json)
-
-    if ([string]::IsNullOrWhiteSpace($Json)) {
-        Write-Host "`n[No Gemini request has been sent yet]" -ForegroundColor Yellow
-        return
-    }
-
-    $path = Join-Path (Get-Location).Path "mira-last-gemini-request.json"
-    Set-Content -Path $path -Value $Json -Encoding UTF8
-    Write-Host "`n[Last Gemini request saved to: $path]" -ForegroundColor Green
-}
-
-function Show-LastGeminiRequestKeys {
-    param([string]$Json)
-
-    if ([string]::IsNullOrWhiteSpace($Json)) {
-        Write-Host "`n[No Gemini request has been sent yet]" -ForegroundColor Yellow
-        return
-    }
-
-    try {
-        $obj = $Json | ConvertFrom-Json
-        Write-Host "`nGemini request fields:" -ForegroundColor Cyan
-        foreach ($p in $obj.PSObject.Properties) {
-            $type = if ($null -eq $p.Value) { "null" } elseif ($p.Value -is [System.Array]) { "array" } else { $p.Value.GetType().Name }
-            Write-Host ("  {0} = {1}" -f $p.Name, $type)
-        }
-    }
-    catch {
-        Write-Host "`n[Could not parse last Gemini request JSON: $($_.Exception.Message)]" -ForegroundColor Red
-    }
-}
-
 function Rollback-MiraTurn {
     param(
         [System.Collections.ArrayList]$History,
@@ -631,7 +604,7 @@ $script:MiraHistoryMax = 500
 # Mira owns the console input buffer through Read-GemLineFallback.
 $script:UsePSReadLine = $false
 
-$script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.requests','.requestkeys','.model','.provider','.effort','.auth','.grounding','.ask','.autopilot','.mira-update')
+$script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.model','.provider','.effort','.auth','.grounding','.ask','.autopilot')
 
 function Get-GemCommands([string]$p) {
     @(
@@ -1064,7 +1037,7 @@ function Save-GeminiCodeBlocks {
 }
 
 Clear-Host
-Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.requests' | '.requestkeys' | '.provider' | '.model' | '.effort' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '.mira-update' | '!<cmd>'`n" -ForegroundColor DarkGray
+Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.provider' | '.model' | '.effort' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '!<cmd>'`n" -ForegroundColor DarkGray
 
 # ==============================================================================
 # ==============================================================================
@@ -1131,13 +1104,6 @@ while ($true) {
     # ==========================================================================
     if ($trimmedInput -eq ".q" -or $trimmedInput -eq "quit") { break }
 
-    if ($trimmedInput -ieq "Mira-update" -or $trimmedInput -ieq ".mira-update") {
-        Write-Host "`n==================== MIRA PERSONA / CHARACTER ====================`n" -ForegroundColor Magenta
-        Write-Host $SystemInstruction
-        Write-Host "`n==================================================================`n" -ForegroundColor Magenta
-        continue
-    }
-
     if ($trimmedInput -eq "clear" -or $trimmedInput -eq ".clear") {
         $Contents.Clear()
         Clear-Host
@@ -1145,15 +1111,6 @@ while ($true) {
         continue
     }
 
-    if ($trimmedInput -eq ".requests" -or $trimmedInput -eq ".request") {
-        Save-LastGeminiRequest -Json $LastGeminiRequestJson
-        continue
-    }
-
-    if ($trimmedInput -eq ".requestkeys") {
-        Show-LastGeminiRequestKeys -Json $LastGeminiRequestJson
-        continue
-    }
     if ($trimmedInput -eq ".auth" -or $trimmedInput.StartsWith(".auth ", [StringComparison]::OrdinalIgnoreCase)) {
         $authArgument = ""
         if ($trimmedInput.Length -gt 5) { $authArgument = $trimmedInput.Substring(5).Trim() }
@@ -1214,9 +1171,9 @@ while ($true) {
     # ==========================================================================
     # SESSION PERSISTENCE
     # ==========================================================================
-    if ($trimmedInput.StartsWith(".exportsession")) {
-        $sessionName = $trimmedInput.Substring(12).Trim()
-        if (-not $sessionName) { $sessionName = "session_$(Get-Date -Format 'yyyyMMdd_HHmmss')" }
+    if ($trimmedInput -eq ".exportsession" -or $trimmedInput.StartsWith(".exportsession ", [StringComparison]::OrdinalIgnoreCase)) {
+        $sessionName = $trimmedInput.Substring(".exportsession".Length).Trim()
+        if (-not $sessionName) { $sessionName = Get-Date -Format 'yyMMddHHmm' }
         $fileName = if ($sessionName.EndsWith(".json")) { $sessionName } else { "$sessionName.json" }
 
         $sessionData = @{
@@ -1501,8 +1458,6 @@ while ($true) {
             $url = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL`:generateContent"
             $requestHeaders = @{ "x-goog-api-key" = $API_KEY }
         }
-        # Keep the exact provider request in memory only. .requests writes it explicitly.
-        $LastGeminiRequestJson = $jsonPayload
 
         $oldTreatControlCAsInput = $null
         $runspace = $null
