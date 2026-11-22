@@ -8,12 +8,11 @@ $Host.UI.RawUI.WindowTitle = "GEMMA CLI"
 # ==============================================================================
 # CONFIGURATION & PERSONA INJECTION
 # ==============================================================================
-$API_KEY = if (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API)) {
-    $env:GEMINI_API
-} elseif (-not [string]::IsNullOrWhiteSpace($env:GEMINI_APIJ)) {
-    $env:GEMINI_APIJ # Legacy fallback
-} else {
-    $null
+$API_KEY = $env:GEMINI_APIJ
+
+if (-not $API_KEY) {
+    Write-Error "GEMINI_API environment variable is not set!"
+    
 }
 
 if (-not $API_KEY -and -not (Test-Path -LiteralPath (Join-Path (Join-Path $HOME '.gemini\antigravity-cli') 'antigravity-oauth-token'))) {
