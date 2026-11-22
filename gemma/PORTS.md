@@ -5,7 +5,7 @@ These are independent first-pass ports of `gemma.ps1`. They do not replace the W
 ## Files
 
 - `gemma.py` — Python 3, standard library only; intended to run on Windows, macOS, and Linux.
-- `gemma.sh` — Bash implementation for Unix-like environments. Requires `bash`, `curl`, `jq`, and `openssl`; `python3` is used only to parse a pasted OAuth callback URL.
+- `gemma.sh` — Bash implementation for Unix-like environments. Requires `bash`, `curl`, `jq`, `openssl`, and GNU `date` (Linux/WSL or another GNU userland); `python3` is used only to parse a pasted OAuth callback URL.
 
 ## Start
 
