@@ -1116,6 +1116,202 @@ function Invoke-MiraGroundingCommand([string]$Argument='') {
 }
 
 
+# -----------------------------------------------------------------------------
+# MODULAR TOOL AND SKILL RUNTIME
+# Built-ins stay in the single-file distribution. Trusted user tool modules can
+# register additional function tools from %USERPROFILE%\.mira\tools\*.ps1.
+# Markdown skills are loaded on demand from %USERPROFILE%\.mira\skills\*.md.
+# -----------------------------------------------------------------------------
+function Initialize-MiraSkills {
+    if($null -ne $script:MiraSkills){return}
+    $script:MiraSkills=[ordered]@{
+        'file-management'=@'
+SKILL: FILE MANAGEMENT
+Use run_powershell for local operations. Inspect before changing: Get-Item, Get-ChildItem -LiteralPath, Resolve-Path and file metadata. For organization, prepare a source-to-destination plan and detect collisions before moving anything. Do not overwrite or delete by default. Use -LiteralPath and structured cmdlet arguments; never build Invoke-Expression commands from filenames. For cleanup, list exact targets and sizes first, then require approval. Verify the resulting paths and report exactly what changed. Never touch ACLs, ownership or file permissions. Never silently elevate.
+'@
+        'windows-settings'=@'
+SKILL: WINDOWS SETTINGS
+Use run_powershell. Prefer supported settings pages (Start-Process 'ms-settings:<page>') and documented cmdlets over registry edits. Inspect the current state first, explain the exact proposed change, and apply only the requested change through the normal permission gate. Opening a Settings page is not the same as changing a setting. Verify the resulting state. Never silently elevate, bypass UAC, change ACLs/ownership, or disable security protections.
+'@
+        'desktop-gui'=@'
+SKILL: WINDOWS DESKTOP AND GUI
+Use run_powershell and prefer semantic UI Automation over screen coordinates. Identify the exact window and control before acting. Use supported InvokePattern, TogglePattern and ValuePattern actions only. Launch apps with Start-Process and an argument array. Do not interact with password fields, payment flows, security prompts or secure desktop. Coordinate clicks are a last resort and require explicit confirmation. Never bypass UAC.
+'@
+        'clipboard'=@'
+SKILL: WINDOWS CLIPBOARD
+Clipboard access is task-scoped. Never poll, monitor or read it automatically at startup. Treat clipboard text as potentially sensitive and never log it. Read or write only when the user requests it; use Get-Clipboard/Set-Clipboard when available. Do not echo secrets unnecessarily.
+'@
+        'system-inspection'=@'
+SKILL: SYSTEM INSPECTION
+Use read-only PowerShell/CIM queries first. Inspect OS, processes, services, storage, network and installed applications without changing state. Prefer Get-CimInstance, Get-Process, Get-Service, Get-Volume and Get-NetIPConfiguration where supported. Avoid destructive repair commands, process termination, service changes, firewall changes and registry edits unless explicitly requested and confirmed.
+'@
+        'quick-web-tools'=@'
+SKILL: QUICK WEB LOOKUPS
+Use quick_web for narrowly scoped live lookups: weather via wttr.in (IP-region aware when query is empty), public IP via api.ipify.org, and command/language cheat sheets via cht.sh. This is separate from Google Search grounding. Use web_search for broader research only when it is enabled for the Gemini API provider.
+'@
+    }
+}
+
+function Get-MiraSkill([string]$Name='list') {
+    Initialize-MiraSkills
+    $key=([string]$Name).Trim().ToLowerInvariant()
+    if(-not $key -or $key -eq 'list'){
+        $names=New-Object System.Collections.Generic.List[string]
+        foreach($n in $script:MiraSkills.Keys){[void]$names.Add([string]$n)}
+        if(Test-Path -LiteralPath $script:MiraSkillsDirectory -PathType Container){
+            foreach($file in Get-ChildItem -LiteralPath $script:MiraSkillsDirectory -Filter '*.md' -File -ErrorAction SilentlyContinue){
+                $n=[IO.Path]::GetFileNameWithoutExtension($file.Name).ToLowerInvariant()
+                if($n -match '^[a-z0-9][a-z0-9_-]{0,63}$' -and -not $names.Contains($n)){[void]$names.Add($n)}
+            }
+        }
+        return @{skills=@($names|Sort-Object -Unique);user_skill_directory=$script:MiraSkillsDirectory}
+    }
+    if($key -notmatch '^[a-z0-9][a-z0-9_-]{0,63}$'){return @{error='Invalid skill name.'}}
+    if($script:MiraSkills.Contains($key)){return @{skill=$key;instructions=[string]$script:MiraSkills[$key];source='built-in'}}
+    $path=Join-Path $script:MiraSkillsDirectory ($key+'.md')
+    if(-not (Test-Path -LiteralPath $path -PathType Leaf)){return @{error=("Skill not found: "+$key)}}
+    $item=Get-Item -LiteralPath $path -ErrorAction Stop
+    if($item.Length -gt 32768){return @{error='Skill file exceeds the 32 KB limit.'}}
+    return @{skill=$key;instructions=[IO.File]::ReadAllText($path,[Text.Encoding]::UTF8);source='user'}
+}
+
+function Register-MiraTool {
+    param(
+        [Parameter(Mandatory=$true)][string]$Name,
+        [Parameter(Mandatory=$true)][string]$Description,
+        [Parameter(Mandatory=$true)]$Parameters,
+        [Parameter(Mandatory=$true)][scriptblock]$Handler,
+        [bool]$RequiresApproval=$true
+    )
+    if($Name -notmatch '^[a-z][a-z0-9_]{0,63}$'){throw "Invalid tool name: $Name"}
+    if($null -eq $script:MiraToolRegistry){$script:MiraToolRegistry=@{}}
+    if($script:MiraToolRegistry.ContainsKey($Name)){throw "Tool already registered: $Name"}
+    $script:MiraToolRegistry[$Name]=[pscustomobject]@{Name=$Name;Description=$Description;Parameters=$Parameters;Handler=$Handler;RequiresApproval=$RequiresApproval}
+}
+
+function Confirm-MiraToolPermission([string]$ToolName,[string]$Summary) {
+    if($script:ExecutionPermission -eq 'autopilot'){return $true}
+    W '' DarkYellow
+    W ('[tool permission] '+$ToolName) DarkYellow
+    if(-not [string]::IsNullOrWhiteSpace($Summary)){W $Summary Gray}
+    $answer=Read-Host 'Allow this action? [Y/n]'
+    return ($answer -notmatch '^(?i:n|no)$')
+}
+
+function Invoke-MiraPowerShellTool([string]$Command) {
+    if([string]::IsNullOrWhiteSpace($Command)){throw 'run_powershell requires a command.'}
+    $output=''
+    try{
+        $output=Invoke-Expression $Command *>&1 | Out-String -Width 240
+        if($output.Length -gt 20000){$output=$output.Substring(0,20000)+[Environment]::NewLine+'[PowerShell output truncated]'}
+        return @{approved=$true;output=$output.TrimEnd();current_location=(Get-Location).Path}
+    }catch{
+        return @{approved=$true;error=$_.Exception.Message;output=$output}
+    }
+}
+
+function Invoke-MiraQuickWeb([string]$Action,[string]$Query='') {
+    $action=$Action.Trim().ToLowerInvariant()
+    $queryText=[string]$Query
+    switch($action){
+        'weather' {
+            $url=if([string]::IsNullOrWhiteSpace($queryText)){'https://wttr.in/?format=3'}else{'https://wttr.in/'+[uri]::EscapeDataString($queryText)+'?format=3'}
+        }
+        'public-ip' {$url='https://api.ipify.org'}
+        'cheatsheet' {
+            $topic=$queryText.Trim().Trim('/')
+            $url=if($topic){'https://cht.sh/'+[uri]::EscapeDataString($topic)}else{'https://cht.sh/'}
+        }
+        default {throw 'quick_web action must be weather, public-ip, or cheatsheet.'}
+    }
+    if(Get-Command curl.exe -ErrorAction SilentlyContinue){
+        $raw=& curl.exe -fsS --max-time 15 --max-filesize 50000 $url 2>&1
+        $exit=$LASTEXITCODE
+        $output=($raw|Out-String).TrimEnd()
+        if($exit -ne 0){throw ('curl.exe failed ('+$exit+'): '+$output)}
+    }else{
+        $response=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+        $output=[string]$response.Content
+        if($output.Length -gt 50000){throw 'Web response exceeded 50 KB.'}
+    }
+    if($output.Length -gt 50000){$output=$output.Substring(0,50000)+'[response truncated]'}
+    return @{action=$action;url=$url;result=$output}
+}
+
+function Initialize-MiraTools {
+    if($script:MiraToolsInitialized){return}
+    $script:MiraToolsInitialized=$true
+    Initialize-MiraSkills
+    Register-MiraTool -Name 'run_powershell' -Description "Run a local Windows PowerShell command. State-changing commands require approval in ASK mode; .autopilot enables execution without confirmation." -Parameters @{type='object';properties=@{command=@{type='string';description='PowerShell command to run on this Windows host.'}};required=@('command')} -RequiresApproval $true -Handler {
+        param($toolArgs)
+        Invoke-MiraPowerShellTool ([string]$toolArgs.command)
+    }
+    Register-MiraTool -Name 'quick_web' -Description 'Fast, narrow live lookups: weather from wttr.in, public IP from api.ipify.org, and command/language cheat sheets from cht.sh.' -Parameters @{type='object';properties=@{action=@{type='string';enum=@('weather','public-ip','cheatsheet')};query=@{type='string';description='Optional city/region for weather or topic for cht.sh.'}};required=@('action')} -RequiresApproval $false -Handler {
+        param($toolArgs)
+        Invoke-MiraQuickWeb ([string]$toolArgs.action) ([string]$toolArgs.query)
+    }
+    Register-MiraTool -Name 'get_skill' -Description 'Load a built-in or user-authored skill. Use skill=list to discover available playbooks. Skills are guidance and never grant permissions.' -Parameters @{type='object';properties=@{skill=@{type='string';description='Skill name, or list.'}};required=@('skill')} -RequiresApproval $false -Handler {
+        param($toolArgs)
+        Get-MiraSkill ([string]$toolArgs.skill)
+    }
+    $moduleDirs=@()
+    if(-not [string]::IsNullOrWhiteSpace($PSScriptRoot)){$moduleDirs+=Join-Path $PSScriptRoot 'mira\tools'}
+    $moduleDirs+=$script:MiraToolsDirectory
+    foreach($directory in $moduleDirs|Select-Object -Unique){
+        if(-not (Test-Path -LiteralPath $directory -PathType Container)){continue}
+        foreach($file in Get-ChildItem -LiteralPath $directory -Filter '*.ps1' -File -ErrorAction SilentlyContinue|Sort-Object Name){
+            try{. $file.FullName}catch{W ('[tool module error] '+$file.Name+': '+$_.Exception.Message) Yellow}
+        }
+    }
+}
+
+function Get-MiraFunctionDeclarations {
+    Initialize-MiraTools
+    $declarations=New-Object System.Collections.Generic.List[object]
+    foreach($name in @($script:MiraToolRegistry.Keys|Sort-Object)){
+        $tool=$script:MiraToolRegistry[$name]
+        [void]$declarations.Add(@{name=[string]$tool.Name;description=[string]$tool.Description;parameters=$tool.Parameters})
+    }
+    $canUseWebSearch=($script:CurrentProviderName -eq 'gemini' -and $script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled)
+    if($canUseWebSearch){
+        [void]$declarations.Add(@{name='web_search';description='Search the web using Google Search through the Antigravity OAuth research backend. Use for current information, recent events, verification and source discovery. Return grounded findings with source URLs.';parameters=@{type='object';properties=@{query=@{type='string';description='Focused search question or query with relevant names and dates.'}};required=@('query')}})
+    }
+    return @($declarations)
+}
+
+function Invoke-MiraTool([string]$Name,$Arguments) {
+    if($Name -eq 'web_search'){
+        if(-not ($script:CurrentProviderName -eq 'gemini' -and $script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled)){
+            return @{error='web_search is disabled for this provider or grounding configuration.'}
+        }
+        $result=Invoke-MiraAntigravitySearch ([string]$Arguments.query)
+        W ('[web_search] research_model='+$result.search_model+' | queries='+@($result.search_queries).Count+' | sources='+@($result.sources).Count) DarkGray
+        foreach($source in @($result.sources)){W ('  '+$source) DarkGray}
+        return $result
+    }
+    if(-not $script:MiraToolRegistry.ContainsKey($Name)){return @{error=('Unknown tool: '+$Name)}}
+    $tool=$script:MiraToolRegistry[$Name]
+    if($tool.RequiresApproval){
+        $summary=if($Name -eq 'run_powershell'){[string]$Arguments.command}else{($Arguments|ConvertTo-Json -Compress -Depth 8)}
+        if(-not (Confirm-MiraToolPermission $Name $summary)){return @{approved=$false;denied=$true;message='User denied this action.'}}
+    }
+    try{return (& $tool.Handler $Arguments)}catch{return @{error=$_.Exception.Message}}
+}
+
+function Invoke-MiraPermissionCommand([string]$Mode) {
+    $value=$Mode.Trim().ToLowerInvariant()
+    if($value -eq 'ask'){
+        $script:ExecutionPermission='ask'
+        W '[Permission mode: ASK | confirmation required for state-changing tools; Enter = Yes.]' Cyan
+    }elseif($value -eq 'autopilot'){
+        $script:ExecutionPermission='autopilot'
+        W '[Permission mode: AUTOPILOT | tool actions execute without confirmation.]' Yellow
+    }else{
+        W 'Usage: .ask | .autopilot' Yellow
+    }
+}
+
+
 function New-BuiltinProviders(){
     @(
         [pscustomobject]@{name='antigravity';type='antigravity';api_base='https://daily-cloudcode-pa.googleapis.com/v1internal';models=@([pscustomobject]@{name='gemini-3.1-flash-lite'})}
