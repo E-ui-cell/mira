@@ -959,9 +959,9 @@ static char *tool(State*s,const char*n,const char*a) {
         while(fgets(chunk,sizeof chunk,pipe)){
             size_t left=MAX_OUTPUT-output.n;
             size_t z=strlen(chunk);
-            if(z>left){putn(&output,chunk,left);truncated=1;break;}
+            if(z>left){putn(&output,chunk,left);truncated=1;continue;}
             putn(&output,chunk,z);
-            if(output.n>=MAX_OUTPUT){truncated=1;break;}
+            if(output.n>=MAX_OUTPUT){truncated=1;continue;}
         }
         int status=pclose(pipe);
         int rc=status;
@@ -1443,7 +1443,7 @@ static void cmd(State*s,char*line) {
     if(eq(line,".model")) {
         if(*arg) {
             free(s->model);
-            s->model=ds(arg);
+            s->model=ds(starts(arg,"models/")?arg+7:arg);
             printf("[Model: %s]\n",s->model);
         }
         else switch_model(s);
