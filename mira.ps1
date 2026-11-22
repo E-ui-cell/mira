@@ -1152,9 +1152,11 @@ function Get-Provider([string]$name){
 
 function Test-ProviderUsable($provider){
     if($null -eq $provider){return $false}
+    if([string]$provider.type -eq 'antigravity'){
+        try{$null=Get-MiraAntigravityAccessToken;return $true}catch{return $false}
+    }
     return -not [string]::IsNullOrWhiteSpace((Get-ProviderKey $provider))
 }
-
 function Get-ProviderKey($provider){
     if($null -eq $provider -or [string]::IsNullOrWhiteSpace([string]$provider.api_key_env)){return ''}
     $item=Get-Item -Path ('Env:'+ [string]$provider.api_key_env) -ErrorAction SilentlyContinue
@@ -1226,29 +1228,16 @@ function Get-ModelListHeaders($provider,[string]$apiKey){
 }
 
 function Get-ProviderRefreshKey($provider){
-    $envNames=New-Object System.Collections.Generic.List[string]
-    if($null -ne $provider.api_key_env -and -not [string]::IsNullOrWhiteSpace([string]$provider.api_key_env)){[void]$envNames.Add([string]$provider.api_key_env)}
-    # Refresh must never use the hardcoded OpenRouter test key.
-    switch -Regex ([string]$provider.name){
-        '^openrouter$' {
-            foreach($n in @('OPENROUTER_API_KEY')){if(-not $envNames.Contains($n)){[void]$envNames.Add($n)}}
-        }
-        '^openai$' {
-            if(-not $envNames.Contains('OPENAI_API_KEY')){[void]$envNames.Add('OPENAI_API_KEY')}
-        }
-        '^gemini$' {
-            foreach($n in @('GEMINI_API_KEY')){if(-not $envNames.Contains($n)){[void]$envNames.Add($n)}}
-        }
+    if($null -eq $provider){return $null}
+    if([string]$provider.type -eq 'antigravity'){
+        try{$token=Get-MiraAntigravityAccessToken;return [pscustomobject]@{Name='Antigravity OAuth';Value=$token}}catch{return $null}
     }
-    foreach($envName in $envNames){
-        $value=[string](Get-Item -Path ('Env:'+ $envName) -ErrorAction SilentlyContinue).Value
-        if(-not [string]::IsNullOrWhiteSpace($value)){
-            return [pscustomobject]@{Name=$envName;Value=$value}
-        }
-    }
-    return $null
+    $envName=[string]$provider.api_key_env
+    if([string]::IsNullOrWhiteSpace($envName)){return $null}
+    $item=Get-Item -Path ('Env:'+ $envName) -ErrorAction SilentlyContinue
+    if($null -eq $item -or [string]::IsNullOrWhiteSpace([string]$item.Value)){return $null}
+    return [pscustomobject]@{Name=$envName;Value=[string]$item.Value}
 }
-
 function Get-StringArrayProperty($object,[string]$path){
     if($null -eq $object -or [string]::IsNullOrWhiteSpace($path)){return @()}
     $value=$object
@@ -1323,6 +1312,12 @@ function Test-TextChatModel($item){
 
 function Refresh-ProviderModelList($provider){
     $name=[string]$provider.name
+    if([string]$provider.type -eq 'antigravity'){
+        $items=@(Get-MiraAntigravityModels)
+        $names=@($items|ForEach-Object{[string]$_.name}|Where-Object{-not [string]::IsNullOrWhiteSpace($_)})
+        $path=Write-ProviderModelCache $provider $names
+        return [pscustomobject]@{Provider=$name;Count=$names.Count;Path=$path;KeyName='Antigravity OAuth'}
+    }
     $refreshKey=Get-ProviderRefreshKey $provider
     if($null -eq $refreshKey){return $null}
     $apiKey=[string]$refreshKey.Value
@@ -1445,7 +1440,7 @@ function Refresh-ModelCaches([string]$onlyProvider=''){
         $refreshKey=Get-ProviderRefreshKey $provider
         if($null -eq $refreshKey){
             $envName=[string]$provider.api_key_env
-            if([string]::IsNullOrWhiteSpace($envName)){$envName='API key env'}
+            if([string]$provider.type -eq 'antigravity'){$envName='Antigravity OAuth token'}elseif([string]::IsNullOrWhiteSpace($envName)){$envName='API key env'}
             W ('[models] '+[string]$provider.name+': skipped ('+$envName+' is empty)') DarkGray
             continue
         }
@@ -1492,6 +1487,7 @@ function Test-CachedModels(){
     foreach($u in $alreadyUsed){$usedSet[[string]$u]=$true}
 
     foreach($provider in $script:Providers){
+        if([string]$provider.type -eq 'antigravity'){continue} # Native OAuth catalogue; not an API-key probe target.
         if(-not (Test-ProviderUsable $provider)){continue}
         $queue=New-Object 'System.Collections.Generic.Queue[object]'
         foreach($model in @(Get-CachedProviderModels $provider)){
