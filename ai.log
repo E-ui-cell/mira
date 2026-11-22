@@ -81,16 +81,71 @@ Direction: keep `gemma.ps1` self-contained and compact. Windows capabilities are
 
 Implementation commit: `9e95428bf7beb289be85527271ad0175f4af567f`. File blob verified as `329b4c55d6f0a4b40b5789143ef09b211041207a`.
 
-### Next implementation steps
+### Implemented in the standalone script on `work`
 
-- [ ] Add headless invocation mode (`-Headless`, `-Prompt`, `-Stdin`, `-Json`, `-Search`, `-Command`) with no interactive banner/input and predictable exit codes.
-- [ ] Add direct local Windows commands for system info, process listing, clipboard read/write, window listing, app launch and network checks. These must not call the model when a direct command is sufficient.
-- [ ] Implement and test native Win32 clipboard read/write helpers, including Unicode, empty clipboard, unsupported formats, clipboard contention, allocation cleanup and ownership transfer.
-- [ ] Implement tested Win32 window enumeration/activation and UI Automation helpers; expose only safe, well-described actions.
-- [ ] Add a skill discovery convention for user-authored skills in a home-directory skills folder, while keeping built-in skills available in the standalone script. Validate file size and content; treat skill files as untrusted instructions and never allow them to override safety/permission rules.
-- [ ] Make headless ASK behavior explicit: fail closed when confirmation cannot be obtained; never silently approve because stdin is redirected. AUTOPILOT only when explicitly selected.
-- [ ] Keep JSON machine output on stdout and diagnostics on stderr; redact credentials and clipboard content.
-- [ ] Run Windows PowerShell 5.1 syntax and runtime tests, plus PowerShell 7 compatibility tests where applicable.
+- [x] Add script parameters: `-Headless`, `-Prompt`, `-Stdin`, `-Json`, `-Search`, `-Command`, `-CommandArgument`, and explicit `-Autopilot`.
+- [x] Add one-shot headless AI requests that skip the interactive banner, input editor, spinner, and console-width dependency.
+- [x] Add machine-readable JSON responses for headless AI, direct Windows commands, and quick Search.
+- [x] Make headless ASK fail closed when the model requests PowerShell execution; it never waits on redirected stdin for approval. Explicit `-Autopilot` is required to run model-requested PowerShell commands headlessly.
+- [x] Add direct Windows commands that do not call a model: `help`, `system-info`, `process-list`, `clipboard-read`, `clipboard-write`, `window-list`, `window-activate`, `ui-tree`, `ui-action`, `app-launch`, `settings-open`, `network-check`, and `file-search`.
+- [x] Implement lazy-loaded Win32 Unicode clipboard access using `OpenClipboard`, `GetClipboardData(CF_UNICODETEXT)`, `GlobalLock`, `GlobalAlloc`, and `SetClipboardData`; clipboard writes use the existing permission policy.
+- [x] Implement visible top-level window discovery and window activation using Win32 APIs.
+- [x] Implement UI Automation control-tree inspection and guarded `Invoke`, `Toggle`, and `SetValue` actions by exact AutomationId or Name. GUI actions use the existing permission policy.
+- [x] Add a whitelist-based direct Windows Settings launcher (`settings-open`) and direct application launcher.
+- [x] Add user-authored Markdown skills from `$HOME\.gemma\skills\`; skill names are validated, files are limited to 32 KB, and content is treated as untrusted guidance.
+- [x] Add interactive `.skills` and `.skill <name>` commands.
+- [x] Keep Google Search quick mode on the Antigravity OAuth native Search endpoint and preserve provider-specific grounding for normal model requests.
+- [x] Keep direct Windows operations local; no model call is made for direct commands.
+- [x] Preserve the protected API-key block exactly. No ACL/ownership/permission changes or elevation logic added.
+
+Implementation commits:
+- `3d7b614bea35896e5ff7ae75b98fe09c09b80819` — headless entry and user skills.
+- `de3ad3843b79dde52c7d58729cd43093d506bfef` — native clipboard and desktop commands.
+- `0f2c2d0025e874807874ce54be3407016cc87196` — UI Automation actions and repaired insertion.
+- `60875ddbca507afefb1f245576a92be4bf03fdf4` — headless safety and helper hardening.
+- `0ccf5d2de4ffa89eee9feff821b8d851d682db1a` — quiet headless output and Settings launcher.
+- `27683e1f0548e56052aea28ec2fd8e6f0aa0ab82` — interactive skill commands.
+- `ff098ed421c8bb66fd6b6438bbb3affd3972ec6c` — headless operation without console UI.
+
+### Command examples
+
+```powershell
+# One-shot AI request
+.\gemma.ps1 -Headless -Prompt "Explain this error"
+
+# Machine-readable AI response
+.\gemma.ps1 -Headless -Json -Prompt "Summarize this log"
+
+# Pipe file content into the model
+Get-Content .\error.log -Raw | .\gemma.ps1 -Headless -Stdin -Prompt "Analyze this log"
+
+# Fast grounded Google Search through Antigravity OAuth
+.\gemma.ps1 -Search "latest PowerShell release" -Json
+
+# Local commands, no model request
+.\gemma.ps1 -Command system-info -Json
+.\gemma.ps1 -Command clipboard-read -Json
+.\gemma.ps1 -Command window-list -Json
+.\gemma.ps1 -Command settings-open -CommandArgument display
+.\gemma.ps1 -Command ui-tree -CommandArgument 0x123456
+.\gemma.ps1 -Command ui-action -CommandArgument "0x123456|AutomationId|invoke"
+
+# User-authored skills
+New-Item -ItemType Directory -Force "$HOME\.gemma\skills"
+# Save a skill as $HOME\.gemma\skills\my-skill.md
+```
+
+### Remaining validation
+
+- [ ] Run Windows PowerShell 5.1 parser validation and execute direct commands on Windows.
+- [ ] Test clipboard Unicode round-trip, empty/unsupported clipboard, clipboard contention, and allocation cleanup.
+- [ ] Test window enumeration/activation and UI Automation tree/action against harmless standard controls.
+- [ ] Test headless prompt, stdin, JSON, quick Search, direct command exit codes, and headless ASK fail-closed behavior.
+- [ ] Test explicit `-Autopilot` separately and confirm it is never enabled by default.
+- [ ] Test Antigravity and Gemini Developer API provider-grounding matrix with grounding ON/OFF.
+- [ ] Confirm script startup still works on Windows PowerShell 5.1 and PowerShell 7.
+
+Implementation is committed to `work`; live Windows runtime validation has not been performed in this environment.
 
 ### Safety and design invariants
 
