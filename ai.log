@@ -145,6 +145,21 @@ New-Item -ItemType Directory -Force "$HOME\.gemma\skills"
 - [ ] Test Antigravity and Gemini Developer API provider-grounding matrix with grounding ON/OFF.
 - [ ] Confirm script startup still works on Windows PowerShell 5.1 and PowerShell 7.
 
+- `5f0268ce4a3fabfdb6f364889e4ff51f0c1bca40` — connect native helper operations to skill instructions and reuse the already-approved PowerShell permission gate.
+
+Additional implementation details:
+- Built-in skills now tell the model to call the native helper functions through the approved PowerShell tool for clipboard, window enumeration, UIA, settings launch, and system summary.
+- The helper recognizes when it is executing inside an already-approved `run_powershell` call, avoiding a second redundant confirmation. Direct CLI modifications still prompt in ASK mode; headless ASK fails closed.
+- Native Win32 helper initialization is lazy and only occurs for clipboard/window commands.
+- Headless request handling does not poll console keys or render the interactive spinner. JSON mode returns one structured response object on success and a structured error on request failure.
+- Added interactive `.skills` and `.skill <name>` commands; user-authored skill files are read from `$HOME\.gemma\skills\`.
+
+Static repository checks performed:
+- Verified the protected API block is byte-for-byte text-identical.
+- Verified expected entry points, skills, direct command functions, native clipboard/window methods, UI Automation branches, provider-specific grounding conditions, and absence of ACL/ownership operations.
+- Ran a delimiter/string-aware lexical balance check; no unclosed strings or bracket/brace/parenthesis mismatches were found.
+- No PowerShell runtime/parser is installed in the editing environment. These checks are not a substitute for Windows PowerShell 5.1 parsing or runtime tests.
+
 Implementation is committed to `work`; live Windows runtime validation has not been performed in this environment.
 
 ### Safety and design invariants
