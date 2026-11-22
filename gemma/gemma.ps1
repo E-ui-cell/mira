@@ -30,7 +30,9 @@ $MIRA_STOP_SEQUENCES = $null                # e.g. @('END')
 
 # Runtime behavior
 $MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'; ASK prompt defaults to Yes
-$MIRA_DEFAULT_GROUNDING = $true              # Google Search enabled; native grounding preferred when supported
+$MIRA_DEFAULT_GROUNDING = $true              # Google Search enabled where available
+$MIRA_ENABLE_AGENTIC_WEB_SEARCH = $false      # Disable separate Gemini 3.1 Flash-Lite research-agent fallback
+$MIRA_DEFAULT_VERBOSE = $false                # Show Gemini thought summaries only when enabled with .verbose
 # Antigravity native Search support is discovered from fetchAvailableModels.webSearchModelIds.
 # Gemini Developer API grounding requires a billing-enabled project; use the independent
 # Antigravity Flash-Lite research agent for the Gemini API provider.
@@ -144,6 +146,8 @@ $GeminiSafetySettings = @(
         }
     )
 $script:GoogleSearchGrounding = [bool]$MIRA_DEFAULT_GROUNDING
+$script:AgenticWebSearchEnabled = [bool]$MIRA_ENABLE_AGENTIC_WEB_SEARCH
+$script:VerboseOutput = [bool]$MIRA_DEFAULT_VERBOSE
 $script:NativeGoogleSearchActive = $false
 $script:Provider = $MIRA_DEFAULT_PROVIDER
 $script:Effort = $MIRA_DEFAULT_EFFORT
@@ -514,14 +518,14 @@ function Invoke-GemmaSearchCommand {
     param([string]$Argument = '')
     $value = $Argument.Trim().ToLowerInvariant()
     if ($value -eq 'on') {
-        if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) { Write-Host '[Agentic web search requires Antigravity OAuth. Run .auth login first.]' -ForegroundColor Yellow; return }
+        if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) { Write-Host '[Google Search requires Antigravity OAuth. Run .auth login first.]' -ForegroundColor Yellow; return }
         $script:GoogleSearchGrounding = $true
-        Write-Host '[Google Search enabled. Native grounding is used when the selected model supports it; otherwise Flash-Lite research is used.]' -ForegroundColor Green
+        Write-Host '[Google Search enabled. Native grounding is used when supported; separate Flash-Lite research is controlled by MIRA_ENABLE_AGENTIC_WEB_SEARCH.]' -ForegroundColor Green
     } elseif ($value -eq 'off') {
         $script:GoogleSearchGrounding = $false
         Write-Host '[Agentic web search disabled.]' -ForegroundColor Yellow
     } elseif ($value -eq 'status' -or -not $value) {
-        $state = if (-not $script:GoogleSearchGrounding) { 'OFF' } elseif (Test-MiraNativeGoogleSearchSupport) { 'ON (native model grounding; no separate search agent)' } else { "ON (Flash-Lite fallback: $MIRA_SEARCH_MODEL)" }
+        $state = if (-not $script:GoogleSearchGrounding) { 'OFF' } elseif (Test-MiraNativeGoogleSearchSupport) { 'ON (native model grounding)' } elseif ($script:AgenticWebSearchEnabled) { "ON (agentic Flash-Lite fallback: $MIRA_SEARCH_MODEL)" } else { 'ON, but this model has no native Search and agentic fallback is disabled' }
         Write-Host "[Google Search: $state | answer: $script:Provider/$script:MODEL]" -ForegroundColor Cyan
     } else { Write-Host 'Usage: .grounding on | .grounding off | .grounding status' -ForegroundColor Yellow }
 }
@@ -660,7 +664,7 @@ function Build-GeminiPayload {
     # This payload is shared by Gemini Developer API and Antigravity OAuth.
     if ($script:MODEL -match '(?i)gemini[-.]?3') {
         if ($null -eq $payload.generationConfig) { $payload.generationConfig = @{} }
-        $payload.generationConfig.thinkingConfig = @{ thinkingLevel = $script:Effort.ToUpperInvariant() }
+        $payload.generationConfig.thinkingConfig = @{ thinkingLevel = $script:Effort.ToUpperInvariant(); includeThoughts = [bool]$script:VerboseOutput }
     } elseif ($script:MODEL -match '(?i)gemini[-.]?2.5') {
         if ($null -eq $payload.generationConfig) { $payload.generationConfig = @{} }
         $thinkingBudget = switch ($script:Effort) {
@@ -668,7 +672,7 @@ function Build-GeminiPayload {
             'medium' { 8192 }
             'high' { 24576 }
         }
-        $payload.generationConfig.thinkingConfig = @{ thinkingBudget = $thinkingBudget }
+        $payload.generationConfig.thinkingConfig = @{ thinkingBudget = $thinkingBudget; includeThoughts = [bool]$script:VerboseOutput }
     }
 
     if (-not [string]::IsNullOrWhiteSpace($GeminiCachedContent)) {
@@ -704,7 +708,7 @@ $script:MiraHistoryMax = $MIRA_MAX_HISTORY
 # Mira owns the console input buffer through Read-GemLineFallback.
 $script:UsePSReadLine = $false
 
-$script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.model','.provider','.effort','.auth','.grounding','.ask','.autopilot')
+$script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.model','.provider','.effort','.verbose','.auth','.grounding','.ask','.autopilot')
 
 function Get-GemCommands([string]$p) {
     @(
@@ -1137,7 +1141,7 @@ function Save-GeminiCodeBlocks {
 }
 
 Clear-Host
-Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.provider' | '.model' | '.effort' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '!<cmd>'`n" -ForegroundColor DarkGray
+Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.provider' | '.model' | '.effort' | '.verbose' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '!<cmd>'`n" -ForegroundColor DarkGray
 
 # ==============================================================================
 # ==============================================================================
@@ -1215,6 +1219,16 @@ while ($true) {
         $authArgument = ""
         if ($trimmedInput.Length -gt 5) { $authArgument = $trimmedInput.Substring(5).Trim() }
         Invoke-GemmaAuthCommand -Argument $authArgument
+        continue
+    }
+
+    if ($trimmedInput -eq ".verbose" -or $trimmedInput.StartsWith(".verbose ", [StringComparison]::OrdinalIgnoreCase)) {
+        $verboseArgument = if ($trimmedInput.Length -gt 8) { $trimmedInput.Substring(8).Trim().ToLowerInvariant() } else { '' }
+        if (-not $verboseArgument) { $script:VerboseOutput = -not $script:VerboseOutput }
+        elseif ($verboseArgument -in @('on','true','1','yes')) { $script:VerboseOutput = $true }
+        elseif ($verboseArgument -in @('off','false','0','no')) { $script:VerboseOutput = $false }
+        else { Write-Host 'Usage: .verbose [on|off]' -ForegroundColor Yellow; continue }
+        Write-Host "[Verbose thought summaries: $(if ($script:VerboseOutput) { 'ON' } else { 'OFF' })]" -ForegroundColor $(if ($script:VerboseOutput) { 'Green' } else { 'Yellow' })
         continue
     }
 
@@ -1502,7 +1516,7 @@ while ($true) {
             parameters = @{ type = "object"; properties = @{ command = @{ type = "string"; description = "PowerShell command to execute on the Windows host." } }; required = @("command") }
         }
     )
-    if ($script:GoogleSearchGrounding -and -not $script:NativeGoogleSearchActive) {
+    if ($script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled -and -not $script:NativeGoogleSearchActive) {
         $functionDeclarations += @{
             name = "web_search"
             description = "Search the web with the dedicated Gemini 3.1 Flash-Lite Google Search research agent. Use for current information and source discovery."
@@ -1736,7 +1750,7 @@ while ($true) {
                             }
                         }
                         "web_search" {
-                            if (-not $script:GoogleSearchGrounding) { $toolResult = @{ error = "Web search is disabled. Ask the user to run .grounding on." } }
+                            if (-not $script:GoogleSearchGrounding -or -not $script:AgenticWebSearchEnabled) { $toolResult = @{ error = "Agentic web search is disabled in settings. Use native Google Search if this model supports it." } }
                             else { $toolResult = Invoke-GemmaWebSearch -Query ([string]$call.args.query) }
                         }
                         "run_powershell" {
@@ -1778,8 +1792,10 @@ while ($true) {
             # No tool call: this is the final natural-language response.
             $toolLoop = $false
             $replyTextParts = @(
-                $modelParts | Where-Object { $null -ne $_.text } |
-                    ForEach-Object { [string]$_.text }
+                $modelParts | Where-Object { $null -ne $_.text -and ($script:VerboseOutput -or -not $_.thought) } |
+                    ForEach-Object {
+                        if ($_.thought) { "[Thought summary]`n$([string]$_.text)" } else { [string]$_.text }
+                    }
             )
             $reply = Normalize-MiraReply ($replyTextParts -join "`n")
 
