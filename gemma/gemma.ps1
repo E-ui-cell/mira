@@ -675,20 +675,34 @@ function Read-GemLineFallback {
     $row = [Console]::CursorTop
     [Console]::Write('   > ')
 
+    $renderedRows = 1
     function Redraw($old,$new,$pos) {
         $w = [Console]::WindowWidth
-        $avail = [Math]::Max(10, $w - $prompt - 1)
-        $start = [Math]::Max(0, $pos - $avail + 1)
-        $shown = if ($start -lt $new.Length) {
-            $new.Substring($start, [Math]::Min($avail, $new.Length - $start))
-        } else { '' }
-        $shownPos = [Math]::Max(0, $pos - $start)
+        $lines = @(([string]$new) -split "`n",-1)
+        $lineIndex = 0
+        $column = 0
+        if ($pos -gt 0) {
+            $prefix = ([string]$new).Substring(0,[Math]::Min($pos,([string]$new).Length))
+            $lineIndex = ([regex]::Matches($prefix,"`n")).Count
+            $lastBreak = $prefix.LastIndexOf("`n")
+            $column = if ($lastBreak -ge 0) { $prefix.Length - $lastBreak - 1 } else { $prefix.Length }
+        }
 
-        [Console]::SetCursorPosition($prompt, $row)
-        [Console]::Write((' ' * $avail))
-        [Console]::SetCursorPosition($prompt, $row)
-        [Console]::Write($shown)
-        [Console]::SetCursorPosition($prompt + [Math]::Min($shownPos, $avail - 1), $row)
+        for ($i = 0; $i -lt [Math]::Max($renderedRows,$lines.Count); $i++) {
+            $targetRow = $row + $i
+            if ($targetRow -ge [Console]::BufferHeight) { break }
+            [Console]::SetCursorPosition(0,$targetRow)
+            [Console]::Write((' ' * [Math]::Max(1,$w - 1)))
+            if ($i -lt $lines.Count) {
+                $startColumn = if ($i -eq 0) { $prompt } else { 0 }
+                [Console]::SetCursorPosition($startColumn,$targetRow)
+                [Console]::Write([string]$lines[$i])
+            }
+        }
+        $renderedRows = [Math]::Max(1,$lines.Count)
+        $cursorRow = [Math]::Min($row + $lineIndex,[Console]::BufferHeight - 1)
+        $cursorColumn = if ($lineIndex -eq 0) { $prompt + $column } else { $column }
+        [Console]::SetCursorPosition([Math]::Min($cursorColumn,$w - 1),$cursorRow)
     }
 
     function ShowChoices($choices,$current) {
@@ -888,10 +902,15 @@ if (-not [Char]::IsControl($k.KeyChar)) {
     while ([Console]::KeyAvailable) {
         $pk = [Console]::ReadKey($true)
 
-        if ($pk.Key -eq [ConsoleKey]::Enter) {
-            [Console]::Write("`r`n")
-            [Console]::TreatControlCAsInput = $oldTreatControlCAsInput
-            return $b
+        # A multiline paste is delivered as Enter/CR/LF control characters.
+        # Preserve those as text line breaks; Enter typed after the paste burst
+        # is handled by the outer input loop as submit.
+        if ($pk.Key -eq [ConsoleKey]::Enter -or $pk.KeyChar -eq [char]13 -or $pk.KeyChar -eq [char]10) {
+            if ($pk.KeyChar -eq [char]10 -and $b.EndsWith("`n")) { continue }
+            if ($b.EndsWith("`r")) { $b = $b.TrimEnd([char]13) }
+            $b = $b.Insert($c,"`n")
+            ++$c
+            continue
         }
 
         if (-not [Char]::IsControl($pk.KeyChar)) {
