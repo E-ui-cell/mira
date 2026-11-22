@@ -1,5 +1,5 @@
 # ==============================================================================
-# WINDOWS 7 ENVIRONMENT FIXES
+# WINDOWS POWERSHELL 5.1
 # ==============================================================================
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -183,9 +183,9 @@ function Set-GemmaPrivateAcl {
     foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleAll($rule) }
     if ($Directory) {
         $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, $inheritance, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, $inheritance, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
     } else {
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)
     }
     [void]$acl.AddAccessRule($rule)
     Set-Acl -LiteralPath $Path -AclObject $acl
@@ -412,11 +412,11 @@ function Invoke-GemmaSearchCommand {
 }
 
 function Invoke-GemmaAntigravityRequest {
-    param([hashtable]$Payload)
+    param([System.Collections.IDictionary]$Payload)
     $token = Get-AntigravityAccessToken
     $project = Get-AntigravityProject
     $Payload.systemInstruction.role = 'user'
-    if ($Payload.ContainsKey('safetySettings')) { [void]$Payload.Remove('safetySettings') }
+    if ($Payload.Contains('safetySettings')) { [void]$Payload.Remove('safetySettings') }
     $requestId = 'agent-' + [guid]::NewGuid().ToString('N')
     $envelope = @{ project = $project; requestId = $requestId; request = $Payload; model = $script:MODEL; userAgent = 'antigravity'; requestType = 'agent' }
     return Invoke-AntigravityPost -Method 'generateContent' -Body $envelope -AccessToken $token
@@ -429,7 +429,7 @@ function Invoke-GemmaGoogleSearchPreflight {
     $searchPayload = Build-GeminiPayload -SystemInstruction $SystemInstruction -Contents $Contents
     $searchPayload.tools = @(@{ googleSearch = @{} })
     $searchPayload.toolConfig = @{ includeServerSideToolInvocations = $true }
-    if ($searchPayload.ContainsKey('safetySettings')) { [void]$searchPayload.Remove('safetySettings') }
+    if ($searchPayload.Contains('safetySettings')) { [void]$searchPayload.Remove('safetySettings') }
     $searchResponse = Invoke-GemmaAntigravityRequest -Payload $searchPayload
     if ($null -eq $searchResponse.response -or $null -eq $searchResponse.response.candidates -or $searchResponse.response.candidates.Count -eq 0) { throw 'Google Search preflight returned no candidates.' }
     $candidate = $searchResponse.response.candidates[0]
