@@ -2486,7 +2486,7 @@ function Compress-Session(){
     $summaryMessages=@([pscustomobject]@{role='user';text=$prompt})
     try{
         $type=[string]$provider.type
-        if($type -eq 'gemini'){$payload=Build-GeminiPayload $summaryMessages ''}
+        if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $summaryMessages ''}
         elseif($type -eq 'openai-compatible'){$payload=Build-OpenAICompatiblePayload $provider $summaryMessages $script:CurrentModel ''; $payload.stream=$false}
         else{throw ('unsupported provider type: '+$type)}
         $response=Send-ProviderPayload $provider $script:CurrentModel $payload
@@ -4051,15 +4051,20 @@ function Show-Response($response,$providerType){
 function Invoke-Provider($text,$parts=$null){
     $provider=Get-Provider $script:CurrentProviderName
     if($null -eq $provider){W ('[provider error] unknown provider: '+$script:CurrentProviderName) Red;return $false}
+    if(-not (Test-ProviderUsable $provider)){
+        if([string]$provider.type -eq 'antigravity'){W '[provider error] Antigravity OAuth is not available. Run .auth login.' Red}
+        else{W ('[provider error] missing API key: '+[string]$provider.api_key_env) Red}
+        return $false
+    }
     if($script:SessionActive -and $script:LastPromptTokens -ge $script:CompressThreshold){[void](Compress-Session)}
 
+    $conversationStartCount=$script:Conversation.Count
     $messages=@($script:Conversation|ForEach-Object{$_})
-    # Initialize parts explicitly; assigning a new property to a PSObject fails in PS 5.1.
     $user=[pscustomobject]@{role='user';text=[string]$text;parts=$null}
     if($null -ne $parts){$user.parts=@($parts)}
     $messages+=$user
     $type=[string]$provider.type
-    if($type -eq 'gemini'){$payload=Build-GeminiPayload $messages $script:SessionSummary}
+    if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $messages $script:SessionSummary}
     elseif($type -eq 'openai-compatible'){$payload=Build-OpenAICompatiblePayload $provider $messages $script:CurrentModel $script:SessionSummary}
     else{W ('[provider error] unsupported type: '+$type) Red;return $false}
 
@@ -4077,9 +4082,8 @@ function Invoke-Provider($text,$parts=$null){
 
     try{
         if($type -eq 'openai-compatible' -and $script:StreamResponses){
-            try{
-                $result=Send-OpenAICompatibleStream $provider $script:CurrentModel $payload
-            }catch{
+            try{$result=Send-OpenAICompatibleStream $provider $script:CurrentModel $payload}
+            catch{
                 if($_.Exception.Message -eq 'Request cancelled.'){throw}
                 W ('[stream error] '+$_.Exception.Message) Yellow
                 W '[stream fallback] retrying non-stream request...' DarkGray
@@ -4087,6 +4091,45 @@ function Invoke-Provider($text,$parts=$null){
                 $response=Send-ProviderPayload $provider $script:CurrentModel $payload
                 $result=Show-Response $response $type
             }
+        }elseif($type -eq 'gemini' -or $type -eq 'antigravity'){
+            $round=0
+            while($true){
+                ++$round
+                if($round -gt $script:MiraMaxToolRounds){throw ('Tool loop exceeded '+$script:MiraMaxToolRounds+' rounds; stopping to prevent an infinite request cycle.')}
+                $payload=Build-GeminiPayload $messages $script:SessionSummary
+                $jsonPayload=$payload|ConvertTo-Json -Depth 40
+                $script:LastRequest=$jsonPayload
+                $response=Send-ProviderPayload $provider $script:CurrentModel $payload
+                $candidate=$null
+                if($null -ne $response.candidates -and @($response.candidates).Count -gt 0){$candidate=$response.candidates[0]}
+                if($null -eq $candidate){break}
+                Write-MiraGroundingDiagnostics $candidate $script:CurrentProviderName $script:CurrentModel
+                $modelParts=@()
+                if($null -ne $candidate.content -and $null -ne $candidate.content.parts){$modelParts=@($candidate.content.parts)}
+                $functionCalls=@($modelParts|Where-Object{$null -ne $_.functionCall}|ForEach-Object{$_.functionCall})
+                if($functionCalls.Count -eq 0){break}
+                if($round -ge $script:MiraMaxToolRounds){throw ('Tool loop reached the '+$script:MiraMaxToolRounds+' round limit.')}
+                # Preserve the complete model tool-call turn, including IDs and part metadata.
+                $modelTurn=[pscustomobject]@{role='assistant';text='';parts=$null;geminiParts=$modelParts}
+                $messages+= $modelTurn
+                foreach($call in $functionCalls){
+                    $toolName=[string]$call.name
+                    $toolArgs=$call.args
+                    if($null -eq $toolArgs){$toolArgs=@{}}
+                    W ('[tool call] '+$toolName) DarkYellow
+                    $toolResult=Invoke-MiraTool $toolName $toolArgs
+                    try{
+                        $toolJson=$toolResult|ConvertTo-Json -Depth 12
+                        if($toolJson.Length -gt 24000){$toolResult=@{error='Tool result exceeded 24 KB and was omitted.'}}
+                    }catch{$toolResult=@{error='Tool result could not be serialized.'}}
+                    $functionResponse=@{name=$toolName;response=$toolResult}
+                    if($null -ne $call.id -and -not [string]::IsNullOrWhiteSpace([string]$call.id)){$functionResponse.id=[string]$call.id}
+                    $toolPart=@{functionResponse=$functionResponse}
+                    $toolTurn=[pscustomobject]@{role='user';text='';parts=$null;geminiParts=@($toolPart)}
+                    $messages+= $toolTurn
+                }
+            }
+            $result=Show-Response $response $type
         }else{
             $response=Send-ProviderPayload $provider $script:CurrentModel $payload
             $result=Show-Response $response $type
@@ -4106,18 +4149,10 @@ function Invoke-Provider($text,$parts=$null){
 
     $script:LastPromptTokens=0
     if($null -ne $result.PromptTokens){$script:LastPromptTokens=[int]$result.PromptTokens}
-    if($type -eq 'gemini' -and
-       $script:LastPromptTokens -eq 0 -and
-       $null -ne $response -and
-       $null -ne $response.usageMetadata -and
-       $null -ne $response.usageMetadata.promptTokenCount){
+    if(($type -eq 'gemini' -or $type -eq 'antigravity') -and $script:LastPromptTokens -eq 0 -and $null -ne $response -and $null -ne $response.usageMetadata -and $null -ne $response.usageMetadata.promptTokenCount){
         $script:LastPromptTokens=[int]$response.usageMetadata.promptTokenCount
     }
-
     $script:LastText=$result.Text
-
-    # Final status is prepared before the renderer converts the reserved live
-    # row into the top frame. No second status row is created.
     $elapsedSec=[math]::Round(([int]$script:LastRequestElapsedMs)/1000,1)
     $statusFrame=if([string]::IsNullOrEmpty([string]$script:LastRequestFrame)){'... '}else{[string]$script:LastRequestFrame}
     $tokensIn=if($null -ne $result.PromptTokens){[int]$result.PromptTokens}else{0}
@@ -4126,27 +4161,21 @@ function Invoke-Provider($text,$parts=$null){
     $script:LastStatusText=$statusFrame+'  '+$elapsedSec+'s      ↑ '+$tokensIn+'  ↓ '+$tokensOut+$bullet
     $script:LastStatusHasBullet=$script:SessionActive
 
-    if($type -eq 'gemini' -or -not $script:StreamResponses){
-        try{
-            Write-MarkupText ([string]$result.Text)
-        }catch{
-            try{ W '[markup warning] raw response fallback' Yellow }catch{}
-            try{ Write-Host ([string]$result.Text) -ForegroundColor Gray }catch{}
-        }
+    if($type -eq 'gemini' -or $type -eq 'antigravity' -or -not $script:StreamResponses){
+        try{Write-MarkupText ([string]$result.Text)}
+        catch{try{W '[markup warning] raw response fallback' Yellow}catch{};try{Write-Host ([string]$result.Text) -ForegroundColor Gray}catch{}}
     }
-
-    # Self-learning used.list: only remember models that produced a real
-    # non-empty text answer through Mira's normal chat path. Model selection
-    # itself never writes to used.list, so failed/TTS/non-text models stay out.
     $ok=($result.FinishReason -ne 'SAFETY') -and
         -not [string]::IsNullOrEmpty([string]$result.Text) -and
         ([string]$result.Text -notmatch '^\[NO CHOICES RETURNED\]$') -and
         ([string]$result.Text -notmatch '^\[NO CANDIDATES RETURNED\]$')
     if($ok){Add-UsedModel $script:CurrentProviderName $script:CurrentModel}
-    if($ok -and $script:SessionActive){[void]$script:Conversation.Add($user);Add-Message 'assistant' $result.Text $result.ReasoningDetails}
+    if($ok -and $script:SessionActive){
+        for($i=$conversationStartCount;$i -lt $messages.Count;++$i){[void]$script:Conversation.Add($messages[$i])}
+        Add-Message 'assistant' $result.Text $result.ReasoningDetails
+    }
     return $ok
 }
-
 function Show-ApiKeyStatus(){
     W '' DarkCyan
     W 'API key status (safe; never prints secrets):' Cyan
