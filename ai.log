@@ -1,0 +1,61 @@
+# AI Plan & TODO — gemma.ps1
+
+Branch: `work`
+Repository: `E-ui-cell/mira`
+Scope: `gemma/gemma.ps1`
+
+## Goal
+
+Keep Google Search behavior strictly provider-specific. Antigravity OAuth models must use Google's own native, server-side grounding. Gemini Developer API models must use the script's agentic `web_search` function, backed by the Antigravity OAuth Google Search endpoint, because the Gemini Developer API provider does not get that free Antigravity-native grounding.
+
+## Required provider behavior
+
+### Antigravity OAuth
+
+- [x] Do not expose the script-defined/client-side `web_search` function.
+- [x] Add native `googleSearch: {}` to the Antigravity model request when `.grounding on`.
+- [x] Enable `toolConfig.includeServerSideToolInvocations = true` for Antigravity requests with native grounding and function calling.
+- [ ] Test that the selected Antigravity model performs native Search internally when it decides Search is needed.
+- [ ] Confirm that no `[Gemini tool call: web_search]` appears for Antigravity.
+- [ ] Confirm that grounding-off requests omit native `googleSearch` and do not search.
+- [ ] Inspect returned grounding metadata (queries, source titles/URLs) where available; do not mistake a model's answer or a tool-cycle STOP for proof of successful grounding.
+
+### Gemini Developer API
+
+- [x] Expose the script-defined `web_search` function only when provider is `gemini`, grounding is ON, and `MIRA_ENABLE_AGENTIC_WEB_SEARCH = $true`.
+- [x] Keep native `googleSearch: {}` out of Gemini Developer API answer requests.
+- [x] Route the agentic search function to the Antigravity OAuth endpoint, using the configured research model `MIRA_SEARCH_MODEL`.
+- [ ] Test that a Gemini API model can decide to call `web_search`.
+- [ ] Verify the Antigravity OAuth search response contains actual grounding metadata and source URLs.
+- [ ] Verify the research result is returned to the Gemini API model and used in its final answer.
+- [ ] Verify the tool is absent when `MIRA_ENABLE_AGENTIC_WEB_SEARCH = $false` or grounding is OFF.
+
+## Diagnostics and reliability TODO
+
+- [ ] Log provider, selected answer model, and search mode clearly in `.grounding status`.
+- [ ] Keep native-grounding execution/errors distinct from client-side `web_search` execution/errors.
+- [ ] Surface grounding query strings, source count, source titles, and URLs when available; never claim a search succeeded without grounding metadata.
+- [ ] Preserve HTTP status, capacity-exhaustion reason, and retry delay in errors. A 503 `MODEL_CAPACITY_EXHAUSTED` is a model capacity issue, not an authentication or tool-configuration failure.
+- [ ] Test both provider paths with grounding ON and OFF, including a request that does not need search.
+- [ ] Run PowerShell syntax validation and live endpoint tests after changes; GitHub content verification alone is not runtime testing.
+
+## Acceptance matrix
+
+| Provider / setting | Expected behavior |
+|---|---|
+| Antigravity OAuth + grounding ON | Native Google Search grounding; no client `web_search` function |
+| Antigravity OAuth + grounding OFF | No native Search tool |
+| Gemini Developer API + grounding ON + agentic search enabled | Client `web_search` function; search executed through Antigravity OAuth |
+| Gemini Developer API + grounding ON + agentic search disabled | No `web_search` function |
+| Gemini Developer API + grounding OFF | No `web_search` function |
+
+## Constraints
+
+- Work only on branch `work`; do not modify `main` or create/switch branches unless explicitly requested.
+- Preserve the protected API-key block exactly, including `$env:GEMINI_APIJ` and its existing error text.
+- Do not add ACL, ownership, or file-permission operations.
+- Do not claim runtime success until tested against the actual Windows PowerShell script and live provider endpoints.
+
+## Current implementation checkpoint
+
+The provider separation and native Antigravity `googleSearch` wiring were committed to `work` in commit `0d38abf4f3d43a63a52b815643d7969cc0375c2c`. The updated file blob was verified on GitHub. Runtime behavior has not yet been validated; the checklist above records the remaining tests.
