@@ -106,7 +106,11 @@ $script:ModelMenuIndex = 0
 $script:ModelMenuTyped = ''
 
 $script:Commands = @(
-    '.help','.clear','.clear history','.history','.history persist on','.history persist off','.file','.read','.diff','.shot','.model','.models','.models test','.providers','.request','.request json','.save','.copy','.grab','.ui','.stream','.reasoning','.enable-session','.export-session','.empty session','.compress session','.delete session','.q',':q',':wq'
+    '.help','.clear','.clear history','.history','.history persist on','.history persist off',
+    '.file','.read','.diff','.shot','.model','.models','.models refresh','.models test','.providers','.provider',
+    '.auth','.grounding','.ask','.autopilot','.skills','.skill','.tools',
+    '.request','.request json','.save','.copy','.grab','.ui','.stream','.reasoning',
+    '.enable-session','.export-session','.empty session','.compress session','.delete session','.q',':q',':wq'
 )
 
 # -----------------------------------------------------------------------------
@@ -1324,6 +1328,22 @@ function Invoke-MiraPermissionCommand([string]$Mode) {
 }
 
 
+function Invoke-MiraProviderCommand([string]$Name='') {
+    $value=$Name.Trim().ToLowerInvariant()
+    if(-not $value){W ('[provider] '+$script:CurrentProviderName+':'+$script:CurrentModel) Cyan;W 'Usage: .provider gemini | .provider antigravity' DarkGray;return}
+    $provider=Get-Provider $value
+    if($null -eq $provider){W ('[provider error] unknown provider: '+$value) Red;return}
+    if(-not (Test-ProviderUsable $provider)){
+        if([string]$provider.type -eq 'antigravity'){W '[provider] Antigravity OAuth is not connected. Run .auth login.' Yellow}
+        else{W ('[provider] missing API key in '+[string]$provider.api_key_env) Yellow}
+        return
+    }
+    $script:CurrentProviderName=[string]$provider.name
+    $cached=@(Get-CachedProviderModels $provider)
+    if($cached.Count -gt 0 -and $cached -notcontains $script:CurrentModel){$script:CurrentModel=[string]$cached[0]}
+    W ('[provider switched] '+$script:CurrentProviderName+':'+$script:CurrentModel) Green
+}
+
 function New-BuiltinProviders(){
     @(
         [pscustomobject]@{name='antigravity';type='antigravity';api_base='https://daily-cloudcode-pa.googleapis.com/v1internal';models=@([pscustomobject]@{name='gemini-3.1-flash-lite'})}
@@ -1958,10 +1978,15 @@ function Show-Models(){
 
 function Show-Providers(){
     W '' DarkCyan;W 'PROVIDERS' Cyan
-    foreach($provider in $script:Providers){W ('  '+[string]$provider.name+'  ('+[string]$provider.type+')  '+[string]$provider.api_base) Gray}
-    W '  registry: built into mira-tui-slim.ps1' DarkGray;W ('  model cache: '+$script:ModelCacheRoot) DarkGray;W ('  used models: '+$script:UsedModelsCacheFile) DarkGray;W '' DarkCyan
+    foreach($provider in $script:Providers){
+        $status=if(Test-ProviderUsable $provider){'ready'}else{'credentials required'}
+        W ('  '+[string]$provider.name+'  ('+[string]$provider.type+')  ['+$status+']  '+[string]$provider.api_base) Gray
+    }
+    W '  .auth login connects Google Antigravity OAuth; .model <provider:model> selects a model.' DarkGray
+    W ('  model cache: '+$script:ModelCacheRoot) DarkGray
+    W ('  used models: '+$script:UsedModelsCacheFile) DarkGray
+    W '' DarkCyan
 }
-
 function ModelCandidates([string]$typed){
     # Completion pool policy:
     #   used.list exists -> use only that learned pool.
@@ -4190,25 +4215,41 @@ function Invoke-Provider($text,$parts=$null){
 }
 function Show-ApiKeyStatus(){
     W '' DarkCyan
-    W 'API key status (safe; never prints secrets):' Cyan
+    W 'Credential status (safe; never prints secrets):' Cyan
     $names=@('GEMINI_API_KEY','OPENROUTER_API_KEY','GROQ_API_KEY','OPENAI_API_KEY','DEEPSEEK_API_KEY','MISTRAL_API_KEY','TOGETHER_API_KEY','FIREWORKS_API_KEY','XAI_API_KEY','PERPLEXITY_API_KEY')
     foreach($name in $names){
         $v=Get-Item ('Env:'+ $name) -ErrorAction SilentlyContinue
-        if($null -eq $v -or [string]::IsNullOrWhiteSpace([string]$v.Value)){
-            W ($name+' = <empty>') DarkGray
-        }else{
-            W ($name+' = <set>') DarkGray
-        }
+        W ($name+' = '+$(if($null -ne $v -and -not [string]::IsNullOrWhiteSpace([string]$v.Value)){'<set>'}else{'<empty>'})) DarkGray
     }
+    $oauth=Get-MiraAntigravityTokenPath
+    W ('Antigravity OAuth = '+$(if(Test-Path -LiteralPath $oauth){'token file found'}else{'not signed in'})) DarkGray
+    W ('Gemini API web_search = '+$(if($script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled){'enabled'}else{'disabled'})) DarkGray
 }
-
 function Help(){
-    W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
-    W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
+    W '' DarkCyan;W 'MIRA-TUI / GOOGLE + OPENAI-COMPATIBLE PROVIDERS' Magenta;W ''
+    W 'Enter            submit' Gray;W 'Ctrl+J/Ctrl+Enter insert newline' Gray;W 'Up/Down          history' Gray;W 'Tab              completion' Gray;W 'Ctrl+C            clear line' Gray;W 'Ctrl+L            redraw window' Gray
     Show-ApiKeyStatus
-    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <Tab>              refresh only providers with a non-empty API key env' DarkGray; W '  .models test               pre-filter fetched models, probe API, learn successful text models into used.list' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live OpenAI-compatible streaming' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
+    W '' DarkCyan;W ('COMMANDS: '+($script:Commands -join '  ')) Gray
+    W '  .model <provider:model>   select provider and model' DarkGray
+    W '  .provider gemini|antigravity   switch answer provider' DarkGray
+    W '  .auth login|status|logout      Antigravity OAuth' DarkGray
+    W '  .grounding on|off|status       Google Search grounding' DarkGray
+    W '  .ask / .autopilot              tool permission mode; ASK defaults to Yes' DarkGray
+    W '  .tools                         list built-in and modular tools' DarkGray
+    W '  .skills / .skill <name>        list/load skill playbooks' DarkGray
+    W '  .models refresh [provider]     refresh provider model catalogues' DarkGray
+    W '  .models test                   probe cached API-key provider models' DarkGray
+    W '  .file <path> / .read <path>    send file text/image to model' DarkGray
+    W '  .shot [path] / .diff <a> <b>   send image or file diff' DarkGray
+    W '  .enable-session [name]         enable RAM-only context session' DarkGray
+    W '  .export-session [name]         export active session' DarkGray
+    W '  .compress session              summarize old session messages' DarkGray
+    W '  .request [json]                inspect last request' DarkGray
+    W '  .save / .copy / .grab          save or copy the last response' DarkGray
+    W '  .stream on|off / .reasoning on|off' DarkGray
+    W '  !<PowerShell command>          run a local command manually' DarkGray
+    W ''
 }
-
 function Add-Message($role,$text,$reasoningDetails=$null,$parts=$null){
     # Keep optional fields present so PowerShell 5.1 can assign them later.
     $m=[pscustomobject]@{role=$role;text=[string]$text;reasoning_details=$null;parts=$null}
@@ -4474,10 +4515,36 @@ function Handle($line){
     if($t.StartsWith('.model ')){[void](Set-ModelSelection ($t.Substring(7)));return}
     if($t -eq '.models test'){Test-CachedModels;return}
     if($t -eq '.models'){Show-Models;return}
+    if($t -eq '.models refresh'){Refresh-ModelCaches;return}
+    if($t.StartsWith('.models refresh ')){Refresh-ModelCaches ($t.Substring(16).Trim());return}
     if($t -eq '.providers'){Show-Providers;return}
-    if($t -eq '.ui' -or $t -eq '.ui on' -or $t -eq '.ui off'){
-        if(Handle-UiCommand $t){return}
+    if($t -eq '.provider'){Invoke-MiraProviderCommand '';return}
+    if($t.StartsWith('.provider ')){Invoke-MiraProviderCommand ($t.Substring(10));return}
+    if($t -eq '.auth'){Invoke-MiraAuthCommand '';return}
+    if($t.StartsWith('.auth ')){Invoke-MiraAuthCommand ($t.Substring(6));return}
+    if($t -eq '.grounding'){Invoke-MiraGroundingCommand '';return}
+    if($t.StartsWith('.grounding ')){Invoke-MiraGroundingCommand ($t.Substring(11));return}
+    if($t -eq '.ask'){Invoke-MiraPermissionCommand 'ask';return}
+    if($t -eq '.autopilot'){Invoke-MiraPermissionCommand 'autopilot';return}
+    if($t -eq '.skills'){
+        $skills=Get-MiraSkill 'list'
+        W ('[skills] '+(@($skills.skills)-join ', ')) Cyan
+        W ('[user skills] '+$skills.user_skill_directory) DarkGray
+        return
     }
+    if($t -match '^\.skill\s+([a-zA-Z0-9_-]+)$'){
+        $skill=Get-MiraSkill $matches[1]
+        if($skill.instructions){W ('[skill: '+$skill.skill+' | '+$skill.source+']') Cyan;W $skill.instructions Gray}
+        else{W ([string]$skill.error) Yellow}
+        return
+    }
+    if($t -eq '.tools'){
+        Initialize-MiraTools
+        W ('[tools] '+(@($script:MiraToolRegistry.Keys|Sort-Object)-join ', ')) Cyan
+        W ('[tool modules] '+$script:MiraToolsDirectory) DarkGray
+        return
+    }
+    if($t -eq '.ui' -or $t -eq '.ui on' -or $t -eq '.ui off'){if(Handle-UiCommand $t){return}}
     if($t -eq '.request'){Show-Request;return}
     if($t -eq '.request json' -or $t -eq '.request raw'){Show-Request -Raw;return}
     if($t -eq '.save' -or $t.StartsWith('.save ')){Save-LastMessage $script:LastText (($t.Substring(5)).Trim());return}
@@ -4496,7 +4563,6 @@ function Handle($line){
     if($t.StartsWith('.diff ')){$a=$t.Substring(6).Trim() -split '\s+',2;if($a.Count -lt 2){W '[Usage: .diff <a> <b>]' Yellow;return};Send-DiffToProvider $a[0] $a[1];return}
     [void](Invoke-Provider $line)
 }
-
 function Read-Line {
     param([int]$PromptRow)
     $buffer=''
