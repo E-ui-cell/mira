@@ -224,6 +224,9 @@ Branch: mira-m, created from main.
 - mira/tools/system-info.ps1
 - mira/tools/README.md
 - mira/skills/README.md
+- mira/skills/powershell-scripting.md
+- mira/skills/web-research.md
+- mira/tests/Test-Syntax.ps1
 - README.md
 - ai.log
 
