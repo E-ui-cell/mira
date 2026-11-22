@@ -30,7 +30,12 @@ $MIRA_STOP_SEQUENCES = $null                # e.g. @('END')
 
 # Runtime behavior
 $MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'; ASK prompt defaults to Yes
-$MIRA_DEFAULT_GROUNDING = $true              # Agentic Google Search enabled for every answer provider/model
+$MIRA_DEFAULT_GROUNDING = $true              # Google Search enabled; native grounding preferred when supported
+# Models known to support native Google Search on each provider. Add exact model IDs here as verified.
+$MIRA_NATIVE_GROUNDING_MODELS = @{
+    antigravity = @('gemini-3.1-flash-lite','gemini-3-flash')
+    gemini      = @()
+}
 $MIRA_DEFAULT_CACHED_CONTENT = if ($env:MIRA_GEMINI_CACHED_CONTENT) { $env:MIRA_GEMINI_CACHED_CONTENT } else { $null }
 $MIRA_DEFAULT_SYSTEM_PROMPT = @"
 You Professional assistant. Speak short, presice, no noncence
@@ -141,6 +146,7 @@ $GeminiSafetySettings = @(
         }
     )
 $script:GoogleSearchGrounding = [bool]$MIRA_DEFAULT_GROUNDING
+$script:NativeGoogleSearchActive = $false
 $script:Provider = $MIRA_DEFAULT_PROVIDER
 $script:Effort = $MIRA_DEFAULT_EFFORT
 $script:ExecutionPermission = $MIRA_DEFAULT_PERMISSION
@@ -428,6 +434,21 @@ function Get-AntigravityModels {
     return @($result | Sort-Object name)
 }
 
+function Test-MiraNativeGoogleSearchSupport {
+    param(
+        [string]$Provider = $script:Provider,
+        [string]$Model = $script:MODEL
+    )
+    if (-not $script:GoogleSearchGrounding) { return $false }
+    if (-not $MIRA_NATIVE_GROUNDING_MODELS.ContainsKey($Provider)) { return $false }
+    foreach ($supportedModel in @($MIRA_NATIVE_GROUNDING_MODELS[$Provider])) {
+        if ([string]::Equals([string]$supportedModel, [string]$Model, [StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Invoke-GemmaAuthCommand {
     param([string]$Argument = '')
     $action = $Argument.Trim().ToLowerInvariant()
@@ -468,8 +489,8 @@ function Invoke-GemmaSearchCommand {
         $script:GoogleSearchGrounding = $false
         Write-Host '[Agentic web search disabled.]' -ForegroundColor Yellow
     } elseif ($value -eq 'status' -or -not $value) {
-        $state = if ($script:GoogleSearchGrounding) { 'ON' } else { 'OFF' }
-        Write-Host "[Agentic web search: $state | search model: $MIRA_SEARCH_MODEL | answer: $script:Provider/$script:MODEL]" -ForegroundColor Cyan
+        $state = if (-not $script:GoogleSearchGrounding) { 'OFF' } elseif (Test-MiraNativeGoogleSearchSupport) { 'ON (native model grounding; no separate search agent)' } else { "ON (Flash-Lite fallback: $MIRA_SEARCH_MODEL)" }
+        Write-Host "[Google Search: $state | answer: $script:Provider/$script:MODEL]" -ForegroundColor Cyan
     } else { Write-Host 'Usage: .grounding on | .grounding off | .grounding status' -ForegroundColor Yellow }
 }
 
@@ -1434,27 +1455,32 @@ while ($true) {
     # The model may request this function when it needs the real local date/time.
     # Gemini does NOT execute it; this PowerShell wrapper does.
     # ===========================================================================
-    $GeminiTools = @(
+    # Choose exactly one search path per model: native Google Search or the
+    # independent Flash-Lite research tool. Never pay for both on one turn.
+    $script:NativeGoogleSearchActive = Test-MiraNativeGoogleSearchSupport
+    $functionDeclarations = @(
         @{
-            functionDeclarations = @(
-                @{
-                    name = "get_current_datetime"
-                    description = "Returns the current local date and time from the host computer. Use this whenever the current date, current time, weekday, or local timezone is needed. Do not guess the date or time."
-                    parameters = @{ type = "object"; properties = @{} }
-                },
-                @{
-                    name = "web_search"
-                    description = "Search the web with the dedicated Gemini 3.1 Flash-Lite Google Search engine. Use for current information and source discovery independently of the answer provider."
-                    parameters = @{ type = "object"; properties = @{ query = @{ type = "string"; description = "Focused web search query." } }; required = @("query") }
-                },
-                @{
-                    name = "run_powershell"
-                    description = "Run commands in the user's local Windows PowerShell session for real machine inspection and tasks. Permission mode is controlled by .ask (confirmation, default Yes) and .autopilot (execute without confirmation). Use PowerShell syntax, never Bash. Continue using tool results to complete multi-step tasks; do not claim a task is blocked merely because local inspection is needed."
-                    parameters = @{ type = "object"; properties = @{ command = @{ type = "string"; description = "PowerShell command to execute on the Windows host." } }; required = @("command") }
-                }
-            )
+            name = "get_current_datetime"
+            description = "Returns the current local date and time from the host computer. Use this whenever the current date, current time, weekday, or local timezone is needed. Do not guess the date or time."
+            parameters = @{ type = "object"; properties = @{} }
+        },
+        @{
+            name = "run_powershell"
+            description = "Run commands in the user's local Windows PowerShell session for real machine inspection and tasks. Permission mode is controlled by .ask (confirmation, default Yes) and .autopilot (execute without confirmation). Use PowerShell syntax, never Bash. Continue using tool results to complete multi-step tasks; do not claim a task is blocked merely because local inspection is needed."
+            parameters = @{ type = "object"; properties = @{ command = @{ type = "string"; description = "PowerShell command to execute on the Windows host." } }; required = @("command") }
         }
     )
+    if ($script:GoogleSearchGrounding -and -not $script:NativeGoogleSearchActive) {
+        $functionDeclarations += @{
+            name = "web_search"
+            description = "Search the web with the dedicated Gemini 3.1 Flash-Lite Google Search research agent. Use for current information and source discovery."
+            parameters = @{ type = "object"; properties = @{ query = @{ type = "string"; description = "Focused web search query." } }; required = @("query") }
+        }
+    }
+    $GeminiTools = @(@{ functionDeclarations = $functionDeclarations })
+    if ($script:NativeGoogleSearchActive) {
+        $GeminiTools += @{ googleSearch = @{} }
+    }
 
     $GeminiToolConfig = @{
         functionCallingConfig = @{
