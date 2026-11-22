@@ -240,3 +240,5 @@ The source and GitHub branch have been updated, but this environment has no Wind
 - [x] Load repository Markdown skills from mira/skills as well as user skills from %USERPROFILE%\.mira\skills; add PowerShell scripting and grounded web research playbooks.
 
 - [x] Suppress all model-callable tools and native Google Search while MIRA is generating a command for -e; the generated command is still shown and requires its separate execution confirmation.
+
+- [x] Make -e abort if the model request fails; it can no longer parse or execute stale output from a previous response.
