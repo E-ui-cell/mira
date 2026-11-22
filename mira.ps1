@@ -5215,12 +5215,14 @@ if($cliArgs.Count -gt 0){
 Clear-Host
 Load-Providers
 Load-TuiHistory
-W 'MIRA-TUI / SLIM PROVIDERS' Cyan
+W 'MIRA-TUI / MODULAR PROVIDERS' Cyan
 W ('Own readline • no PSReadLine • Tab • history • multiline • attachments • model: ' + $script:CurrentProviderName + ':' + $script:CurrentModel) DarkGray
 W ('Session: off (one-shot requests) • .enable-session enables RAM context • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
 W ('History persistence: ' + $(if($script:PersistHistory){$script:HistoryFile}else{'OFF (RAM only)'}) + ' • loaded last ' + $script:HistoryLoadLimit + ' entries • .history persist on/off') DarkGray
 W ('OpenAI-compatible stream: ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning: ' + $(if($script:ShowReasoning){'on'}else{'off'})) DarkGray
-W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
+W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh with .models refresh • verify with .models test') DarkGray
+W ('Grounding: ' + $(if($script:GoogleSearchGrounding){'on'}else{'off'}) + ' • permission: ' + $script:ExecutionPermission + ' • tools/skills: modular') DarkGray
+W 'Google OAuth: .auth login  |  Providers: .provider antigravity  |  Skills: .skills  |  Tools: .tools' DarkGray
 W ('Used models: ' + $script:UsedModelsCacheFile + ' • learned from successful text replies/probes') DarkGray
 W ''
 
