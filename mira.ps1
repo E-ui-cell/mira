@@ -5133,7 +5133,9 @@ Rules:
     W ('[execute] '+$shellName+' / '+$os) DarkGray
     $oldCommandGenerationMode=$script:CommandGenerationMode
     $script:CommandGenerationMode=$true
-    try{[void](Invoke-Provider $prompt)}finally{$script:CommandGenerationMode=$oldCommandGenerationMode}
+    $providerOk=$false
+    try{$providerOk=[bool](Invoke-Provider $prompt)}finally{$script:CommandGenerationMode=$oldCommandGenerationMode}
+    if(-not $providerOk){W '[execute aborted] No valid command was generated.' Yellow;return $false}
 
     try{
         $command=Get-MiraExecuteCommand $script:LastText
