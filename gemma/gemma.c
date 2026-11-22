@@ -1562,8 +1562,7 @@ static void prompt(State*s,const char*p,int command) {
     }
     else fprintf(stderr,"[Request failed]\n");
 }
-
-static int self_test(void){
+static int self_test(void) {
     const char *sample="{\"token\":{\"access_token\":\"a\\nb\"},\"items\":[1,2]}";
     Doc d;
     jp(sample,&d);
@@ -1591,7 +1590,6 @@ static int self_test(void){
     else fprintf(stderr,"Gemma C self-test: FAIL\n");
     return ok?0:1;
 }
-
 int main(int argc,char**argv) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
