@@ -89,6 +89,8 @@ $GeminiSafetySettings = @(
 $LastGeminiRequestJson = $null
 $script:GoogleSearchGrounding = $false
 $script:Provider = 'gemini'
+$script:Effort = 'medium'
+$script:ExecutionPermission = 'ask'
 $script:AntigravityProject = $null
 
 function Get-GeminiModels {
@@ -124,12 +126,11 @@ function Invoke-GeminiModelSwitcher {
         for ($i = 0; $i -lt $availableModels.Count; $i++) {
             $item = $availableModels[$i]
             $id = [string]$item.name -replace '^models/', ''
-            $display = if ($item.displayName) { [string]$item.displayName } else { $id }
             $marker = if ($id -ieq $script:MODEL) { "  [CURRENT]" } else { "" }
-            Write-Host ("  {0,2}. {1}  ({2}){3}" -f ($i + 1), $display, $id, $marker)
+            Write-Host ("  {0,2}. {1}{2}" -f ($i + 1), $id, $marker)
         }
         $selection = $RequestedModel
-        if ([string]::IsNullOrWhiteSpace($selection)) { $selection = Read-Host "`nEnter model number or model ID (Enter to cancel)" }
+        if ([string]::IsNullOrWhiteSpace($selection)) { $selection = Read-Host "`nSelect model number (or enter exact model ID; Enter to cancel)" }
         if ([string]::IsNullOrWhiteSpace($selection)) { Write-Host "[Model unchanged: $script:MODEL]" -ForegroundColor Yellow; return }
         $selection = $selection.Trim() -replace '^models/', ''
         $chosen = $null
@@ -137,7 +138,7 @@ function Invoke-GeminiModelSwitcher {
             $index = [int]$selection - 1
             if ($index -ge 0 -and $index -lt $availableModels.Count) { $chosen = $availableModels[$index] }
         } else {
-            $chosen = $availableModels | Where-Object { ([string]$_.name -replace '^models/', '') -ieq $selection -or [string]$_.displayName -ieq $selection } | Select-Object -First 1
+            $chosen = $availableModels | Where-Object { ([string]$_.name -replace '^models/', '') -ieq $selection } | Select-Object -First 1
         }
         if ($null -eq $chosen) { Write-Host "[Unknown selection. Model unchanged: $script:MODEL]" -ForegroundColor Red; return }
         $script:MODEL = [string]$chosen.name -replace '^models/', ''
@@ -370,7 +371,7 @@ function Get-AntigravityModels {
         }
     }
     if ($result.Count -eq 0) { throw 'Antigravity returned no selectable models.' }
-    return @($result | Sort-Object displayName, name)
+    return @($result | Sort-Object name)
 }
 
 function Invoke-GemmaAuthCommand {
@@ -457,18 +458,46 @@ function Invoke-GemmaWebSearch {
     return @{ query=$Query; research=$research; sources=@($sources); search_model='gemini-3.1-flash-lite' }
 }
 
+function Invoke-GemmaPermissionCommand {
+    param([ValidateSet('ask','autopilot')][string]$Mode)
+    $script:ExecutionPermission = $Mode
+    if ($Mode -eq 'ask') {
+        Write-Host '[PowerShell permission mode: ASK | each command requires confirmation; Enter = Yes.]' -ForegroundColor Cyan
+    } else {
+        Write-Host '[PowerShell permission mode: AUTOPILOT | all model-requested PowerShell commands execute without confirmation.]' -ForegroundColor Yellow
+    }
+}
+
 function Invoke-GemmaPowerShellTool {
     param([string]$Command)
     if ([string]::IsNullOrWhiteSpace($Command)) { throw 'run_powershell requires a command.' }
     Write-Host "`n[PowerShell requested by model]:" -ForegroundColor DarkYellow
     Write-Host $Command -ForegroundColor Gray
-    $approval = Read-Host 'Execute this PowerShell command on this computer? [y/N]'
-    if ($approval -notmatch '^(?i:y|yes)$') { return @{ approved=$false; output='User declined command execution.' } }
+    if ($script:ExecutionPermission -eq 'ask') {
+        $approval = Read-Host 'Execute this PowerShell command? [Y/n]'
+        if ($approval -match '^(?i:n|no)$') { return @{ approved=$false; output='User declined command execution.' } }
+    }
     try {
         $output = Invoke-Expression $Command 2>&1 | Out-String -Width 240
         if ($output.Length -gt 20000) { $output = $output.Substring(0,20000) + "`n[PowerShell output truncated]" }
         return @{ approved=$true; output=$output; current_location=(Get-Location).Path }
     } catch { return @{ approved=$true; error=$_.Exception.Message } }
+}
+
+function Invoke-GemmaEffortCommand {
+    param([string]$Argument = '')
+    $value = $Argument.Trim().ToLowerInvariant()
+    if (-not $value) {
+        Write-Host "[Effort: $script:Effort]" -ForegroundColor Cyan
+        Write-Host 'Usage: .effort low | .effort medium | .effort high' -ForegroundColor DarkGray
+        return
+    }
+    if ($value -notin @('low','medium','high')) {
+        Write-Host 'Usage: .effort low | .effort medium | .effort high' -ForegroundColor Yellow
+        return
+    }
+    $script:Effort = $value
+    Write-Host "[Reasoning effort set to: $script:Effort]" -ForegroundColor Green
 }
 
 function Invoke-GemmaProviderCommand {
@@ -481,6 +510,7 @@ function Invoke-GemmaProviderCommand {
     $script:Provider = $value
     Write-Host "[Provider switched to: $script:Provider]" -ForegroundColor Green
     Write-Host '[Model name retained; use .model to select from this provider catalogue.]' -ForegroundColor DarkGray
+    Write-Host "[Reasoning effort: $script:Effort | use .effort low/medium/high to change.]" -ForegroundColor DarkGray
 }
 
 
@@ -509,6 +539,21 @@ function Build-GeminiPayload {
 
     if ($null -ne $GeminiGenerationConfig) {
         $payload.generationConfig = $GeminiGenerationConfig
+    }
+
+    # Gemini 3 uses thinkingLevel; Gemini 2.5 uses thinkingBudget.
+    # This payload is shared by Gemini Developer API and Antigravity OAuth.
+    if ($script:MODEL -match '(?i)gemini[-.]?3') {
+        if ($null -eq $payload.generationConfig) { $payload.generationConfig = @{} }
+        $payload.generationConfig.thinkingConfig = @{ thinkingLevel = $script:Effort.ToUpperInvariant() }
+    } elseif ($script:MODEL -match '(?i)gemini[-.]?2.5') {
+        if ($null -eq $payload.generationConfig) { $payload.generationConfig = @{} }
+        $thinkingBudget = switch ($script:Effort) {
+            'low' { 1024 }
+            'medium' { 8192 }
+            'high' { 24576 }
+        }
+        $payload.generationConfig.thinkingConfig = @{ thinkingBudget = $thinkingBudget }
     }
 
     if (-not [string]::IsNullOrWhiteSpace($GeminiCachedContent)) {
@@ -578,7 +623,7 @@ $script:MiraHistoryMax = 500
 # Mira owns the console input buffer through Read-GemLineFallback.
 $script:UsePSReadLine = $false
 
-$script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.requests','.requestkeys','.model','.provider','.auth','.grounding','.mira-update')
+$script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.requests','.requestkeys','.model','.provider','.effort','.auth','.grounding','.ask','.autopilot','.mira-update')
 
 function Get-GemCommands([string]$p) {
     @(
@@ -630,20 +675,34 @@ function Read-GemLineFallback {
     $row = [Console]::CursorTop
     [Console]::Write('   > ')
 
+    $renderedRows = 1
     function Redraw($old,$new,$pos) {
         $w = [Console]::WindowWidth
-        $avail = [Math]::Max(10, $w - $prompt - 1)
-        $start = [Math]::Max(0, $pos - $avail + 1)
-        $shown = if ($start -lt $new.Length) {
-            $new.Substring($start, [Math]::Min($avail, $new.Length - $start))
-        } else { '' }
-        $shownPos = [Math]::Max(0, $pos - $start)
+        $lines = @(([string]$new) -split "`n",-1)
+        $lineIndex = 0
+        $column = 0
+        if ($pos -gt 0) {
+            $prefix = ([string]$new).Substring(0,[Math]::Min($pos,([string]$new).Length))
+            $lineIndex = ([regex]::Matches($prefix,"`n")).Count
+            $lastBreak = $prefix.LastIndexOf("`n")
+            $column = if ($lastBreak -ge 0) { $prefix.Length - $lastBreak - 1 } else { $prefix.Length }
+        }
 
-        [Console]::SetCursorPosition($prompt, $row)
-        [Console]::Write((' ' * $avail))
-        [Console]::SetCursorPosition($prompt, $row)
-        [Console]::Write($shown)
-        [Console]::SetCursorPosition($prompt + [Math]::Min($shownPos, $avail - 1), $row)
+        for ($i = 0; $i -lt [Math]::Max($renderedRows,$lines.Count); $i++) {
+            $targetRow = $row + $i
+            if ($targetRow -ge [Console]::BufferHeight) { break }
+            [Console]::SetCursorPosition(0,$targetRow)
+            [Console]::Write((' ' * [Math]::Max(1,$w - 1)))
+            if ($i -lt $lines.Count) {
+                $startColumn = if ($i -eq 0) { $prompt } else { 0 }
+                [Console]::SetCursorPosition($startColumn,$targetRow)
+                [Console]::Write([string]$lines[$i])
+            }
+        }
+        $renderedRows = [Math]::Max(1,$lines.Count)
+        $cursorRow = [Math]::Min($row + $lineIndex,[Console]::BufferHeight - 1)
+        $cursorColumn = if ($lineIndex -eq 0) { $prompt + $column } else { $column }
+        [Console]::SetCursorPosition([Math]::Min($cursorColumn,$w - 1),$cursorRow)
     }
 
     function ShowChoices($choices,$current) {
@@ -789,10 +848,10 @@ function Read-GemLineFallback {
                 else { [Console]::Beep(700,60) }
                 continue
             }
-            if ($b -match '^\.(?:grounding|auth)\s+(\S*)$') {
-                $options = if ($b.StartsWith('.grounding')) { @('on','off','status') } else { @('login','status','logout') }
+            if ($b -match '^\.(?:grounding|auth|effort)\s+(\S*)$') {
+                $options = if ($b.StartsWith('.grounding')) { @('on','off','status') } elseif ($b.StartsWith('.effort')) { @('low','medium','high') } else { @('login','status','logout') }
                 $m = @($options | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })
-                if ($m.Count -eq 1) { $head = if ($b.StartsWith('.grounding')) { '.grounding ' } else { '.auth ' }; $old=$b; $b=$head+$m[0]; $c=$b.Length; Redraw $old $b $c }
+                if ($m.Count -eq 1) { $head = if ($b.StartsWith('.grounding')) { '.grounding ' } elseif ($b.StartsWith('.effort')) { '.effort ' } else { '.auth ' }; $old=$b; $b=$head+$m[0]; $c=$b.Length; Redraw $old $b $c }
                 elseif ($m.Count -gt 1) { [Console]::Write("`r`n"+($m -join '  ')+ "`r`nYou: "); $row=[Console]::CursorTop; Redraw '' $b $c }
                 else { [Console]::Beep(700,60) }
                 continue
@@ -843,10 +902,15 @@ if (-not [Char]::IsControl($k.KeyChar)) {
     while ([Console]::KeyAvailable) {
         $pk = [Console]::ReadKey($true)
 
-        if ($pk.Key -eq [ConsoleKey]::Enter) {
-            [Console]::Write("`r`n")
-            [Console]::TreatControlCAsInput = $oldTreatControlCAsInput
-            return $b
+        # A multiline paste is delivered as Enter/CR/LF control characters.
+        # Preserve those as text line breaks; Enter typed after the paste burst
+        # is handled by the outer input loop as submit.
+        if ($pk.Key -eq [ConsoleKey]::Enter -or $pk.KeyChar -eq [char]13 -or $pk.KeyChar -eq [char]10) {
+            if ($pk.KeyChar -eq [char]10 -and $b.EndsWith("`n")) { continue }
+            if ($b.EndsWith("`r")) { $b = $b.TrimEnd([char]13) }
+            $b = $b.Insert($c,"`n")
+            ++$c
+            continue
         }
 
         if (-not [Char]::IsControl($pk.KeyChar)) {
@@ -992,7 +1056,7 @@ function Save-GeminiCodeBlocks {
 }
 
 Clear-Host
-Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.requests' | '.requestkeys' | '.provider' | '.model' | '.auth' | '.grounding' | '.mira-update' | '!<cmd>'`n" -ForegroundColor DarkGray
+Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.requests' | '.requestkeys' | '.provider' | '.model' | '.effort' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '.mira-update' | '!<cmd>'`n" -ForegroundColor DarkGray
 
 # ==============================================================================
 # ==============================================================================
@@ -1086,6 +1150,22 @@ while ($true) {
         $authArgument = ""
         if ($trimmedInput.Length -gt 5) { $authArgument = $trimmedInput.Substring(5).Trim() }
         Invoke-GemmaAuthCommand -Argument $authArgument
+        continue
+    }
+
+    if ($trimmedInput -eq ".effort" -or $trimmedInput.StartsWith(".effort ", [StringComparison]::OrdinalIgnoreCase)) {
+        $effortArgument = ""
+        if ($trimmedInput.Length -gt 7) { $effortArgument = $trimmedInput.Substring(7).Trim() }
+        Invoke-GemmaEffortCommand -Argument $effortArgument
+        continue
+    }
+
+    if ($trimmedInput -ieq '.ask') {
+        Invoke-GemmaPermissionCommand -Mode ask
+        continue
+    }
+    if ($trimmedInput -ieq '.autopilot') {
+        Invoke-GemmaPermissionCommand -Mode autopilot
         continue
     }
 
@@ -1355,7 +1435,7 @@ while ($true) {
                 },
                 @{
                     name = "run_powershell"
-                    description = "Run a command in the user's local Windows PowerShell session. The user must approve every execution. Use PowerShell syntax, never Bash."
+                    description = "Run commands in the user's local Windows PowerShell session for real machine inspection and tasks. Permission mode is controlled by .ask (confirmation, default Yes) and .autopilot (execute without confirmation). Use PowerShell syntax, never Bash. Continue using tool results to complete multi-step tasks; do not claim a task is blocked merely because local inspection is needed."
                     parameters = @{ type = "object"; properties = @{ command = @{ type = "string"; description = "PowerShell command to execute on the Windows host." } }; required = @("command") }
                 }
             )
@@ -1375,7 +1455,7 @@ while ($true) {
     # final answer. Keep the tool exchange inside the same user turn.
     $toolLoop = $true
     $toolRounds = 0
-    $maxToolRounds = 8
+    $maxToolRounds = 32
 
     try {
         while ($toolLoop) {
