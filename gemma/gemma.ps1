@@ -1518,6 +1518,12 @@ while ($true) {
             mode = "AUTO"
         }
     }
+    # Antigravity requires server-side tool invocations to be explicitly
+    # enabled when its built-in Google Search capability is used alongside
+    # client function declarations in the same conversation.
+    if ($script:Provider -eq "antigravity" -and $script:GoogleSearchGrounding) {
+        $GeminiToolConfig.includeServerSideToolInvocations = $true
+    }
 
     # Everything added for this user turn is rolled back on cancellation or
     # request failure. This prevents stale/empty context on the next loop.
