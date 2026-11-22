@@ -29,7 +29,7 @@ refresh(){
 agy(){
  local method="$1" body="$2" t
  refresh || return 1; t="$(jq -r .token.access_token "$TOKEN")"
- curl -fsS "$AGY:$method" -H "Authorization: Bearer $t" -H 'Content-Type: application/json' -H 'X-Goog-Api-Client: google-cloud-sdk vscode_cloudshelleditor/0.1' -H 'Client-Metadata: {"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}' --data "$body"
+ curl -fsS "$AGY:$method" -H "Authorization: Bearer $t" -H 'Content-Type: application/json' -H 'X-Goog-Api-Client: google-cloud-sdk vscode_cloudshelleditor/0.1' -H 'Client-Metadata: {"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}' -H "User-Agent: antigravity/hub/2.17.0 (aidev_client; os_type=$(uname -s | tr '[:upper:]' '[:lower:]'); arch=$(uname -m))" --data "$body"
 }
 project(){
  [[ -n "$PROJECT" ]] && return 0
@@ -93,9 +93,9 @@ tool(){
    out="$(bash -lc "$cmd" 2>&1)"; rc=$?; jq -n --arg o "$out" --argjson c "$rc" '{exit_code:$c,output:$o}' ;;
   quick_web)
    case "$(jq -r '.action//""' <<<"$a")" in
-    weather) curl -fsS "https://wttr.in/$(enc "$(jq -r '.query//""' <<<"$a")")?format=3" ;;
-    public-ip) curl -fsS https://api.ipify.org ;;
-    cheatsheet) curl -fsS "https://cht.sh/$(enc "$(jq -r '.query//""' <<<"$a")")" ;;
+    weather) out="$(curl -fsS "https://wttr.in/$(enc "$(jq -r '.query//""' <<<"$a")")?format=3")"; jq -n --arg r "$out" '{result:$r}' ;;
+    public-ip) out="$(curl -fsS https://api.ipify.org)"; jq -n --arg r "$out" '{result:$r}' ;;
+    cheatsheet) out="$(curl -fsS "https://cht.sh/$(enc "$(jq -r '.query//""' <<<"$a")")")"; jq -n --arg r "$out" '{result:$r}' ;;
     *) echo '{"error":"unknown quick_web action"}' ;;
    esac ;;
   *) jq -n --arg n "$n" '{error:("unknown tool "+$n)}' ;;
