@@ -83,6 +83,7 @@ $script:MiraToolRegistry = @{}
 $script:MiraToolsInitialized = $false
 $script:MiraAntigravityProject = $null
 $script:MiraMaxToolRounds = 12
+$script:CommandGenerationMode = $false
 # -----------------------------------------------------------------------------
 # UI RUNTIME SWITCHES
 # These affect only the visual renderer. Raw .copy/.grab/.save data is unchanged.
@@ -1284,6 +1285,7 @@ function Initialize-MiraTools {
 }
 
 function Get-MiraFunctionDeclarations {
+    if($script:CommandGenerationMode){return @()}
     Initialize-MiraTools
     $declarations=New-Object System.Collections.Generic.List[object]
     foreach($name in @($script:MiraToolRegistry.Keys|Sort-Object)){
@@ -2129,7 +2131,7 @@ function Build-GeminiPayload($messages,$summary){
     $declarations=@(Get-MiraFunctionDeclarations)
     $tools=@()
     if($declarations.Count -gt 0){$tools+=@{functionDeclarations=$declarations}}
-    if($script:CurrentProviderName -eq 'antigravity' -and $script:GoogleSearchGrounding){
+    if($script:CurrentProviderName -eq 'antigravity' -and $script:GoogleSearchGrounding -and -not $script:CommandGenerationMode){
         # Native server-side Google Search; do not expose a client web_search function.
         $tools+=@{googleSearch=@{}}
     }
@@ -2172,7 +2174,7 @@ function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary){
     }
     $payload=[ordered]@{model=$model;messages=$msg;stream=$script:StreamResponses}
     if($script:ShowReasoning){$payload.reasoning=[ordered]@{enabled=$true}}
-    if(-not $script:StreamResponses){
+    if(-not $script:StreamResponses -and -not $script:CommandGenerationMode){
         $declarations=@(Get-MiraFunctionDeclarations)
         $tools=@()
         foreach($declaration in $declarations){
@@ -5129,7 +5131,9 @@ Rules:
 "@
 
     W ('[execute] '+$shellName+' / '+$os) DarkGray
-    [void](Invoke-Provider $prompt)
+    $oldCommandGenerationMode=$script:CommandGenerationMode
+    $script:CommandGenerationMode=$true
+    try{[void](Invoke-Provider $prompt)}finally{$script:CommandGenerationMode=$oldCommandGenerationMode}
 
     try{
         $command=Get-MiraExecuteCommand $script:LastText
