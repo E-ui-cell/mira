@@ -93,7 +93,7 @@ def agy_generate(payload,model):
 def model_list():
     if S["provider"]=="antigravity":
         r=agy_post("fetchAvailableModels",{"project":project()})
-        S["search_ids"]=[str(x).removeprefix("models/") for x in r.get("webSearchModelIds",[])]
+        S["search_ids"]=[str(x).removeprefix("models/") for x in r.get("webSearchModelIds",[])] if "webSearchModelIds" in r else None
         items=r.get("models",r.get("modelInfos",r.get("availableModels",[]))) or []
         return [str(x if isinstance(x,str) else next((x.get(k) for k in ("catalogId","modelId","id","name") if x.get(k)),"")).removeprefix("models/") for x in items]
     if not API_KEY: raise RuntimeError("Set GEMINI_APIJ for Gemini API provider")
