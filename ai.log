@@ -81,86 +81,75 @@ Direction: keep `gemma.ps1` self-contained and compact. Windows capabilities are
 
 Implementation commit: `9e95428bf7beb289be85527271ad0175f4af567f`. File blob verified as `329b4c55d6f0a4b40b5789143ef09b211041207a`.
 
-### Implemented in the standalone script on `work`
+### Implemented standalone CLI and Windows integration on `work`
 
-- [x] Add script parameters: `-Headless`, `-Prompt`, `-Stdin`, `-Json`, `-Search`, `-Command`, `-CommandArgument`, and explicit `-Autopilot`.
-- [x] Add one-shot headless AI requests that skip the interactive banner, input editor, spinner, and console-width dependency.
-- [x] Add machine-readable JSON responses for headless AI, direct Windows commands, and quick Search.
-- [x] Make headless ASK fail closed when the model requests PowerShell execution; it never waits on redirected stdin for approval. Explicit `-Autopilot` is required to run model-requested PowerShell commands headlessly.
-- [x] Add direct Windows commands that do not call a model: `help`, `system-info`, `process-list`, `clipboard-read`, `clipboard-write`, `window-list`, `window-activate`, `ui-tree`, `ui-action`, `app-launch`, `settings-open`, `network-check`, and `file-search`.
-- [x] Implement lazy-loaded Win32 Unicode clipboard access using `OpenClipboard`, `GetClipboardData(CF_UNICODETEXT)`, `GlobalLock`, `GlobalAlloc`, and `SetClipboardData`; clipboard writes use the existing permission policy.
-- [x] Implement visible top-level window discovery and window activation using Win32 APIs.
-- [x] Implement UI Automation control-tree inspection and guarded `Invoke`, `Toggle`, and `SetValue` actions by exact AutomationId or Name. GUI actions use the existing permission policy.
-- [x] Add a whitelist-based direct Windows Settings launcher (`settings-open`) and direct application launcher.
-- [x] Add user-authored Markdown skills from `$HOME\.gemma\skills\`; skill names are validated, files are limited to 32 KB, and content is treated as untrusted guidance.
+#### User-facing command line
+
+- [x] Replace batch-oriented flags with two short interactive options:
+  - `gemma -p "show weather"` — one-shot interactive assistant request. Normal spinner, tool execution, and ASK confirmations remain active; final response is ordinary human-readable text.
+  - `gemma -e "find notes.txt and open Explorer selecting it"` — one-shot command-generation mode. Return a concise Windows PowerShell command only; never execute it or call tools.
+- [x] Keep no-argument `gemma` as the normal interactive chat.
+- [x] Remove public `-Headless`, `-Prompt`, `-Json`, `-Stdin`, `-Search`, `-Command`, and `-CommandArgument` entry points. No machine-readable or redirected-input mode is part of the user-facing CLI.
+- [x] Keep ASK as the normal permission mode. `-p` remains interactive and can ask the user before running a local PowerShell action.
+- [x] In `-e` mode disable all model tools and Google grounding, explicitly instruct the model not to execute anything, and strip accidental Markdown code fences from the generated command.
+
+#### Dedicated quick web mini-tool
+
+- [x] Add a restricted `quick_web` tool, implemented with `curl.exe` when available (fallback: `Invoke-WebRequest`).
+- [x] `weather`: fetch `https://wttr.in/?format=3`; no location argument means wttr.in chooses the region from the caller's IP. A user-specified city can be passed explicitly.
+- [x] `public-ip`: fetch `https://api.ipify.org`.
+- [x] `cheatsheet`: fetch `https://cht.sh/` for its home page, or a topic-specific `cht.sh` path.
+- [x] Restrict the helper to these three fixed services, use request timeouts and response-size limits, and report curl/network failures.
+- [x] Add the `quick-web-tools` skill and system guidance so Mira chooses this mini-tool for weather, public-IP and quick command-help requests instead of broad Google Search.
+
+#### Native Windows integration
+
+- [x] Add direct local commands: `system-info`, `process-list`, `clipboard-read`, `clipboard-write`, `window-list`, `window-activate`, `ui-tree`, `ui-action`, `app-launch`, `settings-open`, `network-check`, and `file-search`.
+- [x] Implement lazy-loaded Win32 Unicode clipboard read/write and visible top-level window discovery/activation.
+- [x] Implement UI Automation control-tree inspection and guarded `Invoke`, `Toggle`, and `SetValue` actions.
+- [x] Add whitelist-based Windows Settings launching and application launching.
+- [x] Add built-in skills: `file-management`, `windows-settings`, `desktop-gui`, `clipboard`, `system-inspection`, and `quick-web-tools`.
+- [x] Add user-authored Markdown skills from `$HOME\.gemma\skills\`; validate skill names, limit files to 32 KB, and treat contents as untrusted guidance.
 - [x] Add interactive `.skills` and `.skill <name>` commands.
-- [x] Keep Google Search quick mode on the Antigravity OAuth native Search endpoint and preserve provider-specific grounding for normal model requests.
-- [x] Keep direct Windows operations local; no model call is made for direct commands.
-- [x] Preserve the protected API-key block exactly. No ACL/ownership/permission changes or elevation logic added.
+- [x] Keep normal model-requested PowerShell execution behind ASK/AUTOPILOT. Clipboard writes and GUI actions also use the permission policy.
 
-Implementation commits:
-- `3d7b614bea35896e5ff7ae75b98fe09c09b80819` — headless entry and user skills.
-- `de3ad3843b79dde52c7d58729cd43093d506bfef` — native clipboard and desktop commands.
-- `0f2c2d0025e874807874ce54be3407016cc87196` — UI Automation actions and repaired insertion.
-- `60875ddbca507afefb1f245576a92be4bf03fdf4` — headless safety and helper hardening.
-- `0ccf5d2de4ffa89eee9feff821b8d851d682db1a` — quiet headless output and Settings launcher.
-- `27683e1f0548e56052aea28ec2fd8e6f0aa0ab82` — interactive skill commands.
-- `ff098ed421c8bb66fd6b6438bbb3affd3972ec6c` — headless operation without console UI.
-
-### Command examples
+#### Usage examples
 
 ```powershell
-# One-shot AI request
-.\gemma.ps1 -Headless -Prompt "Explain this error"
+# Ask Mira to use a mini-tool / Windows capability as needed
+gemma -p 'show weather'
+gemma -p 'show my ip'
+gemma -p 'show help with curl cht.sh/'
+gemma -p 'find my notes.txt and open Explorer selecting that file'
 
-# Machine-readable AI response
-.\gemma.ps1 -Headless -Json -Prompt "Summarize this log"
+# Generate a command only; it is printed, never executed
+gemma -e 'find notes.txt and open Explorer selecting that file'
 
-# Pipe file content into the model
-Get-Content .\error.log -Raw | .\gemma.ps1 -Headless -Stdin -Prompt "Analyze this log"
-
-# Fast grounded Google Search through Antigravity OAuth
-.\gemma.ps1 -Search "latest PowerShell release" -Json
-
-# Local commands, no model request
-.\gemma.ps1 -Command system-info -Json
-.\gemma.ps1 -Command clipboard-read -Json
-.\gemma.ps1 -Command window-list -Json
-.\gemma.ps1 -Command settings-open -CommandArgument display
-.\gemma.ps1 -Command ui-tree -CommandArgument 0x123456
-.\gemma.ps1 -Command ui-action -CommandArgument "0x123456|AutomationId|invoke"
-
-# User-authored skills
-New-Item -ItemType Directory -Force "$HOME\.gemma\skills"
-# Save a skill as $HOME\.gemma\skills\my-skill.md
+# Normal interactive chat
+gemma
 ```
 
-### Remaining validation
+#### Implementation commits
 
-- [ ] Run Windows PowerShell 5.1 parser validation and execute direct commands on Windows.
-- [ ] Test clipboard Unicode round-trip, empty/unsupported clipboard, clipboard contention, and allocation cleanup.
-- [ ] Test window enumeration/activation and UI Automation tree/action against harmless standard controls.
-- [ ] Test headless prompt, stdin, JSON, quick Search, direct command exit codes, and headless ASK fail-closed behavior.
-- [ ] Test explicit `-Autopilot` separately and confirm it is never enabled by default.
-- [ ] Test Antigravity and Gemini Developer API provider-grounding matrix with grounding ON/OFF.
-- [ ] Confirm script startup still works on Windows PowerShell 5.1 and PowerShell 7.
+- `f5f1c571cd9dc31009c70da0949790341fed1596` — replace batch flags with `-p` and `-e`.
+- `a5a005d1a7547f68cf8c8174b6b3748439c10f04` — keep one-shot modes interactive.
+- `d0050736bb26f0818e6af7299b52394671d5dab7` — add the dedicated curl-based quick web mini-tool.
+- `ceade7a34d5010f7bc14c39cdd86c95d686e27eb` — polish command-only output and quick-tool guidance.
+- `1464c0ca0427a05931dda77fe2aee446e2a33850` — restore normal interactive startup and keep `-e` output clean.
 
-- `5f0268ce4a3fabfdb6f364889e4ff51f0c1bca40` — connect native helper operations to skill instructions and reuse the already-approved PowerShell permission gate.
+#### Remaining validation
 
-Additional implementation details:
-- Built-in skills now tell the model to call the native helper functions through the approved PowerShell tool for clipboard, window enumeration, UIA, settings launch, and system summary.
-- The helper recognizes when it is executing inside an already-approved `run_powershell` call, avoiding a second redundant confirmation. Direct CLI modifications still prompt in ASK mode; headless ASK fails closed.
-- Native Win32 helper initialization is lazy and only occurs for clipboard/window commands.
-- Headless request handling does not poll console keys or render the interactive spinner. JSON mode returns one structured response object on success and a structured error on request failure.
-- Added interactive `.skills` and `.skill <name>` commands; user-authored skill files are read from `$HOME\.gemma\skills\`.
+- [ ] Run Windows PowerShell 5.1 parser validation and test parameter aliases `-p` and `-e`.
+- [ ] Test `-e` command generation: no tools invoked, no command executed, no extra output around the command.
+- [ ] Test `-p` weather using wttr.in IP-based location, public IP via api.ipify.org, and cht.sh root/topic help.
+- [ ] Test `-p` file discovery plus Explorer selection with ASK confirmation for any action that changes state.
+- [ ] Test spinner, Ctrl+C cancellation, tool approval prompts, and ordinary no-argument interactive chat.
+- [ ] Test quick_web timeout, oversized response, curl missing, and HTTP failure behavior.
+- [ ] Re-run Windows clipboard/UI Automation tests and the provider-grounding ON/OFF matrix.
+- [ ] Confirm Windows PowerShell 5.1 and PowerShell 7 compatibility.
 
-Static repository checks performed:
-- Verified the protected API block is byte-for-byte text-identical.
-- Verified expected entry points, skills, direct command functions, native clipboard/window methods, UI Automation branches, provider-specific grounding conditions, and absence of ACL/ownership operations.
-- Ran a delimiter/string-aware lexical balance check; no unclosed strings or bracket/brace/parenthesis mismatches were found.
-- No PowerShell runtime/parser is installed in the editing environment. These checks are not a substitute for Windows PowerShell 5.1 parsing or runtime tests.
+Static GitHub content checks can verify source structure but cannot replace Windows runtime testing. No PowerShell runtime/parser is available in the editing environment; the new CLI and quick-web tool have not been executed live here.
 
-Implementation is committed to `work`; live Windows runtime validation has not been performed in this environment.
 
 ### Safety and design invariants
 
