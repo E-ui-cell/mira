@@ -164,6 +164,7 @@ $script:VerboseOutput = [bool]$MIRA_DEFAULT_VERBOSE
 $script:Provider = $MIRA_DEFAULT_PROVIDER
 $script:Effort = $MIRA_DEFAULT_EFFORT
 $script:ExecutionPermission = $MIRA_DEFAULT_PERMISSION
+$script:InApprovedPowerShellTool = $false
 $script:AntigravityProject = $null
 $script:AntigravityWebSearchModelIds = $null
 $script:AntigravityCapabilityProbeAttempted = $false
@@ -636,7 +637,9 @@ function Invoke-GemmaPowerShellTool {
     }
     $previousProgressPreference = $ProgressPreference
     $previousInformationPreference = $InformationPreference
+    $previousApprovedToolState = $script:InApprovedPowerShellTool
     try {
+        $script:InApprovedPowerShellTool = $true
         $ProgressPreference = 'SilentlyContinue'
         $InformationPreference = 'SilentlyContinue'
         $output = Invoke-Expression $Command *>&1 | Out-String -Width $MIRA_POWERSHELL_OUTPUT_WIDTH
@@ -646,6 +649,7 @@ function Invoke-GemmaPowerShellTool {
     finally {
         $ProgressPreference = $previousProgressPreference
         $InformationPreference = $previousInformationPreference
+        $script:InApprovedPowerShellTool = $previousApprovedToolState
     }
 }
 
@@ -682,7 +686,7 @@ Never touch ACLs, ownership, or file permissions. Never silently elevate.
 SKILL: WINDOWS SETTINGS AND CONFIGURATION
 Use run_powershell. Prefer supported Windows settings URI schemes and documented cmdlets over registry edits.
 
-Open settings pages with Start-Process -FilePath 'ms-settings:<page>' (examples: display, sound, network-wifi, appsfeatures, windowsupdate, privacy, bluetooth, printers, storagesense, startupapps). Check the target URI before launching and explain what page will open.
+Open settings pages with Start-Process -FilePath 'ms-settings:<page>' or use Invoke-GemmaDirectCommand -Name settings-open -Argument display (examples: display, sound, network-wifi, appsfeatures, windowsupdate, privacy, bluetooth, printers, storagesense, startupapps). Check the target URI before launching and explain what page will open.
 
 For configuration:
 1. Inspect current state first using Get-CimInstance, Get-NetIPConfiguration, Get-ItemProperty for a specifically identified setting, or the relevant supported cmdlet.
@@ -700,6 +704,7 @@ Use run_powershell for local Windows operations. Prefer semantic Windows UI Auto
 
 Capabilities:
 - Launch an application with Start-Process -FilePath and an argument array; do not concatenate untrusted text into a shell command.
+- Use Invoke-GemmaDirectCommand -Name window-list to enumerate visible windows, ui-tree -Argument <handle> to inspect controls, and ui-action -Argument '<handle>|<AutomationId-or-Name>|invoke|toggle|setvalue|<value>' for a specific approved action.
 - Enumerate visible top-level windows with user32 EnumWindows/GetWindowText and identify targets by process and title.
 - Activate/minimize/maximize a selected window using ShowWindow and SetForegroundWindow after identifying it.
 - For controls, load UIAutomationClient/UIAutomationTypes when available and inspect the automation tree. Prefer AutomationId, Name, ControlType, and supported patterns (Invoke, Value, Selection, Toggle).
@@ -716,7 +721,7 @@ Clipboard access is task-scoped. Never poll, monitor, or read clipboard automati
 
 Read:
 - Prefer Get-Clipboard -Raw when available; handle empty clipboard and unsupported formats.
-- For native Unicode text access, use Win32 OpenClipboard, GetClipboardData(CF_UNICODETEXT=13), GlobalLock, PtrToStringUni, GlobalUnlock, and CloseClipboard. Always close the clipboard in finally and unlock only when lock succeeded. Retry briefly if another application temporarily owns the clipboard, then return a clear error.
+- For native Unicode text access, use Invoke-GemmaDirectCommand -Name clipboard-read (or clipboard-write -Argument $text) from the approved PowerShell tool. This uses the script's Win32 helper. Otherwise use Win32 OpenClipboard, GetClipboardData(CF_UNICODETEXT=13), GlobalLock, PtrToStringUni, GlobalUnlock, and CloseClipboard. Always close the clipboard in finally and unlock only when lock succeeded. Retry briefly if another application temporarily owns the clipboard, then return a clear error.
 - Do not assume the clipboard contains text. Report unsupported formats without changing it.
 
 Write:
@@ -732,6 +737,7 @@ SKILL: WINDOWS SYSTEM INSPECTION
 Use read-only PowerShell/CIM/network commands first. Do not change system state during diagnosis.
 
 Useful sources:
+- Quick local summary: Invoke-GemmaDirectCommand -Name system-info
 - OS: Get-CimInstance Win32_OperatingSystem
 - Computer/BIOS: Get-CimInstance Win32_ComputerSystem, Win32_BIOS
 - CPU/RAM: Get-CimInstance Win32_Processor, Win32_PhysicalMemory
@@ -812,6 +818,7 @@ public static class GemmaNativeWindows {
 }
 function Confirm-GemmaDirectAction {
     param([string]$Description)
+    if ($script:InApprovedPowerShellTool) { return $true }
     if ($script:ExecutionPermission -eq 'autopilot') { return $true }
     if ($script:Headless) { [Console]::Error.WriteLine("Permission required in headless ASK mode: $Description"); return $false }
     Write-Host "[Action] $Description" -ForegroundColor Yellow
@@ -819,7 +826,7 @@ function Confirm-GemmaDirectAction {
 }
 function Invoke-GemmaDirectCommand {
     param([string]$Name,[string]$Argument)
-    Initialize-GemmaNativeWindows
+    if ($Name.Trim().ToLowerInvariant() -in @('clipboard-read','clipboard-write','window-list','window-activate')) { Initialize-GemmaNativeWindows }
     switch ($Name.Trim().ToLowerInvariant()) {
         'help' { return "Commands: system-info, process-list, clipboard-read, clipboard-write, window-list, window-activate, ui-tree, ui-action, app-launch, settings-open, network-check, file-search. Skills: `$HOME\.gemma\skills\<name>.md. AI: -Headless -Prompt <text> [-Json], -Stdin, -Search <query>. Use -Autopilot only when explicitly intended." }
         'system-info' {
