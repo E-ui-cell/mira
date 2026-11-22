@@ -4584,6 +4584,7 @@ function Handle($line){
         $skills=Get-MiraSkill 'list'
         W ('[skills] '+(@($skills.skills)-join ', ')) Cyan
         W ('[user skills] '+$skills.user_skill_directory) DarkGray
+        W ('[repository skills] '+$skills.repository_skill_directory) DarkGray
         return
     }
     if($t -match '^\.skill\s+([a-zA-Z0-9_-]+)$'){
