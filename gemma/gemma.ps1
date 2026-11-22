@@ -373,19 +373,31 @@ function Get-AntigravityModels {
 
 function Invoke-GemmaAuthCommand {
     param([string]$Argument = '')
-    switch -Regex ($Argument.Trim().ToLowerInvariant()) {
-        '^login { try { Invoke-AntigravityLogin } catch { Write-Host "`n[OAuth login failed]: $($_.Exception.Message)" -ForegroundColor Red }; return }
-        '^logout { try { Invoke-AntigravityLogout } catch { Write-Host "`n[OAuth logout failed]: $($_.Exception.Message)" -ForegroundColor Red }; return }
-        '^status$|^ {
-            $path = Get-AntigravityTokenPath
-            if (Test-Path -LiteralPath $path) {
-                try { $data = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json; $email = if ($data.email) { [string]$data.email } else { '(account email not recorded)' }; Write-Host "`nGoogle Antigravity: signed in ($email)" -ForegroundColor Green; Write-Host "Token file: $path" -ForegroundColor DarkGray }
-                catch { Write-Host '[Saved token file exists but could not be read.]' -ForegroundColor Red }
-            } else { Write-Host "`nGoogle Antigravity: not signed in" -ForegroundColor Yellow; Write-Host 'Run .auth login to connect.' -ForegroundColor DarkGray }
-            return
-        }
-        default { Write-Host 'Usage: .auth login | .auth status | .auth logout' -ForegroundColor Yellow; return }
+    $action = $Argument.Trim().ToLowerInvariant()
+    if ($action -eq 'login') {
+        try { Invoke-AntigravityLogin } catch { Write-Host "`n[OAuth login failed]: $($_.Exception.Message)" -ForegroundColor Red }
+        return
     }
+    if ($action -eq 'logout') {
+        try { Invoke-AntigravityLogout } catch { Write-Host "`n[OAuth logout failed]: $($_.Exception.Message)" -ForegroundColor Red }
+        return
+    }
+    if ($action -eq 'status' -or [string]::IsNullOrWhiteSpace($action)) {
+        $path = Get-AntigravityTokenPath
+        if (Test-Path -LiteralPath $path) {
+            try {
+                $data = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+                $email = if ($data.email) { [string]$data.email } else { '(account email not recorded)' }
+                Write-Host "`nGoogle Antigravity: signed in ($email)" -ForegroundColor Green
+                Write-Host "Token file: $path" -ForegroundColor DarkGray
+            } catch { Write-Host '[Saved token file exists but could not be read.]' -ForegroundColor Red }
+        } else {
+            Write-Host "`nGoogle Antigravity: not signed in" -ForegroundColor Yellow
+            Write-Host 'Run .auth login to connect.' -ForegroundColor DarkGray
+        }
+        return
+    }
+    Write-Host 'Usage: .auth login | .auth status | .auth logout' -ForegroundColor Yellow
 }
 
 function Invoke-GemmaSearchCommand {
