@@ -803,7 +803,7 @@ public static class GemmaNativeWindows {
  [DllImport("user32.dll",SetLastError=true)] static extern bool IsWindow(IntPtr h);
  static void OpenRetry(){for(int i=0;i<8;i++){if(OpenClipboard(IntPtr.Zero))return;System.Threading.Thread.Sleep(40);}throw new InvalidOperationException("Clipboard is busy or unavailable.");}
  public static string ReadText(){OpenRetry();try{IntPtr h=GetClipboardData(CF_UNICODETEXT);if(h==IntPtr.Zero)return null;IntPtr p=GlobalLock(h);if(p==IntPtr.Zero)throw new InvalidOperationException("Cannot lock clipboard data.");try{return Marshal.PtrToStringUni(p);}finally{GlobalUnlock(h);}}finally{CloseClipboard();}}
- public static void WriteText(string value){byte[] b=Encoding.Unicode.GetBytes((value??"")+"\0");IntPtr h=GlobalAlloc(GMEM_MOVEABLE,(UIntPtr)b.Length);if(h==IntPtr.Zero)throw new OutOfMemoryException("GlobalAlloc failed.");bool transferred=false;try{IntPtr p=GlobalLock(h);if(p==IntPtr.Zero)throw new InvalidOperationException("Cannot lock clipboard allocation.");try{Marshal.Copy(b,0,p,b.Length);}finally{GlobalUnlock(h);}OpenRetry();try{if(!EmptyClipboard())throw new InvalidOperationException("EmptyClipboard failed.");if(SetClipboardData(CF_UNICODETEXT,h)==IntPtr.Zero)throw new InvalidOperationException("SetClipboardData failed.");transferred=true;}finally{CloseClipboard();}}finally{if(!transferred)GlobalFree(h);}}
+ public static void WriteText(string value){byte[] b=Encoding.Unicode.GetBytes((value??"")+"\0");IntPtr h=GlobalAlloc(GMEM_MOVEABLE,new UIntPtr((uint)b.Length));if(h==IntPtr.Zero)throw new OutOfMemoryException("GlobalAlloc failed.");bool transferred=false;try{IntPtr p=GlobalLock(h);if(p==IntPtr.Zero)throw new InvalidOperationException("Cannot lock clipboard allocation.");try{Marshal.Copy(b,0,p,b.Length);}finally{GlobalUnlock(h);}OpenRetry();try{if(!EmptyClipboard())throw new InvalidOperationException("EmptyClipboard failed.");if(SetClipboardData(CF_UNICODETEXT,h)==IntPtr.Zero)throw new InvalidOperationException("SetClipboardData failed.");transferred=true;}finally{CloseClipboard();}}finally{if(!transferred)GlobalFree(h);}}
  public static List<GemmaWindowInfo> Windows(){var a=new List<GemmaWindowInfo>();EnumWindows(delegate(IntPtr h,IntPtr l){if(!IsWindowVisible(h))return true;var s=new StringBuilder(1024);if(GetWindowText(h,s,s.Capacity)<=0)return true;uint pid;GetWindowThreadProcessId(h,out pid);a.Add(new GemmaWindowInfo{Handle=h,ProcessId=(int)pid,Title=s.ToString()});return true;},IntPtr.Zero);return a;}
  public static bool Activate(long value){IntPtr h=new IntPtr(value);if(!IsWindow(h))return false;ShowWindow(h,9);return SetForegroundWindow(h);}
 }
@@ -906,7 +906,7 @@ function Invoke-GemmaDirectCommand {
             }
             return @($items)
         }
-        default { throw "Unknown direct command '$Name'. Available: system-info, process-list, clipboard-read, clipboard-write, window-list, window-activate, ui-tree, app-launch, network-check, file-search." }
+        default { throw "Unknown direct command '$Name'. Available: system-info, process-list, clipboard-read, clipboard-write, window-list, window-activate, ui-tree, ui-action, app-launch, network-check, file-search." }
     }
 }
 
@@ -2219,5 +2219,6 @@ while ($true) {
         $errMsg = $_.Exception.Message
         Write-Host "`n[API Failure]: $errMsg" -ForegroundColor Red
         # Exit only this turn; the interactive CLI remains alive.
+        if ($script:Headless) { exit 1 }
     }
 }
