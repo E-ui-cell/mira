@@ -118,7 +118,8 @@ function Invoke-GeminiModelSwitcher {
         Write-Host "`nFetching models from Google..." -ForegroundColor DarkGray
         $availableModels = @(Get-GeminiModels)
         if ($availableModels.Count -eq 0) { Write-Host "[Google returned no models supporting generateContent.]" -ForegroundColor Yellow; return }
-        Write-Host "`nAvailable Gemini models (generateContent):" -ForegroundColor Cyan
+        $catalogTitle = if (Test-Path -LiteralPath (Get-AntigravityTokenPath)) { "Available Antigravity models (OAuth)" } else { "Available Gemini models (generateContent)" }
+        Write-Host "`n$catalogTitle:" -ForegroundColor Cyan
         for ($i = 0; $i -lt $availableModels.Count; $i++) {
             $item = $availableModels[$i]
             $id = [string]$item.name -replace '^models/', ''
@@ -139,6 +140,10 @@ function Invoke-GeminiModelSwitcher {
         }
         if ($null -eq $chosen) { Write-Host "[Unknown selection. Model unchanged: $script:MODEL]" -ForegroundColor Red; return }
         $script:MODEL = [string]$chosen.name -replace '^models/', ''
+        if ($script:GoogleSearchGrounding -and $script:MODEL -ine "gemini-3.1-flash-lite") {
+            $script:GoogleSearchGrounding = $false
+            Write-Host "[Google Search grounding disabled because the selected model is not on the verified support list.]" -ForegroundColor Yellow
+        }
         Write-Host "`n[Model switched to: $script:MODEL]" -ForegroundColor Green
     } catch {
         Write-Host "`n[Could not fetch/switch models]: $($_.Exception.Message)" -ForegroundColor Red
