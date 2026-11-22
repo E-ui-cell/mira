@@ -89,6 +89,7 @@ $GeminiSafetySettings = @(
 $LastGeminiRequestJson = $null
 $script:GoogleSearchGrounding = $false
 $script:Provider = 'gemini'
+$script:Effort = 'medium'
 $script:AntigravityProject = $null
 
 function Get-GeminiModels {
@@ -471,6 +472,22 @@ function Invoke-GemmaPowerShellTool {
     } catch { return @{ approved=$true; error=$_.Exception.Message } }
 }
 
+function Invoke-GemmaEffortCommand {
+    param([string]$Argument = '')
+    $value = $Argument.Trim().ToLowerInvariant()
+    if (-not $value) {
+        Write-Host "[Effort: $script:Effort]" -ForegroundColor Cyan
+        Write-Host 'Usage: .effort low | .effort medium | .effort high' -ForegroundColor DarkGray
+        return
+    }
+    if ($value -notin @('low','medium','high')) {
+        Write-Host 'Usage: .effort low | .effort medium | .effort high' -ForegroundColor Yellow
+        return
+    }
+    $script:Effort = $value
+    Write-Host "[Reasoning effort set to: $script:Effort]" -ForegroundColor Green
+}
+
 function Invoke-GemmaProviderCommand {
     param([string]$Argument = '')
     $value = $Argument.Trim().ToLowerInvariant()
@@ -481,6 +498,7 @@ function Invoke-GemmaProviderCommand {
     $script:Provider = $value
     Write-Host "[Provider switched to: $script:Provider]" -ForegroundColor Green
     Write-Host '[Model name retained; use .model to select from this provider catalogue.]' -ForegroundColor DarkGray
+    Write-Host "[Reasoning effort: $script:Effort | use .effort low/medium/high to change.]" -ForegroundColor DarkGray
 }
 
 
@@ -509,6 +527,21 @@ function Build-GeminiPayload {
 
     if ($null -ne $GeminiGenerationConfig) {
         $payload.generationConfig = $GeminiGenerationConfig
+    }
+
+    # Gemini 3 uses thinkingLevel; Gemini 2.5 uses thinkingBudget.
+    # This payload is shared by Gemini Developer API and Antigravity OAuth.
+    if ($script:MODEL -match '(?i)gemini[-.]?3') {
+        if ($null -eq $payload.generationConfig) { $payload.generationConfig = @{} }
+        $payload.generationConfig.thinkingConfig = @{ thinkingLevel = $script:Effort.ToUpperInvariant() }
+    } elseif ($script:MODEL -match '(?i)gemini[-.]?2.5') {
+        if ($null -eq $payload.generationConfig) { $payload.generationConfig = @{} }
+        $thinkingBudget = switch ($script:Effort) {
+            'low' { 1024 }
+            'medium' { 8192 }
+            'high' { 24576 }
+        }
+        $payload.generationConfig.thinkingConfig = @{ thinkingBudget = $thinkingBudget }
     }
 
     if (-not [string]::IsNullOrWhiteSpace($GeminiCachedContent)) {
@@ -578,7 +611,7 @@ $script:MiraHistoryMax = 500
 # Mira owns the console input buffer through Read-GemLineFallback.
 $script:UsePSReadLine = $false
 
-$script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.requests','.requestkeys','.model','.provider','.auth','.grounding','.mira-update')
+$script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.requests','.requestkeys','.model','.provider','.effort','.auth','.grounding','.mira-update')
 
 function Get-GemCommands([string]$p) {
     @(
@@ -789,10 +822,10 @@ function Read-GemLineFallback {
                 else { [Console]::Beep(700,60) }
                 continue
             }
-            if ($b -match '^\.(?:grounding|auth)\s+(\S*)$') {
-                $options = if ($b.StartsWith('.grounding')) { @('on','off','status') } else { @('login','status','logout') }
+            if ($b -match '^\.(?:grounding|auth|effort)\s+(\S*)$') {
+                $options = if ($b.StartsWith('.grounding')) { @('on','off','status') } elseif ($b.StartsWith('.effort')) { @('low','medium','high') } else { @('login','status','logout') }
                 $m = @($options | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })
-                if ($m.Count -eq 1) { $head = if ($b.StartsWith('.grounding')) { '.grounding ' } else { '.auth ' }; $old=$b; $b=$head+$m[0]; $c=$b.Length; Redraw $old $b $c }
+                if ($m.Count -eq 1) { $head = if ($b.StartsWith('.grounding')) { '.grounding ' } elseif ($b.StartsWith('.effort')) { '.effort ' } else { '.auth ' }; $old=$b; $b=$head+$m[0]; $c=$b.Length; Redraw $old $b $c }
                 elseif ($m.Count -gt 1) { [Console]::Write("`r`n"+($m -join '  ')+ "`r`nYou: "); $row=[Console]::CursorTop; Redraw '' $b $c }
                 else { [Console]::Beep(700,60) }
                 continue
@@ -992,7 +1025,7 @@ function Save-GeminiCodeBlocks {
 }
 
 Clear-Host
-Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.requests' | '.requestkeys' | '.provider' | '.model' | '.auth' | '.grounding' | '.mira-update' | '!<cmd>'`n" -ForegroundColor DarkGray
+Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.requests' | '.requestkeys' | '.provider' | '.model' | '.effort' | '.auth' | '.grounding' | '.mira-update' | '!<cmd>'`n" -ForegroundColor DarkGray
 
 # ==============================================================================
 # ==============================================================================
@@ -1086,6 +1119,13 @@ while ($true) {
         $authArgument = ""
         if ($trimmedInput.Length -gt 5) { $authArgument = $trimmedInput.Substring(5).Trim() }
         Invoke-GemmaAuthCommand -Argument $authArgument
+        continue
+    }
+
+    if ($trimmedInput -eq ".effort" -or $trimmedInput.StartsWith(".effort ", [StringComparison]::OrdinalIgnoreCase)) {
+        $effortArgument = ""
+        if ($trimmedInput.Length -gt 7) { $effortArgument = $trimmedInput.Substring(7).Trim() }
+        Invoke-GemmaEffortCommand -Argument $effortArgument
         continue
     }
 
@@ -1355,7 +1395,7 @@ while ($true) {
                 },
                 @{
                     name = "run_powershell"
-                    description = "Run a command in the user's local Windows PowerShell session. The user must approve every execution. Use PowerShell syntax, never Bash."
+                    description = "Run commands in the user's local Windows PowerShell session for real machine inspection and tasks. The user approves each execution. Use PowerShell syntax, never Bash. Continue using tool results to complete multi-step tasks; do not claim a task is blocked merely because local inspection is needed."
                     parameters = @{ type = "object"; properties = @{ command = @{ type = "string"; description = "PowerShell command to execute on the Windows host." } }; required = @("command") }
                 }
             )
@@ -1375,7 +1415,7 @@ while ($true) {
     # final answer. Keep the tool exchange inside the same user turn.
     $toolLoop = $true
     $toolRounds = 0
-    $maxToolRounds = 8
+    $maxToolRounds = 32
 
     try {
         while ($toolLoop) {
