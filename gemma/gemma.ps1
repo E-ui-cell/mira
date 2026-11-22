@@ -581,8 +581,6 @@ function Write-GemmaGroundingDiagnostics {
         [string]$Model,
         [bool]$GroundingEnabled
     )
-    if ($script:OneShot) { return }
-
     $mode = if (-not $GroundingEnabled) {
         'OFF'
     } elseif ($Provider -eq 'antigravity') {
@@ -637,9 +635,9 @@ function Invoke-GemmaPermissionCommand {
 function Invoke-GemmaPowerShellTool {
     param([string]$Command)
     if ([string]::IsNullOrWhiteSpace($Command)) { throw 'run_powershell requires a command.' }
-    if (-not $script:OneShot) { Write-Host "`n[PowerShell requested by model]:" -ForegroundColor DarkYellow; Write-Host $Command -ForegroundColor Gray }
+    Write-Host "`n[PowerShell requested by model]:" -ForegroundColor DarkYellow
+    Write-Host $Command -ForegroundColor Gray
     if ($script:ExecutionPermission -eq 'ask') {
-        if ($script:OneShot) { return @{ approved=$false; output='Permission required; headless ASK mode cannot prompt. Use interactive mode or explicitly pass -Autopilot.' } }
         $approval = Read-Host 'Execute this PowerShell command? [Y/n]'
         if ($approval -match '^(?i:n|no)$') { return @{ approved=$false; output='User declined command execution.' } }
     }
@@ -828,7 +826,6 @@ function Confirm-GemmaDirectAction {
     param([string]$Description)
     if ($script:InApprovedPowerShellTool) { return $true }
     if ($script:ExecutionPermission -eq 'autopilot') { return $true }
-    if ($script:OneShot) { [Console]::Error.WriteLine("Permission required in headless ASK mode: $Description"); return $false }
     Write-Host "[Action] $Description" -ForegroundColor Yellow
     return ((Read-Host 'Proceed? [Y/n]') -notmatch '^(?i:n|no)$')
 }
@@ -1948,10 +1945,8 @@ while ($true) {
             $i = 0
             $sw = [Diagnostics.Stopwatch]::StartNew()
 
-            if (-not $script:OneShot) {
-                $oldTreatControlCAsInput = [Console]::TreatControlCAsInput
-                [Console]::TreatControlCAsInput = $true
-            }
+            $oldTreatControlCAsInput = [Console]::TreatControlCAsInput
+            [Console]::TreatControlCAsInput = $true
 
             $runspace = [Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
             $runspace.Open()
@@ -1965,8 +1960,7 @@ while ($true) {
 
             $cancelled = $false
             while (-not $asyncResult.IsCompleted) {
-                if (-not $script:OneShot) {
-                    if ([Console]::KeyAvailable) {
+                if ([Console]::KeyAvailable) {
                         $key = [Console]::ReadKey($true)
                         if ($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
                             $cancelled = $true
@@ -1975,10 +1969,9 @@ while ($true) {
                             break
                         }
                     }
-                    $frame = $frames[$i % $frames.Length]
-                    $elapsed = [int]$sw.ElapsedMilliseconds
-                    Write-Host "`r$frame  $([math]::Round($elapsed/1000, 1))s " -NoNewline -ForegroundColor DarkGray
-                }
+                $frame = $frames[$i % $frames.Length]
+                $elapsed = [int]$sw.ElapsedMilliseconds
+                Write-Host "`r$frame  $([math]::Round($elapsed/1000, 1))s " -NoNewline -ForegroundColor DarkGray
                 Start-Sleep -Milliseconds $MIRA_SPINNER_INTERVAL_MS
                 $i++
             }
@@ -1991,20 +1984,16 @@ while ($true) {
 
                 Rollback-MiraTurn -History $Contents -StartCount $turnStartCount
 
-                if (-not $script:OneShot) {
-                    Write-Host "`r" -NoNewline
-                    Write-Host (" " * 60) -NoNewline
-                    Write-Host "`r[Request cancelled]" -ForegroundColor Yellow
-                }
+                Write-Host "`r" -NoNewline
+                Write-Host (" " * 60) -NoNewline
+                Write-Host "`r[Request cancelled]" -ForegroundColor Yellow
 
                 $toolLoop = $false
                 break
             }
 
-            if (-not $script:OneShot) {
-                Write-Host (" " * 40) -NoNewline
-                Write-Host "`r" -NoNewline
-            }
+            Write-Host (" " * 40) -NoNewline
+            Write-Host "`r" -NoNewline
 
             $response = $powershell.EndInvoke($asyncResult)
             $hasRunspaceError = $powershell.Streams.Error.Count -gt 0
@@ -2086,11 +2075,11 @@ while ($true) {
                 $candidate = $response.candidates[0]
                 Write-GemmaGroundingDiagnostics -Candidate $candidate -Provider $script:Provider -Model $script:MODEL -GroundingEnabled $script:GoogleSearchGrounding
 
-                if (-not $script:OneShot -and $null -ne $candidate.finishReason) {
+                if ($null -ne $candidate.finishReason) {
                     Write-Host "[Gemini Finish Reason]: $($candidate.finishReason)" -ForegroundColor DarkGray
                 }
 
-                if (-not $script:OneShot -and $null -ne $candidate.safetyRatings) {
+                if ($null -ne $candidate.safetyRatings) {
                     foreach ($rating in $candidate.safetyRatings) {
                         Write-Host "[Safety] $($rating.category) = $($rating.probability) | blocked=$($rating.blocked)" -ForegroundColor DarkGray
                     }
@@ -2139,7 +2128,7 @@ while ($true) {
                                 $toolResult = @{ error = "Google Search is disabled or unavailable for the current provider/settings." }
                             } else {
                                 $toolResult = Invoke-GemmaWebSearch -Query ([string]$call.args.query)
-                                if (-not $script:OneShot) {
+                                if ($true) {
                                     Write-Host ("[Agentic web_search] model={0} | queries={1} | sources={2}" -f $toolResult.search_model,@($toolResult.search_queries).Count,@($toolResult.sources).Count) -ForegroundColor DarkGray
                                     foreach ($searchQuery in @($toolResult.search_queries)) { Write-Host "  [Search query] $searchQuery" -ForegroundColor DarkGray }
                                     foreach ($source in @($toolResult.sources)) { Write-Host "  [Search source] $source" -ForegroundColor DarkGray }
@@ -2159,7 +2148,7 @@ while ($true) {
                         }
                     }
 
-                    if (-not $script:OneShot) { Write-Host "`n[Gemini tool call: $toolName]" -ForegroundColor DarkYellow }
+                    Write-Host "`n[Gemini tool call: $toolName]" -ForegroundColor DarkYellow
 
                     $functionResponse = @{
                         name     = $toolName
@@ -2196,9 +2185,9 @@ while ($true) {
             $reply = Normalize-MiraReply ($replyTextParts -join "`n")
 
             try {
-                if ($script:OneShot) { $width = 80 } else { $width = [Console]::WindowWidth }
+                $width = [Console]::WindowWidth
             } catch {
-                if ($script:OneShot) { $width = 80 } else { $width = $Host.UI.RawUI.WindowWidth }
+                $width = $Host.UI.RawUI.WindowWidth
             }
             if ($width -le 10) { $width = 80 }
 
