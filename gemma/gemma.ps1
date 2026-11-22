@@ -557,10 +557,12 @@ function Invoke-GemmaAntigravityGoogleSearch {
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     )
     $sources = New-Object System.Collections.Generic.List[string]
+    $sourceUris = @{}
     foreach ($chunk in @($metadata.groundingChunks)) {
         if ($chunk.web -and $chunk.web.uri) {
             $uri = [string]$chunk.web.uri
-            if (-not (@($sources | Where-Object { $_ -like "*$uri*" }).Count -gt 0)) {
+            if (-not $sourceUris.ContainsKey($uri)) {
+                $sourceUris[$uri] = $true
                 $title = if ($chunk.web.title) { [string]$chunk.web.title } else { $uri }
                 [void]$sources.Add(('- ' + $title + ' — ' + $uri))
             }
