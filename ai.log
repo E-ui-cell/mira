@@ -238,3 +238,5 @@ The source and GitHub branch have been updated, but this environment has no Wind
 - [x] Add OpenAI-compatible Chat Completions function calling for non-streaming requests; preserve tool-call IDs and tool messages in session history. Streaming mode intentionally omits tool declarations.
 
 - [x] Load repository Markdown skills from mira/skills as well as user skills from %USERPROFILE%\.mira\skills; add PowerShell scripting and grounded web research playbooks.
+
+- [x] Suppress all model-callable tools and native Google Search while MIRA is generating a command for -e; the generated command is still shown and requires its separate execution confirmation.
