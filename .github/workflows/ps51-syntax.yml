@@ -11,6 +11,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Parse with Windows PowerShell 5.1
+      - name: Parse mira.ps1 with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\mira.ps1
+
+      - name: Parse gemma.ps1 with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\gemma.ps1
