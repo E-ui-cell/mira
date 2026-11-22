@@ -119,7 +119,7 @@ function Invoke-GeminiModelSwitcher {
         $availableModels = @(Get-GeminiModels)
         if ($availableModels.Count -eq 0) { Write-Host "[Google returned no models supporting generateContent.]" -ForegroundColor Yellow; return }
         $catalogTitle = if (Test-Path -LiteralPath (Get-AntigravityTokenPath)) { "Available Antigravity models (OAuth)" } else { "Available Gemini models (generateContent)" }
-        Write-Host "`n$catalogTitle:" -ForegroundColor Cyan
+        Write-Host "`n${catalogTitle}:" -ForegroundColor Cyan
         for ($i = 0; $i -lt $availableModels.Count; $i++) {
             $item = $availableModels[$i]
             $id = [string]$item.name -replace '^models/', ''
