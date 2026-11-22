@@ -459,11 +459,9 @@ function Test-MiraNativeGoogleSearchSupport {
         [string]$Provider = $script:Provider,
         [string]$Model = $script:MODEL
     )
-    if (-not $script:GoogleSearchGrounding) { return $false }
-
-    # Antigravity models are assumed to have their own internal Google Search.
-    # Never expose the separate agentic web_search function to this provider.
-    return [string]::Equals($Provider, 'antigravity', [StringComparison]::OrdinalIgnoreCase)
+    # Antigravity Search is exposed through the script's callable web_search
+    # function, executed as a separate native googleSearch OAuth request.
+    return ($script:GoogleSearchGrounding -and [string]::Equals($Provider, 'antigravity', [StringComparison]::OrdinalIgnoreCase))
 }
 
 function Invoke-GemmaAuthCommand {
@@ -1522,8 +1520,8 @@ while ($true) {
             parameters = @{ type = "object"; properties = @{ query = @{ type = "string"; description = "Focused search question or query. Include relevant names, dates, and context." } }; required = @("query") }
         }
     }
-    # Native Antigravity Google Search runs in a separate Search-only preflight;
-    # never include googleSearch beside the normal function declarations.
+    # Native Antigravity Google Search is invoked only by the web_search
+    # handler, in a separate request without functionDeclarations.
     $GeminiTools = @(@{ functionDeclarations = $functionDeclarations })
 
     $GeminiToolConfig = @{
@@ -1542,11 +1540,6 @@ while ($true) {
     $maxToolRounds = $MIRA_MAX_TOOL_ROUNDS
 
     try {
-        if (-not $noToolsForRun -and $script:Provider -eq 'antigravity' -and $script:NativeGoogleSearchActive) {
-            $searchPayload = Build-GeminiPayload -SystemInstruction $SystemInstruction -Contents $Contents
-            $searchResult = Invoke-GemmaAntigravityGoogleSearch -Payload $searchPayload
-        }
-
         while ($toolLoop) {
         $toolRounds++
         if ($toolRounds -gt $maxToolRounds) {
