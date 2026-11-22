@@ -1,4 +1,4 @@
-﻿﻿﻿[CmdletBinding()]
+﻿﻿﻿﻿[CmdletBinding()]
 param(
     [Alias('p')][string]$Prompt,
     [Alias('e')][string]$ExplainCommand
@@ -44,8 +44,8 @@ $MIRA_ENABLE_AGENTIC_WEB_SEARCH = $true       # Gemini API provider uses web_sea
 $MIRA_DEFAULT_VERBOSE = $false                # Show Gemini thought summaries only when enabled with .verbose
 # Antigravity OAuth models use Google's native server-side Google Search grounding.
 # They do not receive the script-defined web_search function.
-# Gemini Developer API models can optionally use the agentic web_search function,
-# backed by the Antigravity OAuth Google Search endpoint.
+# Gemini Developer API models use the agentic web_search function,
+# backed by the Antigravity OAuth Google Search-only endpoint.
 $MIRA_DEFAULT_CACHED_CONTENT = if ($env:MIRA_GEMINI_CACHED_CONTENT) { $env:MIRA_GEMINI_CACHED_CONTENT } else { $null }
 $MIRA_DEFAULT_SYSTEM_PROMPT = @"
 You Professional assistant. Speak short, precise, no nonsense.
@@ -504,7 +504,16 @@ function Invoke-GemmaAuthCommand {
 
 function Test-GemmaAntigravityNativeSearchSupport {
     param([string]$Model = $MIRA_SEARCH_MODEL)
-    return ([string]$Model).Trim().ToLowerInvariant() -eq 'gemini-3.1-flash-lite'
+    $modelId = ([string]$Model).Trim() -replace '^models/',''
+    if ([string]::IsNullOrWhiteSpace($modelId)) { return $false }
+
+    # Prefer Google's per-account capability list when fetchAvailableModels
+    # supplied it. Fall back to the verified 3.1 Flash-Lite capability when
+    # the endpoint omits the list.
+    if ($script:AntigravityCapabilityProbeAttempted -and $null -ne $script:AntigravityWebSearchModelIds) {
+        return (@($script:AntigravityWebSearchModelIds) -contains $modelId)
+    }
+    return ($modelId -ieq 'gemini-3.1-flash-lite')
 }
 
 function Invoke-GemmaSearchCommand {
