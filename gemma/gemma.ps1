@@ -581,6 +581,7 @@ function Write-GemmaGroundingDiagnostics {
         [string]$Model,
         [bool]$GroundingEnabled
     )
+    if ($script:CommandMode) { return }
     $mode = if (-not $GroundingEnabled) {
         'OFF'
     } elseif ($Provider -eq 'antigravity') {
@@ -1506,6 +1507,10 @@ function Save-GeminiCodeBlocks {
 }
 
 # Short interactive entry points: -p asks Mira; -e generates a command without running it.
+if (-not $script:OneShot) {
+    Clear-Host
+    Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.provider' | '.model' | '.effort' | '.verbose' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '.skills' | '.skill <name>' | '!<cmd>' | '-p <request>' | '-e <command request>'`n" -ForegroundColor DarkGray
+}
 
 # ==============================================================================
 # ==============================================================================
