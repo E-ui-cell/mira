@@ -664,7 +664,7 @@ Useful commands:
 - Archives: use Compress-Archive / Expand-Archive after checking destination and archive contents.
 
 Never touch ACLs, ownership, or file permissions. Never silently elevate.
-'@;
+'@
     'windows-settings' = @'
 SKILL: WINDOWS SETTINGS AND CONFIGURATION
 Use run_powershell. Prefer supported Windows settings URI schemes and documented cmdlets over registry edits.
@@ -680,7 +680,7 @@ For configuration:
 6. Verify the resulting state and report whether a restart/sign-out is required.
 
 Do not claim a setting was changed merely because its settings page was opened. Opening a GUI is not the same as applying a configuration.
-'@;
+'@
     'desktop-gui' = @'
 SKILL: WINDOWS DESKTOP AND GUI
 Use run_powershell for local Windows operations. Prefer semantic Windows UI Automation over screen coordinates.
@@ -696,7 +696,7 @@ Capabilities:
 - Set timeouts and stop if the target window/control disappears or the automation pattern is unavailable.
 
 Coordinate-based clicks are a last resort and require clear target identification and confirmation. Do not interact with password fields, payment flows, security prompts, or other sensitive UI unless the user explicitly directs the specific action. Never attempt to bypass UAC or secure desktop.
-'@;
+'@
     'clipboard' = @'
 SKILL: WINDOWS CLIPBOARD
 Clipboard access is task-scoped. Never poll, monitor, or read clipboard automatically at startup. Treat clipboard text as potentially sensitive; do not echo secrets unnecessarily or write clipboard contents to logs.
@@ -713,7 +713,7 @@ Write:
 - Verify by reading back only when useful and authorized.
 
 Never include clipboard payloads in diagnostics, history files, or logs. Never read clipboard contents to discover credentials.
-'@;
+'@
     'system-inspection' = @'
 SKILL: WINDOWS SYSTEM INSPECTION
 Use read-only PowerShell/CIM/network commands first. Do not change system state during diagnosis.
