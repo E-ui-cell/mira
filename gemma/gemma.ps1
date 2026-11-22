@@ -484,7 +484,7 @@ function Invoke-GemmaSearchCommand {
     if ($value -eq 'on') {
         if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) { Write-Host '[Agentic web search requires Antigravity OAuth. Run .auth login first.]' -ForegroundColor Yellow; return }
         $script:GoogleSearchGrounding = $true
-        Write-Host '[Agentic web search enabled. Gemini 3.1 Flash-Lite searches; selected provider/model answers.]' -ForegroundColor Green
+        Write-Host '[Google Search enabled. Native grounding is used when the selected model supports it; otherwise Flash-Lite research is used.]' -ForegroundColor Green
     } elseif ($value -eq 'off') {
         $script:GoogleSearchGrounding = $false
         Write-Host '[Agentic web search disabled.]' -ForegroundColor Yellow
