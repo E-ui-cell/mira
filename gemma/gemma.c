@@ -1086,64 +1086,101 @@ static char *ask(State*s,const char*prompt,int cmd) {
     fprintf(stderr,"Tool loop exceeded %d rounds.\n",MAX_ROUNDS);
     return NULL;
 }
-static void model_add(char***out,int*n,int*cap,char*id){
-    if(!id||!*id){free(id);return;}
+static void model_add(char***out,int*n,int*cap,char*id) {
+    if(!id||!*id) {
+        free(id);
+        return;
+    }
     if(starts(id,"models/"))memmove(id,id+7,strlen(id+7)+1);
-    for(int i=0;i<*n;i++)if(eq((*out)[i],id)){free(id);return;}
-    if(*n==*cap){*cap=*cap?*cap*2:32;*out=xr(*out,(size_t)*cap*sizeof(char*));}
+    for(int i=0;i<*n;i++)if(eq((*out)[i],id)) {
+        free(id);
+        return;
+    }
+    if(*n==*cap) {
+        *cap=*cap?*cap*2:32;
+        *out=xr(*out,(size_t)*cap*sizeof(char*));
+    }
     (*out)[(*n)++]=id;
 }
-static int models(State*s,char***out){
+static int models(State*s,char***out) {
     *out=NULL;
     int n=0,cap=0;
     char*r=NULL;
-    if(eq(s->provider,"antigravity")){
+    if(eq(s->provider,"antigravity")) {
         char*p=project(s);
         if(!p)return 0;
-        Buf b;init(&b);put(&b,"{\"project\":");quote(&b,p);put(&b,"}");
-        r=agy(s,"fetchAvailableModels",b.s);free(b.s);
-    }else{
-        if(!*s->api){fprintf(stderr,"Set GEMINI_APIJ first.\n");return 0;}
+        Buf b;
+        init(&b);
+        put(&b,"{\"project\":");
+        quote(&b,p);
+        put(&b,"}");
+        r=agy(s,"fetchAvailableModels",b.s);
+        free(b.s);
+    }
+    else {
+        if(!*s->api) {
+            fprintf(stderr,"Set GEMINI_APIJ first.\n");
+            return 0;
+        }
         char u[512],h[4096];
         snprintf(u,sizeof u,"%s/models?pageSize=100",API);
         snprintf(h,sizeof h,"x-goog-api-key: %s",s->api);
-        const char*hs[]={h};r=http(u,"GET",NULL,hs,1);
+        const char*hs[]= {
+            h
+        };
+        r=http(u,"GET",NULL,hs,1);
     }
     if(!r)return 0;
-    Doc d;jp(r,&d);
+    Doc d;
+    jp(r,&d);
     int a=jget(r,&d,0,"models");
     if(a<0)a=jget(r,&d,0,"modelInfos");
     if(a<0)a=jget(r,&d,0,"availableModels");
     if(a<0)a=jget(r,&d,0,"availableModelInfos");
-    if(a>=0&&r[d.v[a].a]=='{'){
-        for(int i=a+1;i<d.n&&d.v[i].a<d.v[a].z;){
+    if(a>=0&&r[d.v[a].a]=='{') {
+        for(int i=a+1;i<d.n&&d.v[i].a<d.v[a].z;) {
             char*id=jstr(r,&d,i);
             int value=i+1;
             model_add(out,&n,&cap,id);
             i=next(&d,value);
         }
-    }else{
-        for(int i=a+1;a>=0&&i<d.n&&d.v[i].a<d.v[a].z;i=next(&d,i)){
+    }
+    else {
+        for(int i=a+1;a>=0&&i<d.n&&d.v[i].a<d.v[a].z;i=next(&d,i)) {
             char*id=NULL;
             if(r[d.v[i].a]=='"')id=jstr(r,&d,i);
-            else{
-                const char*k[]={"catalogId","catalogID","modelId","modelID","id","slug","model","name"};
-                for(int z=0;z<8;z++){
+            else {
+                const char*k[]= {
+                    "catalogId","catalogID","modelId","modelID","id","slug","model","name"
+                };
+                for(int z=0;z<8;z++) {
                     int v=jget(r,&d,i,k[z]);
-                    if(v>=0){id=jstr(r,&d,v);if(*id)break;free(id);id=NULL;}
+                    if(v>=0) {
+                        id=jstr(r,&d,v);
+                        if(*id)break;
+                        free(id);
+                        id=NULL;
+                    }
                 }
             }
-            if(eq(s->provider,"gemini")){
+            if(eq(s->provider,"gemini")) {
                 int m=jget(r,&d,i,"supportedGenerationMethods"),ok=0;
-                for(int z=m+1;m>=0&&z<d.n&&d.v[z].a<d.v[m].z;z=next(&d,z)){
-                    char*x=jstr(r,&d,z);if(eq(x,"generateContent"))ok=1;free(x);
+                for(int z=m+1;m>=0&&z<d.n&&d.v[z].a<d.v[m].z;z=next(&d,z)) {
+                    char*x=jstr(r,&d,z);
+                    if(eq(x,"generateContent"))ok=1;
+                    free(x);
                 }
-                if(!ok){free(id);continue;}
+                if(!ok) {
+                    free(id);
+                    continue;
+                }
             }
             model_add(out,&n,&cap,id);
         }
     }
-    free(d.v);free(r);return n;
+    free(d.v);
+    free(r);
+    return n;
 }
 static void switch_model(State*s) {
     char**m;
@@ -1566,23 +1603,45 @@ static int self_test(void) {
     quote(&q,"line\nquote\"");
     ok=ok&&strcmp(q.s,"\"line\\nquote\\\"\"")==0;
     free(q.s);
-    State saved={0},loaded={0};
-    saved.provider=ds("antigravity");saved.model=ds("gemini-3.1-flash-lite");saved.effort=ds("high");
+    State saved= {
+        0
+    },loaded= {
+        0
+    };
+    saved.provider=ds("antigravity");
+    saved.model=ds("gemini-3.1-flash-lite");
+    saved.effort=ds("high");
     hadd(&saved,"{\"role\":\"user\",\"parts\":[{\"text\":\"session-test\"}]}");
     const char *session_file="gemma-self-test-session.json";
     ok=ok&&save_session(&saved,session_file);
-    loaded.provider=ds("gemini");loaded.model=ds("old");loaded.effort=ds("low");
+    loaded.provider=ds("gemini");
+    loaded.model=ds("old");
+    loaded.effort=ds("low");
     ok=ok&&load_session(&loaded,session_file);
     ok=ok&&loaded.nh==1&&eq(loaded.provider,"antigravity")&&eq(loaded.model,"gemini-3.1-flash-lite");
     remove(session_file);
-    hclear(&saved);hclear(&loaded);free(saved.hist);free(loaded.hist);
-    free(saved.provider);free(saved.model);free(saved.effort);
-    free(loaded.provider);free(loaded.model);free(loaded.effort);
-    State local={0};local.autopilot=1;
+    hclear(&saved);
+    hclear(&loaded);
+    free(saved.hist);
+    free(loaded.hist);
+    free(saved.provider);
+    free(saved.model);
+    free(saved.effort);
+    free(loaded.provider);
+    free(loaded.model);
+    free(loaded.effort);
+    State local= {
+        0
+    };
+    local.autopilot=1;
     char *tool_result=tool(&local,"run_command","{\"command\":\"echo gemma-self-test\"}");
-    Doc td;jp(tool_result,&td);char *stdout_text=jval(tool_result,&td,0,"stdout");
+    Doc td;
+    jp(tool_result,&td);
+    char *stdout_text=jval(tool_result,&td,0,"stdout");
     ok=ok&&strstr(stdout_text,"gemma-self-test")!=NULL;
-    free(stdout_text);free(td.v);free(tool_result);
+    free(stdout_text);
+    free(td.v);
+    free(tool_result);
     if(ok)puts("Gemma C self-test: PASS");
     else fprintf(stderr,"Gemma C self-test: FAIL\n");
     return ok?0:1;
