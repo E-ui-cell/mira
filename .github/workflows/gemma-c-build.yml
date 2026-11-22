@@ -23,7 +23,8 @@ jobs:
       - name: Build on Linux
         if: runner.os == 'Linux'
         working-directory: gemma
-        run: cc -Wall -Wextra -O2 -std=c11 gemma.c $(pkg-config --cflags --libs libcurl openssl) -o gemma
+        run: |
+          cc -Wall -Wextra -O2 -std=c11 gemma.c $(pkg-config --cflags --libs libcurl openssl) -o gemma
           ./gemma --self-test
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
@@ -34,6 +35,7 @@ jobs:
         run: |
           export PKG_CONFIG_PATH="$(brew --prefix curl)/lib/pkgconfig:$(brew --prefix openssl)/lib/pkgconfig:$PKG_CONFIG_PATH"
           cc -Wall -Wextra -O2 -std=c11 gemma.c $(pkg-config --cflags --libs libcurl openssl) -o gemma
+          ./gemma --self-test
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
         with:
@@ -44,5 +46,6 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         working-directory: gemma
-        run: gcc -Wall -Wextra -O2 -std=c11 gemma.c -lcurl -lcrypto -lbcrypt -lws2_32 -lshell32 -o gemma.exe
+        run: |
+          gcc -Wall -Wextra -O2 -std=c11 gemma.c -lcurl -lcrypto -lbcrypt -lws2_32 -lshell32 -o gemma.exe
           ./gemma.exe --self-test
