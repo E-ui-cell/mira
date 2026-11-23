@@ -432,35 +432,39 @@ IMPLEMENTATION PROGRESS (BRANCH thin)
   Ctrl+Z/Ctrl+_, Ctrl+V/Ctrl+Q quoted insert, Alt+C/U/L word case, and
   Alt+< / Alt+> history endpoints. Manual key-by-key console testing remains.
 - Split first-party components (no third-party runtime/modules added):
-      gemma/providers/GeminiApi.ps1       Gemini Developer API provider
-      gemma/providers/Antigravity.ps1     Antigravity OAuth and grounding
-      gemma/agent/Execution.ps1           permission gate and PowerShell tools
-      gemma/agent/Skills.ps1              built-in and user skills
-      gemma/agent/Settings.ps1            provider/effort commands
-      gemma/agent/Conversation.ps1        payload and conversation helpers
+      gemma/config/Cli.ps1                 argument and -p/-e mode initialization
+      gemma/config/Defaults.ps1            runtime defaults and request settings
+      gemma/providers/GeminiApi.ps1        Gemini Developer API provider
+      gemma/providers/Antigravity.ps1      Antigravity OAuth and grounding
+      gemma/agent/Execution.ps1            permission gate and PowerShell tools
+      gemma/agent/Skills.ps1               built-in and user skills
+      gemma/agent/Settings.ps1             provider/effort commands
+      gemma/agent/Conversation.ps1         payload and conversation helpers
       gemma/agent/ChatLoop.ps1             interactive command/input loop
       gemma/agent/Turn.ps1                 per-turn agent/tool/request cycle
       gemma/windows/Native.ps1             Win32 clipboard/window/UIA actions
-      gemma/ui/ModelPicker.ps1              interactive model picker
-      gemma/ui/LineEditor.ps1               custom Readline editor
-      gemma/ui/Output.ps1                   response normalization/code saving
-- gemma/gemma.ps1 is now about 230 lines and acts as the configuration/bootstrap
-  entrypoint. The extracted ChatLoop and Turn modules contain most of the
-  remaining orchestration; further reduction/cleanup and architecture tests
-  are still required.
-- CI now parses all Gemma component directories with Windows PowerShell 5.1
-  and runs Test-GemmaModules.ps1 to dot-source reusable modules and verify
-  provider, execution, skill, settings, conversation, UI and native functions.
-  Latest successful run: 45170911412.
-- Parser and component-load tests do not prove live OAuth/Search or console
-  key behavior. Live two-provider requests, grounding metadata, actual terminal
-  input/paste behavior, cursor redraw after resize and model-menu interaction
-  still need manual testing on Windows PowerShell 5.1.
+      gemma/ui/ModelPicker.ps1             interactive model picker
+      gemma/ui/LineEditor.ps1              custom Readline editor
+      gemma/ui/Output.ps1                  response normalization/code saving
+- gemma/gemma.ps1 is now about 39 lines: a small bootstrap that loads the
+  configuration, providers, agent components, UI and native Windows layer.
+  The extracted ChatLoop and Turn modules contain the remaining orchestration;
+  deeper cleanup and architecture tests are still required.
+- Fixed CLI initialization during extraction and added regression coverage for
+  -p, -e and Explorer's legacy Run with PowerShell argument wrapper.
+- Standardized Gemini API key lookup on GEMINI_API while preserving
+  GEMINI_API_KEY and historic GEMINI_APIJ aliases; added precedence tests.
+- Added deterministic tests for Search intent so ordinary text ("test", "ok",
+  "what?", "ll") does not invoke Search, while current news/search requests do.
+- CI parses every Gemma component directory with Windows PowerShell 5.1 and
+  tests module loading plus CLI, key-alias, Search-intent and Readline helpers.
+- Parser/component tests do not prove live OAuth/Search or console key behavior.
+  Live requests, grounding metadata, actual terminal input/paste, cursor redraw
+  after resize and model-menu interaction still need manual Windows testing.
 - Native Win32 GUI remains a design decision only. No GUI code or external
-  UI dependencies have been added. The owner must choose the GUI/backend
-  architecture before GUI implementation begins.
-- This is an incremental structural rewrite, not a completed rewrite or a
-  release-ready build.
+  UI dependencies have been added. The owner must choose GUI/backend architecture
+  before GUI implementation begins.
+- This is an incremental rewrite, not a completed rewrite or release-ready build.
 
 CURRENT INVENTORY NOTES
 -----------------------
