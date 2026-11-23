@@ -719,7 +719,19 @@ function Read-GemLineConsole {
             }
             elseif ($b -match '^!(.*)$') {
                 $commandText = $matches[1]
-                if ($commandText -notmatch '\s') {
+                if ($commandText -notmatch '\s' -and ($commandText -match '[\\/]' -or $commandText.StartsWith('.') -or $commandText.StartsWith('~'))) {
+                    foreach ($item in @(Get-GemFiles $commandText)) {
+                        $clean = $commandText.Trim('"').Trim("'")
+                        $dir = [IO.Path]::GetDirectoryName($clean)
+                        if ([string]::IsNullOrEmpty($clean) -or [string]::IsNullOrEmpty($dir)) { $path = $item.Name }
+                        elseif ($dir.EndsWith('\') -or $dir.EndsWith('/')) { $path = $dir + $item.Name }
+                        else { $path = $dir + '\' + $item.Name }
+                        if ($commandText.StartsWith('"') -or $commandText.StartsWith("'")) { $path = $commandText[0] + $path + $commandText[0] }
+                        if ($item.PSIsContainer) { $path += '\' }
+                        $candidateBuffers += ('!' + $path)
+                        $candidateLabels += $(if ($item.PSIsContainer) { $item.Name + '\' } else { $item.Name })
+                    }
+                } elseif ($commandText -notmatch '\s') {
                     $found = @(Get-GemCommands $commandText)
                     foreach ($item in $found) { $candidateBuffers += ('!' + [string]$item); $candidateLabels += [string]$item }
                 } else {
