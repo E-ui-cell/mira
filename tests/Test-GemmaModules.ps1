@@ -27,7 +27,8 @@ $requiredFunctions = @(
     'Add-GemUndoSnapshot',
     'Get-GemWordStart',
     'Get-GemWordEnd',
-    'Find-GemHistoryMatch'
+    'Find-GemHistoryMatch',
+    'Get-GemHistorySearchPrompt'
 )
 
 foreach ($functionName in $requiredFunctions) {
@@ -55,6 +56,10 @@ if ((Find-GemHistoryMatch -Term 'open' -Start 3 -Direction -1) -ne 2) {
 }
 if ((Find-GemHistoryMatch -Term 'open' -Start 0 -Direction 1) -ne 2) {
     throw 'Readline forward history search failed.'
+}
+$searchPrompt = Get-GemHistorySearchPrompt -Direction -1 -Term 'a long search query that should be clipped' -Width 30
+if ($searchPrompt.Length -gt 30) {
+    throw 'Readline history-search prompt exceeded the terminal width.'
 }
 
 Write-Host 'Gemma components and Readline helpers loaded successfully in Windows PowerShell 5.1.'
