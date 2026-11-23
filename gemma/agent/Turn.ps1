@@ -342,7 +342,9 @@
 
             if ($turnStopwatch.IsRunning) { $turnStopwatch.Stop() }
             $elapsedSeconds = ([Math]::Round($turnStopwatch.Elapsed.TotalSeconds,1)).ToString('0.0',[Globalization.CultureInfo]::InvariantCulture)
-            $leftStatus = '┌── ' + $elapsedSeconds + 's'
+            $frameCorner = [string][char]0x250C
+            $frameHorizontal = [string][char]0x2500
+            $leftStatus = $frameCorner + ($frameHorizontal * 2) + ' ' + $elapsedSeconds + 's'
             $modelStatus = [string]$script:MODEL
             $rightStatus = ('Tokens: {0} / {1}' -f [string]$turnPromptTokens,[string]$turnCompletionTokens)
             $statusWidth = [Math]::Max(1,$width - 1)
@@ -356,7 +358,7 @@
             if ($statusGap -lt 1) { $statusGap = 1 }
             $topBoxLine = $leftStatus + (' ' * $statusGap) + $modelStatus + '  ' + $rightStatus
             if ($topBoxLine.Length -gt $statusWidth) { $topBoxLine = $topBoxLine.Substring(0,$statusWidth) }
-            $bottomRule = '────────────────────────────────────'
+            $bottomRule = $frameHorizontal * 36
             $bottomIndent = [Math]::Max(0,[int](($width - $bottomRule.Length) / 2))
             $bottomBoxLine = (' ' * $bottomIndent) + $bottomRule
 
