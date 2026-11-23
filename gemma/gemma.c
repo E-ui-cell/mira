@@ -815,12 +815,19 @@ static char *textparts(const char*r,Doc*d,int cand) {
 }
 static void search_preflight(State*s,char**c) {
     if(!s->grounding||!eq(s->provider,"antigravity"))return;
+    Buf search_contents;
+    init(&search_contents);
+    put(&search_contents,"[");
+    if(s->nh)put(&search_contents,s->hist[s->nh-1]);
+    else put(&search_contents,"{\"role\":\"user\",\"parts\":[{\"text\":\"Search the current request.\"}]}");
+    put(&search_contents,"]");
     Buf ag;
     init(&ag);
-    put(&ag,"{\"systemInstruction\":{\"role\":\"user\",\"parts\":[{\"text\":\"Research the request using built-in Google Search only. Return concise factual notes with dates, qualifications and sources. Do not call local tools.\"}]},\"contents\":");
-    put(&ag,*c);
+    put(&ag,"{\"systemInstruction\":{\"role\":\"user\",\"parts\":[{\"text\":\"Research the current user request using built-in Google Search only. Return concise factual notes with dates, qualifications and sources. Do not call local tools.\"}]},\"contents\":");
+    put(&ag,search_contents.s);
     put(&ag,",\"tools\":[{\"googleSearch\":{}}],\"toolConfig\":{\"includeServerSideToolInvocations\":true}}");
     char*r=agygen(s,s->search,ag.s);
+    free(search_contents.s);
     free(ag.s);
     if(!r) {
         fprintf(stderr,"[Search unavailable; continuing without web verification]\n");
