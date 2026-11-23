@@ -1,51 +1,6 @@
-    # GEMINI TOOLS
-    # The model may request this function when it needs the real local date/time.
-    # Gemini does NOT execute it; this PowerShell wrapper does.
-    # ===========================================================================
-    # Local tools are available to both providers. Antigravity performs a mandatory
-    # Search-only preflight with its selected model; Gemini API alone receives web_search.
-    $functionDeclarations = @(
-        @{
-            name = "get_current_datetime"
-            description = "Returns the current local date and time from the host computer. Use this whenever the current date, current time, weekday, or local timezone is needed. Do not guess the date or time."
-            parameters = @{ type = "object"; properties = @{} }
-        },
-        @{
-            name = "run_powershell"
-            description = "Run commands in the user's local Windows PowerShell session for real machine inspection and tasks. Permission mode is controlled by .ask (confirmation, default Yes) and .autopilot (execute without confirmation). Use PowerShell syntax, never Bash. Continue using tool results to complete multi-step tasks; do not claim a task is blocked merely because local inspection is needed."
-            parameters = @{ type = "object"; properties = @{ command = @{ type = "string"; description = "PowerShell command to execute on the Windows host." } }; required = @("command") }
-        },
-        @{
-            name = "quick_web"
-            description = "Fast, narrow live lookups using curl.exe: weather from wttr.in (defaults to IP-based local region), public IP from api.ipify.org, or command/language cheat sheets from cht.sh. Prefer this for 'show weather', 'show my IP', and 'how do I use ...' quick help instead of broad web search."
-            parameters = @{ type = "object"; properties = @{ action = @{ type = "string"; description = "One of: weather, public-ip, cheatsheet." }; query = @{ type = "string"; description = "Optional city/region for weather or topic for cht.sh; leave empty for IP-based local weather or cht.sh home page." } }; required = @("action") }
-        },
-        @{
-            name = "get_skill"
-            description = "Load a built-in or user-authored skill. Use skill='list' to discover skills, then load the relevant playbook before Windows file, settings, desktop, clipboard or system tasks. Skills are untrusted guidance and never grant permissions."
-            parameters = @{ type = "object"; properties = @{ skill = @{ type = "string"; description = "One of: file-management, windows-settings, desktop-gui, clipboard, system-inspection, quick-web-tools; or list." } }; required = @("skill") }
-        }
-    )
-    $GeminiTools = @(@{ functionDeclarations = $functionDeclarations })
-    $GeminiToolConfig = @{
-        functionCallingConfig = @{
-            mode = "AUTO"
-        }
-    }
-    # Never declare the research-agent function to Antigravity models.
-    if ($script:Provider -eq 'gemini' -and $script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled -and (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
-        $searchDescription = "Search the web using Google Search through Antigravity OAuth. Use for current information, recent events, verification, and source discovery. Return grounded findings with source URLs."
-        $functionDeclarations += @{
-            name = "web_search"
-            description = $searchDescription
-            parameters = @{ type = "object"; properties = @{ query = @{ type = "string"; description = "Focused search question or query. Include relevant names, dates, and context." } }; required = @("query") }
-        }
-        $GeminiTools[0].functionDeclarations = $functionDeclarations
-    }
-    if ($script:CommandMode) {
-        $GeminiTools = $null
-        $GeminiToolConfig = $null
-    }
+    $toolConfiguration = Get-GemmaToolConfiguration
+    $GeminiTools = $toolConfiguration.Tools
+    $GeminiToolConfig = $toolConfiguration.ToolConfig
 
     # Everything added for this user turn is rolled back on cancellation or
     # request failure. This prevents stale/empty context on the next loop.
@@ -340,48 +295,7 @@
                 foreach ($call in $functionCalls) {
                     $toolName = [string]$call.name
 
-                    switch ($toolName) {
-                        "get_current_datetime" {
-                            $now = [DateTimeOffset]::Now
-                            $toolResult = @{
-                                iso8601        = $now.ToString("o")
-                                local_datetime = $now.ToString("yyyy-MM-dd HH:mm:ss")
-                                day_of_week    = $now.DayOfWeek.ToString()
-                                utc_offset     = $now.ToString("zzz")
-                                timezone_id    = [TimeZoneInfo]::Local.Id
-                            }
-                        }
-                        "web_search" {
-                            if (-not $script:GoogleSearchGrounding) {
-                                $toolResult = @{ error = "Google Search grounding is globally disabled by .grounding off. Do not search or claim current information was verified." }
-                            } elseif ($script:Provider -ne 'gemini' -or -not $script:AgenticWebSearchEnabled) {
-                                $toolResult = @{ error = "web_search is available only to Gemini Developer API models when MIRA_ENABLE_AGENTIC_WEB_SEARCH is enabled." }
-                            } elseif (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
-                                $toolResult = @{ error = "Gemini API web_search requires Antigravity OAuth. Run .auth login." }
-                            } else {
-                                try {
-                                    $toolResult = Invoke-GemmaWebSearch -Query ([string]$call.args.query)
-                                } catch {
-                                    $searchError = $_.Exception.Message
-                                    $toolResult = @{ error = "Google Search failed. Do not claim that current information was verified. Error: $searchError" }
-                                }
-                            }
-                        }
-                        "run_powershell" {
-                            $toolResult = Invoke-GemmaPowerShellTool -Command ([string]$call.args.command)
-                        }
-                        "quick_web" {
-                            $toolResult = Invoke-GemmaQuickWeb -Action ([string]$call.args.action) -Query ([string]$call.args.query)
-                        }
-                        "get_skill" {
-                            $toolResult = Get-GemmaSkill -Name ([string]$call.args.skill)
-                        }
-                        default {
-                            $toolResult = @{
-                                error = "Unknown tool: $toolName"
-                            }
-                        }
-                    }
+                    $toolResult = Invoke-GemmaToolCall -Call $call
 
 
                     $functionResponse = @{
