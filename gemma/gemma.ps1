@@ -63,8 +63,9 @@ $MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'; ASK prompt d
 $MIRA_DEFAULT_GROUNDING = $true              # Global master switch for all Google Search grounding
 $MIRA_ENABLE_AGENTIC_WEB_SEARCH = $false      # Allow Gemini API models to call web_search through Antigravity OAuth
 $MIRA_DEFAULT_VERBOSE = $false                # Show Gemini thought summaries only when enabled with .verbose
-# Antigravity is ordinary model chat only. Gemini Developer API models may call web_search;
-# a dedicated Gemini 3.1 Flash Lite research agent performs Search through Antigravity OAuth.
+# Antigravity chat uses native googleSearch only when the selected model is advertised
+# in this account's webSearchModelIds. Gemini API models may call web_search, which
+# delegates the research request to Antigravity OAuth.
 $MIRA_DEFAULT_CACHED_CONTENT = if ($env:MIRA_GEMINI_CACHED_CONTENT) { $env:MIRA_GEMINI_CACHED_CONTENT } else { $null }
 $MIRA_DEFAULT_SYSTEM_PROMPT = @"
 You Professional assistant. Speak short, precise, no nonsense.
@@ -557,10 +558,21 @@ function Get-GemmaSearchModelCandidates {
 }
 
 function Test-GemmaAntigravityNativeSearchSupport {
-    param([string]$Model = $MIRA_SEARCH_MODEL)
+    param([string]$Model = $script:MODEL)
     $modelId = ([string]$Model).Trim() -replace '^models/',''
     if ([string]::IsNullOrWhiteSpace($modelId)) { return $false }
-    return (@(Get-GemmaSearchModelCandidates -PreferredModel $modelId).Count -gt 0)
+
+    # Native Search is enabled only for an exact model ID explicitly advertised
+    # by this Antigravity account. Do not use the research-agent fallback here.
+    if (-not $script:AntigravityCapabilityProbeAttempted) {
+        try { [void](Get-AntigravityModels) }
+        catch {
+            Write-Host "[Google Search capability discovery unavailable; continuing without native Search] $($_.Exception.Message)" -ForegroundColor DarkYellow
+            return $false
+        }
+    }
+    if ($null -eq $script:AntigravityWebSearchModelIds) { return $false }
+    return (@($script:AntigravityWebSearchModelIds) -contains $modelId)
 }
 
 function Invoke-GemmaAntigravitySearchRequest {
@@ -596,7 +608,7 @@ function Invoke-GemmaSearchCommand {
     if ($value -eq 'on') {
         $script:GoogleSearchGrounding = $true
         if ($script:Provider -eq 'antigravity') {
-            Write-Host '[Grounding master switch ON. Web research is available only to Gemini API models.]' -ForegroundColor Green
+            Write-Host '[Native Google Search is enabled for Antigravity models advertised by this account; Gemini API web_search remains provider-specific.]' -ForegroundColor Green
         } elseif ($script:AgenticWebSearchEnabled) {
             if (Test-Path -LiteralPath (Get-AntigravityTokenPath)) {
                 Write-Host "[Google Search enabled for Gemini API models via Antigravity OAuth (research model: $MIRA_SEARCH_MODEL).]" -ForegroundColor Green
@@ -613,7 +625,7 @@ function Invoke-GemmaSearchCommand {
         if (-not $script:GoogleSearchGrounding) {
             $state = 'OFF globally (no provider can use Google Search)'
         } elseif ($script:Provider -eq 'antigravity') {
-            $state = "ON globally; Antigravity provider does not run web research"
+            $state = "ON globally; Antigravity native googleSearch is sent only to account-advertised models"
         } elseif (-not $script:AgenticWebSearchEnabled) {
             $state = 'ON globally; Gemini API web_search is disabled by MIRA_ENABLE_AGENTIC_WEB_SEARCH'
         } elseif (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
@@ -2006,8 +2018,8 @@ while ($true) {
     # The model may request this function when it needs the real local date/time.
     # Gemini does NOT execute it; this PowerShell wrapper does.
     # ===========================================================================
-    # Local tools are available to both providers. Web research is exposed ONLY to
-    # Gemini Developer API models and is delegated to the configured Search agent.
+    # Local tools are available to both providers. The custom web_search research
+    # function is Gemini-API-only; Antigravity receives native googleSearch on supported models.
     $functionDeclarations = @(
         @{
             name = "get_current_datetime"
@@ -2036,6 +2048,7 @@ while ($true) {
             mode = "AUTO"
         }
     }
+    # Never declare the research-agent function to Antigravity models.
     if ($script:Provider -eq 'gemini' -and $script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled -and (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
         $searchDescription = "Search the web using Google Search through Antigravity OAuth. Use for current information, recent events, verification, and source discovery. Return grounded findings with source URLs."
         $functionDeclarations += @{
@@ -2063,6 +2076,7 @@ while ($true) {
     $turnStopwatch = [Diagnostics.Stopwatch]::StartNew()
     $turnPromptTokens = 0
     $turnCompletionTokens = 0
+    $nativeSearchFallbackUsed = $false
 
     try {
         while ($toolLoop) {
@@ -2076,6 +2090,20 @@ while ($true) {
             -Contents $Contents
 
         $usingAntigravityOAuth = ($script:Provider -eq 'antigravity')
+        $nativeSearchAdded = $false
+
+        if ($usingAntigravityOAuth -and $script:GoogleSearchGrounding -and -not $nativeSearchFallbackUsed) {
+            if (Test-GemmaAntigravityNativeSearchSupport -Model $script:MODEL) {
+                $existingTools = @()
+                if ($payloadObj.Contains('tools') -and $null -ne $payloadObj.tools) {
+                    $existingTools = @($payloadObj.tools)
+                }
+                $payloadObj.tools = @($existingTools + @(@{ googleSearch = @{} }))
+                if ($null -eq $payloadObj.toolConfig) { $payloadObj.toolConfig = @{} }
+                $payloadObj.toolConfig.includeServerSideToolInvocations = $true
+                $nativeSearchAdded = $true
+            }
+        }
 
         if ($usingAntigravityOAuth) {
             $accessToken = Get-AntigravityAccessToken
@@ -2198,6 +2226,15 @@ while ($true) {
             $runspaceErrors = @($powershell.Streams.Error)
 
             if ($hasRunspaceError) {
+                if ($usingAntigravityOAuth -and $nativeSearchAdded -and -not $nativeSearchFallbackUsed) {
+                    # A Search-side failure must not make normal Antigravity chat unusable.
+                    # Retry this same conversation once without the optional native tool.
+                    $nativeSearchFallbackUsed = $true
+                    $toolRounds = [Math]::Max(0,$toolRounds - 1)
+                    Write-Host "`n[Native Google Search failed for this request; retrying ordinary Antigravity chat without Search.]" -ForegroundColor DarkYellow
+                    continue
+                }
+
                 $err = $runspaceErrors[0]
                 $webResp = $err.Exception.Response
                 if ($null -ne $webResp) {
