@@ -1248,7 +1248,9 @@ static void browser(const char*u) {
 #endif
 }
 static int login(State*s) {
-    if(readfile(s->token)) {
+    char *saved_token=readfile(s->token);
+    if(saved_token) {
+        free(saved_token);
         char *existing=access_token(s);
         if(existing) {
             free(existing);
