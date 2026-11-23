@@ -771,7 +771,9 @@ static char *contents(State*s,const char*prompt) {
 static char *payload(State*s,const char*c,int tools,int cmd) {
     Buf b;
     init(&b);
-    put(&b,"{\"systemInstruction\":{\"parts\":[{\"text\":");
+    put(&b,"{\"systemInstruction\":{");
+    if(eq(s->provider,"antigravity"))put(&b,"\"role\":\"user\",");
+    put(&b,"\"parts\":[{\"text\":");
     if(cmd)quote(&b,"Return only a ready-to-run command for this operating system. Do not execute it or call tools. Output no Markdown fences or explanation.");
     else quote(&b,SYS);
     put(&b,"}]},\"contents\":");
@@ -1056,6 +1058,7 @@ static char *tool(State*s,const char*n,const char*a) {
     return ds("{\"error\":\"unknown tool\"}");
 }
 static char *ask(State*s,const char*prompt,int cmd) {
+    int history_start=s->nh;
     char*c=contents(s,prompt);
     if(!cmd) {
         Buf u;
@@ -1071,6 +1074,7 @@ static char *ask(State*s,const char*prompt,int cmd) {
         char*p=payload(s,c,!cmd,cmd),*r=generate(s,p);
         free(p);
         if(!r) {
+            while(s->nh>history_start)free(s->hist[--s->nh]);
             free(c);
             return NULL;
         }
@@ -1087,6 +1091,7 @@ static char *ask(State*s,const char*prompt,int cmd) {
             else fprintf(stderr,"Response contained no candidates.\n");
             free(d.v);
             free(r);
+            while(s->nh>history_start)free(s->hist[--s->nh]);
             free(c);
             return NULL;
         }
@@ -1146,6 +1151,7 @@ static char *ask(State*s,const char*prompt,int cmd) {
         free(d.v);
         free(r);
     }
+    while(s->nh>history_start)free(s->hist[--s->nh]);
     free(c);
     fprintf(stderr,"Tool loop exceeded %d rounds.\n",MAX_ROUNDS);
     return NULL;
