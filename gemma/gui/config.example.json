@@ -1,0 +1,14 @@
+{
+  "Provider": "antigravity",
+  "Model": "gemini-3.1-flash-lite",
+  "Effort": "high",
+  "Theme": "Gruvbox Dark",
+  "FontFamily": "Consolas",
+  "FontSize": 10.5,
+  "WindowWidth": 1120,
+  "WindowHeight": 780,
+  "WindowX": -1,
+  "WindowY": -1,
+  "SystemPromptFile": "",
+  "CustomThemes": {}
+}

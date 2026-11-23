@@ -23,6 +23,14 @@ jobs:
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\ui
 
+      - name: Parse Gemma desktop GUI modules with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\gui
+
+      - name: Parse preserved Gemma CLI entry point with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\gemma-cli.ps1
+
       - name: Parse Gemma provider modules with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\providers
