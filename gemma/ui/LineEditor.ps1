@@ -99,8 +99,14 @@ function Read-GemLineConsole {
     $lastYankLength = 0
     $killRingIndex = 0
     $completionCandidates = @()
+    $completionLabels = @()
     $completionOriginal = ''
     $completionIndex = -1
+    $completionTop = -1
+    $completionVisibleRows = 0
+    $completionMenuHeight = 0
+    $completionOldForeground = [Console]::ForegroundColor
+    $completionOldBackground = [Console]::BackgroundColor
     function Redraw($old,$new,$pos) {
         $w = [Math]::Max(12,[Console]::WindowWidth)
         $usable = $w - 1
@@ -172,29 +178,99 @@ function Read-GemLineConsole {
         [Console]::SetCursorPosition([Math]::Min($cursorColumn,$usable - 1),$cursorRow)
         $renderedRows = [Math]::Max(1,$totalRows)
     }
+    function Draw-GemCompletionMenu {
+        if ($completionCandidates.Count -le 1 -or $completionVisibleRows -le 0) { return }
+
+        $first = [Math]::Max(0,[Math]::Min(
+            $completionIndex - [int][Math]::Floor($completionVisibleRows / 2),
+            $completionCandidates.Count - $completionVisibleRows
+        ))
+        $clearWidth = [Math]::Max(1,[Console]::WindowWidth - 1)
+        [Console]::SetCursorPosition(0,$completionTop)
+
+        [Console]::ForegroundColor = [ConsoleColor]::Cyan
+        $header = ('Completions ({0})' -f $completionCandidates.Count)
+        [Console]::Write($header.PadRight($clearWidth).Substring(0,$clearWidth))
+        [Console]::WriteLine()
+
+        [Console]::ForegroundColor = [ConsoleColor]::DarkGray
+        $hint = 'Up/Down or j/k move; Enter accept; Esc cancel'
+        [Console]::Write($hint.PadRight($clearWidth).Substring(0,$clearWidth))
+        [Console]::WriteLine()
+
+        for ($rowIndex = 0; $rowIndex -lt $completionVisibleRows; $rowIndex++) {
+            $candidateIndex = $first + $rowIndex
+            $line = ''
+            if ($candidateIndex -lt $completionCandidates.Count) {
+                $marker = if ($candidateIndex -eq $completionIndex) { '>' } else { ' ' }
+                $label = if ($candidateIndex -lt $completionLabels.Count) {
+                    [string]$completionLabels[$candidateIndex]
+                } else {
+                    [string]$completionCandidates[$candidateIndex]
+                }
+                $line = (' {0} {1}' -f $marker,$label)
+                if ($line.Length -gt $clearWidth) { $line = $line.Substring(0,$clearWidth) }
+            }
+
+            if ($candidateIndex -lt $completionCandidates.Count -and $candidateIndex -eq $completionIndex) {
+                [Console]::ForegroundColor = [ConsoleColor]::White
+                [Console]::BackgroundColor = [ConsoleColor]::DarkCyan
+            } else {
+                [Console]::ForegroundColor = [ConsoleColor]::Gray
+                [Console]::BackgroundColor = $completionOldBackground
+            }
+            [Console]::Write($line.PadRight($clearWidth).Substring(0,$clearWidth))
+            [Console]::WriteLine()
+        }
+
+        [Console]::ForegroundColor = $completionOldForeground
+        [Console]::BackgroundColor = $completionOldBackground
+        $footer = (' {0}/{1} ' -f ($completionIndex + 1),$completionCandidates.Count)
+        [Console]::ForegroundColor = [ConsoleColor]::DarkGray
+        [Console]::Write($footer.PadRight($clearWidth).Substring(0,$clearWidth))
+        [Console]::ForegroundColor = $completionOldForeground
+        [Console]::SetCursorPosition(0,[Math]::Min(
+            $completionTop + $completionMenuHeight,
+            [Console]::BufferHeight - 1
+        ))
+    }
     while ($true) {
         $k = [Console]::ReadKey($true)
 
         if ($completionCandidates.Count -gt 1) {
-            if ($k.KeyChar -eq 'j' -or $k.Key -eq [ConsoleKey]::DownArrow) {
+            if ($k.Key -eq [ConsoleKey]::J -or $k.Key -eq [ConsoleKey]::DownArrow) {
                 $completionIndex = ($completionIndex + 1) % $completionCandidates.Count
-                $old = $b; $b = [string]$completionCandidates[$completionIndex]; $c = $b.Length
-                Redraw $old $b $c
+                Draw-GemCompletionMenu
                 continue
             }
-            if ($k.KeyChar -eq 'k' -or $k.Key -eq [ConsoleKey]::UpArrow) {
+            if ($k.Key -eq [ConsoleKey]::K -or $k.Key -eq [ConsoleKey]::UpArrow) {
                 $completionIndex = ($completionIndex - 1 + $completionCandidates.Count) % $completionCandidates.Count
-                $old = $b; $b = [string]$completionCandidates[$completionIndex]; $c = $b.Length
-                Redraw $old $b $c
+                Draw-GemCompletionMenu
                 continue
             }
             if ($k.Key -eq [ConsoleKey]::Escape) {
-                $old = $b; $b = $completionOriginal; $c = $b.Length
-                $completionCandidates = @(); $completionIndex = -1; $completionOriginal = ''
-                Redraw $old $b $c
+                $completionCandidates = @()
+                $completionLabels = @()
+                $completionIndex = -1
+                $completionOriginal = ''
+                $completionTop = -1
+                Redraw $b $b $c
                 continue
             }
-            $completionCandidates = @(); $completionIndex = -1; $completionOriginal = ''
+
+            # Enter accepts the highlighted completion only; a second Enter
+            # submits the input line. Any other key accepts then edits normally.
+            Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+            $old = $b
+            $b = [string]$completionCandidates[$completionIndex]
+            $c = $b.Length
+            $completionCandidates = @()
+            $completionLabels = @()
+            $completionIndex = -1
+            $completionOriginal = ''
+            $completionTop = -1
+            Redraw $old $b $c
+            if ($k.Key -eq [ConsoleKey]::Enter) { continue }
         }
 
         $ctrl = (($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0)
@@ -803,13 +879,29 @@ function Read-GemLineConsole {
             } elseif ($candidateBuffers.Count -gt 1) {
                 $completionOriginal = $b
                 $completionCandidates = @($candidateBuffers)
+                $completionLabels = @($candidateLabels)
                 $completionIndex = 0
-                $old = $b; $b = [string]$completionCandidates[0]; $c = $b.Length
+
+                # Use a fixed-height scrolling viewport, matching the model picker.
                 [Console]::WriteLine()
-                foreach ($label in $candidateLabels) { [Console]::WriteLine('  ' + [string]$label) }
-                [Console]::WriteLine('j/k navigate  Enter accept  Esc cancel')
-                $row = [Console]::CursorTop
-                Redraw $old $b $c
+                $windowHeight = [Math]::Max(10,[Console]::WindowHeight)
+                $completionVisibleRows = [Math]::Max(1,[Math]::Min(10,$windowHeight - 6))
+                $completionVisibleRows = [Math]::Min($completionVisibleRows,$completionCandidates.Count)
+                $completionMenuHeight = $completionVisibleRows + 3
+                $completionTop = [Console]::CursorTop
+                $viewportBottom = [Console]::WindowTop + $windowHeight
+                $spaceBelow = $viewportBottom - $completionTop
+                if ($spaceBelow -lt ($completionMenuHeight + 1)) {
+                    $paddingRows = ($completionMenuHeight + 1) - $spaceBelow
+                    [Console]::Write(([Environment]::NewLine * $paddingRows))
+                    $completionTop = [Console]::CursorTop
+                }
+                $completionOldForeground = [Console]::ForegroundColor
+                $completionOldBackground = [Console]::BackgroundColor
+                Draw-GemCompletionMenu
+                $row = [Math]::Min($completionTop + $completionMenuHeight,[Console]::BufferHeight - 1)
+                $renderedRows = 1
+                Redraw $b $b $c
             } else {
                 [Console]::Beep(700,60)
             }
