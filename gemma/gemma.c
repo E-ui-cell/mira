@@ -815,55 +815,31 @@ static char *textparts(const char*r,Doc*d,int cand) {
 }
 static void search_preflight(State*s,char**c) {
     if(!s->grounding||!eq(s->provider,"antigravity"))return;
-    Buf p;
-    init(&p);
-    put(&p,"{\"contents\":");
-    put(&p,*c);
-    put(&p,",\"tools\":[{\"googleSearch\":{}}]}");
-    char*r=NULL;
-    if(eq(s->provider,"antigravity")) {
-        Buf ag;
-        init(&ag);
-        put(&ag,"{\"systemInstruction\":{\"role\":\"user\",\"parts\":[{\"text\":\"Research the request using built-in Google Search only. Return concise factual notes with dates, qualifications and sources. Do not call local tools.\"}]},\"contents\":");
-        put(&ag,*c);
-        put(&ag,",\"tools\":[{\"googleSearch\":{}}],\"toolConfig\":{\"includeServerSideToolInvocations\":true}}");
-        r=agygen(s,s->search,ag.s);
-        free(ag.s);
-    }
-    free(p.s);
-            return;
-        }
-        char*m=escape(s->search);
-        Buf u;
-        init(&u);
-        fmt(&u,"%s/models/%s:generateContent?key=%s",API,m,s->api);
-        free(m);
-        const char*h[]={"Content-Type: application/json"};
-        r=http(u.s,"POST",p.s,h,1);
-        free(u.s);
-    }
-    free(p.s);
+    Buf ag;
+    init(&ag);
+    put(&ag,"{\"systemInstruction\":{\"role\":\"user\",\"parts\":[{\"text\":\"Research the request using built-in Google Search only. Return concise factual notes with dates, qualifications and sources. Do not call local tools.\"}]},\"contents\":");
+    put(&ag,*c);
+    put(&ag,",\"tools\":[{\"googleSearch\":{}}],\"toolConfig\":{\"includeServerSideToolInvocations\":true}}");
+    char*r=agygen(s,s->search,ag.s);
+    free(ag.s);
     if(!r) {
         fprintf(stderr,"[Search unavailable; continuing without web verification]\n");
         return;
     }
     Doc d;
     jp(r,&d);
-    int root=0;
-    if(eq(s->provider,"antigravity"))root=jget(r,&d,0,"response");
+    int root=jget(r,&d,0,"response");
     int ca=jget(r,&d,root,"candidates"),cand=ca>=0?ca+1:-1;
     if(cand<0||cand>=d.n) {
         fprintf(stderr,"[Search returned no candidate]\n");
-        free(d.v);
-        free(r);
+        free(d.v); free(r);
         return;
     }
     int md=jget(r,&d,cand,"groundingMetadata"),qs=jget(r,&d,md,"webSearchQueries"),chunks=jget(r,&d,md,"groundingChunks");
     int nq=count(&d,qs),ns=count(&d,chunks);
     if(!nq&&!ns) {
         fprintf(stderr,"[Search returned no grounding metadata; no verification claimed]\n");
-        free(d.v);
-        free(r);
+        free(d.v); free(r);
         return;
     }
     Buf research;
@@ -880,13 +856,12 @@ static void search_preflight(State*s,char**c) {
         }
     }
     if(ns) {
-        put(&research,"\nGoogle Search sources:\n");
+        put(&research,"\n\nGoogle Search sources:\n");
         for(int i=chunks+1;i<d.n&&d.v[i].a<d.v[chunks].z;i=next(&d,i)) {
             int w=jget(r,&d,i,"web");
             char*u=jval(r,&d,w,"uri"),*title=jval(r,&d,w,"title");
             if(*u)fmt(&research,"- %s — %s\n",*title?title:u,u);
-            free(u);
-            free(title);
+            free(u); free(title);
         }
     }
     if(research.n>MAX_SEARCH)research.s[MAX_SEARCH]=0;
@@ -901,35 +876,7 @@ static void search_preflight(State*s,char**c) {
     put(&item,"}]}");
     append_item(c,item.s);
     fprintf(stderr,"[Search preflight] queries=%d sources=%d\n",nq,ns);
-    free(ctx.s);
-    free(item.s);
-    free(research.s);
-    free(d.v);
-    free(r);
-}
-static char *quickweb(const char*a,const char*q) {
-    char url[4096];
-    if(eq(a,"weather")) {
-        char*e=escape(q);
-        snprintf(url,sizeof url,"https://wttr.in/%s?format=3",e);
-        free(e);
-    }
-    else if(eq(a,"public-ip"))snprintf(url,sizeof url,"https://api.ipify.org");
-    else if(eq(a,"cheatsheet")) {
-        char*e=escape(q);
-        snprintf(url,sizeof url,"https://cht.sh/%s",e);
-        free(e);
-    }
-    else return ds("{\"error\":\"unknown action\"}");
-    char*r=http(url,"GET",NULL,NULL,0);
-    if(!r)return ds("{\"error\":\"request failed\"}");
-    Buf b;
-    init(&b);
-    put(&b,"{\"result\":");
-    quote(&b,r);
-    put(&b,"}");
-    free(r);
-    return take(&b);
+    free(ctx.s); free(item.s); free(research.s); free(d.v); free(r);
 }
 static char *antigravity_web_search(State*s,const char*query) {
     if(!*query)return ds("{\"error\":\"web_search requires a non-empty query\"}");
@@ -1132,7 +1079,7 @@ static char *ask(State*s,const char*prompt,int cmd) {
             free(c);
             return out;
         }
-        char*model=raw(r,&d,content);
+        char*model=raw(r,&d,parts);
         Buf item;
         init(&item);
         put(&item,"{\"role\":\"model\",\"parts\":");
