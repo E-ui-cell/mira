@@ -777,7 +777,10 @@ static char *payload(State*s,const char*c,int tools,int cmd) {
     put(&b,"}]},\"contents\":");
     put(&b,c);
     if(tools&&!cmd) {
-        put(&b,",\"tools\":[{\"functionDeclarations\":[{\"name\":\"get_current_datetime\",\"description\":\"Get local date and time\",\"parameters\":{\"type\":\"object\",\"properties\":{}}},{\"name\":\"run_command\",\"description\":\"Run a local shell command after permission approval\",\"parameters\":{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},\"required\":[\"command\"]}},{\"name\":\"quick_web\",\"description\":\"Fetch weather, public IP or cheat sheet\",\"parameters\":{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"enum\":[\"weather\",\"public-ip\",\"cheatsheet\"]},\"query\":{\"type\":\"string\"}},\"required\":[\"action\"]}}]}],\"toolConfig\":{\"functionCallingConfig\":{\"mode\":\"AUTO\"}}");
+        put(&b,",\"tools\":[{\"functionDeclarations\":[{\"name\":\"get_current_datetime\",\"description\":\"Get local date and time\",\"parameters\":{\"type\":\"object\",\"properties\":{}}},{\"name\":\"run_command\",\"description\":\"Run a local shell command after permission approval\",\"parameters\":{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},\"required\":[\"command\"]}},{\"name\":\"quick_web\",\"description\":\"Fetch weather, public IP or cheat sheet\",\"parameters\":{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\",\"enum\":[\"weather\",\"public-ip\",\"cheatsheet\"]},\"query\":{\"type\":\"string\"}},\"required\":[\"action\"]}}");
+        if(eq(s->provider,"gemini")&&s->grounding)
+            put(&b,",{\"name\":\"web_search\",\"description\":\"Search the web using Antigravity Google Search grounding. Use for current or verifiable information.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}}");
+        put(&b,"]}],\"toolConfig\":{\"functionCallingConfig\":{\"mode\":\"AUTO\"}}");
     }
     if(!cmd&&starts(s->model,"gemini-3")) {
         char e[16];
@@ -811,7 +814,7 @@ static char *textparts(const char*r,Doc*d,int cand) {
     return take(&b);
 }
 static void search_preflight(State*s,char**c) {
-    if(!s->grounding)return;
+    if(!s->grounding||!eq(s->provider,"antigravity"))return;
     Buf p;
     init(&p);
     put(&p,"{\"contents\":");
@@ -826,10 +829,8 @@ static void search_preflight(State*s,char**c) {
         put(&ag,",\"tools\":[{\"googleSearch\":{}}],\"toolConfig\":{\"includeServerSideToolInvocations\":true}}");
         r=agygen(s,s->search,ag.s);
         free(ag.s);
-    } else if(eq(s->provider,"gemini")) {
-        if(!*s->api) {
-            fprintf(stderr,"[Search unavailable: set GEMINI_APIJ for Gemini Search grounding]\n");
-            free(p.s);
+    }
+    free(p.s);
             return;
         }
         char*m=escape(s->search);
@@ -930,6 +931,63 @@ static char *quickweb(const char*a,const char*q) {
     free(r);
     return take(&b);
 }
+static char *antigravity_web_search(State*s,const char*query) {
+    if(!*query)return ds("{\"error\":\"web_search requires a non-empty query\"}");
+    Buf req;
+    init(&req);
+    put(&req,"{\"systemInstruction\":{\"role\":\"user\",\"parts\":[{\"text\":\"Research this request using built-in Google Search only. Return concise factual notes, preserve dates and uncertainty, and include source URLs. Do not call local tools.\"}]},\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":");
+    quote(&req,query);
+    put(&req,"}]}],\"tools\":[{\"googleSearch\":{}}],\"toolConfig\":{\"includeServerSideToolInvocations\":true}}");
+    char*r=agygen(s,s->search,req.s);
+    free(req.s);
+    if(!r)return ds("{\"error\":\"Antigravity Search request failed; no web verification available\"}");
+    Doc d;
+    jp(r,&d);
+    int response=jget(r,&d,0,"response");
+    int ca=jget(r,&d,response,"candidates"),cand=ca>=0?ca+1:-1;
+    if(cand<0||cand>=d.n) {
+        free(d.v); free(r);
+        return ds("{\"error\":\"Search returned no candidate\"}");
+    }
+    int md=jget(r,&d,cand,"groundingMetadata");
+    int qs=jget(r,&d,md,"webSearchQueries"),chunks=jget(r,&d,md,"groundingChunks");
+    int nq=count(&d,qs),ns=count(&d,chunks);
+    if(!nq&&!ns) {
+        free(d.v); free(r);
+        return ds("{\"error\":\"Search returned no grounding metadata; results are unverified\"}");
+    }
+    Buf research;
+    init(&research);
+    char*t=textparts(r,&d,cand);
+    put(&research,t);
+    free(t);
+    if(nq) {
+        put(&research,"\n\nGoogle Search queries:\n");
+        for(int i=qs+1;i<d.n&&d.v[i].a<d.v[qs].z;i=next(&d,i)) {
+            char*x=jstr(r,&d,i);
+            fmt(&research,"- %s\n",x);
+            free(x);
+        }
+    }
+    if(ns) {
+        put(&research,"\n\nGoogle Search sources:\n");
+        for(int i=chunks+1;i<d.n&&d.v[i].a<d.v[chunks].z;i=next(&d,i)) {
+            int w=jget(r,&d,i,"web");
+            char*u=jval(r,&d,w,"uri"),*title=jval(r,&d,w,"title");
+            if(*u)fmt(&research,"- %s — %s\n",*title?title:u,u);
+            free(u); free(title);
+        }
+    }
+    if(research.n>MAX_SEARCH)research.s[MAX_SEARCH]=0;
+    Buf out;
+    init(&out);
+    put(&out,"{\"research\":");
+    quote(&out,research.s);
+    fmt(&out,",\"queries\":%d,\"sources\":%d}",nq,ns);
+    fprintf(stderr,"[Google Search] queries=%d sources=%d model=%s\n",nq,ns,s->search);
+    free(research.s); free(d.v); free(r);
+    return take(&out);
+}
 static char *tool(State*s,const char*n,const char*a) {
     if(eq(n,"get_current_datetime")) {
         time_t now=time(NULL);
@@ -945,6 +1003,14 @@ static char *tool(State*s,const char*n,const char*a) {
     }
     Doc d;
     jp(a,&d);
+    if(eq(n,"web_search")) {
+        char*q=jval(a,&d,0,"query");
+        free(d.v);
+        if(!s->grounding) { free(q); return ds("{\"error\":\"Google Search is disabled\"}"); }
+        char*out=antigravity_web_search(s,q);
+        free(q);
+        return out;
+    }
     if(eq(n,"quick_web")) {
         char*x=jval(a,&d,0,"action"),*q=jval(a,&d,0,"query");
         char*r=quickweb(x,q);
@@ -1051,7 +1117,7 @@ static char *ask(State*s,const char*prompt,int cmd) {
         if(!calls) {
             char*out=textparts(r,&d,cand);
             if(!cmd) {
-                char*model=raw(r,&d,content);
+                char*model=raw(r,&d,parts);
                 Buf item;
                 init(&item);
                 put(&item,"{\"role\":\"model\",\"parts\":");
@@ -1664,6 +1730,16 @@ static int self_test(void) {
     free(d.v);
     ok=ok&&expiry("1970-01-01T00:00:00Z")==0;
     ok=ok&&expiry("2000-01-01T00:00:00Z")==946684800;
+    Buf modelturn;
+    init(&modelturn);
+    put(&modelturn,"{\"role\":\"model\",\"parts\":[{\"text\":\"ok\"}]}");
+    Doc mt;
+    jp(modelturn.s,&mt);
+    int mtparts=jget(modelturn.s,&mt,0,"parts");
+    int mtfirst=mtparts>=0?mtparts+1:-1;
+    ok=ok&&mtfirst>=0&&jget(modelturn.s,&mt,mtfirst,"text")>=0&&jget(modelturn.s,&mt,mtfirst,"role")<0&&jget(modelturn.s,&mt,mtfirst,"parts")<0;
+    free(mt.v);
+    free(modelturn.s);
     char *array=ds("[]");
     append_item(&array,"{\"n\":1}");
     Doc a;
