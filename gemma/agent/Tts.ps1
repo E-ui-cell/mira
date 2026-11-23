@@ -76,7 +76,14 @@ function Get-GemmaTtsCachePath {
     }
     # 80-bit filename keeps paths readable; the full SHA-256 still determines the cache identity.
     $fileKey = $key.Substring(0,20)
-    return (Join-Path $script:MiraTtsAudioDirectory ($fileKey + '.wav'))
+    $shortPath = Join-Path $script:MiraTtsAudioDirectory ($fileKey + '.wav')
+
+    # Preserve existing caches: migrate the former full-length filename on first access.
+    $legacyPath = Join-Path $script:MiraTtsAudioDirectory ($key + '.wav')
+    if (-not (Test-Path -LiteralPath $shortPath -PathType Leaf) -and (Test-Path -LiteralPath $legacyPath -PathType Leaf)) {
+        Move-Item -LiteralPath $legacyPath -Destination $shortPath -ErrorAction Stop
+    }
+    return $shortPath
 }
 
 function Invoke-GemmaPlayTtsWave {
