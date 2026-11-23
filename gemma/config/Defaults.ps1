@@ -39,6 +39,11 @@ $MIRA_SEED = $null
 $MIRA_RESPONSE_MIME_TYPE = $null            # e.g. 'text/plain' or 'application/json'
 $MIRA_STOP_SEQUENCES = $null                # e.g. @('END')
 
+# On-demand Gemini speech playback
+$MIRA_TTS_MODEL = 'gemini-3.8-flash-tts'
+$MIRA_TTS_VOICE = 'Sulafat'
+$MIRA_TTS_DIRECTOR_CORE = 'You are having sex.'
+
 # Runtime behavior
 $MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'; ASK prompt defaults to Yes
 $MIRA_DEFAULT_GROUNDING = $true              # Global master switch for all Google Search grounding
