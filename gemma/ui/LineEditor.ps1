@@ -80,9 +80,9 @@ function Read-GemLineConsole {
     $oldTreatControlCAsInput = [Console]::TreatControlCAsInput
     [Console]::TreatControlCAsInput = $true
 
-    $b = ''; $c = 0; $prompt = 2
+    $b = ''; $c = 0; $promptText = '> '; $prompt = $promptText.Length
     $row = [Console]::CursorTop
-    [Console]::Write('> ')
+    [Console]::Write($promptText)
 
     $renderedRows = 1
     if ($null -eq $script:GemKillRing) {
@@ -128,7 +128,7 @@ function Read-GemLineConsole {
             $physicalRow = $row + $rowOffsets[$i]
             if ($i -eq 0 -and $physicalRow -lt [Console]::BufferHeight) {
                 [Console]::SetCursorPosition(0,$physicalRow)
-                [Console]::Write('> ')
+                [Console]::Write($promptText)
             }
             while ($offset -lt $value.Length) {
                 $column = if ($offset -eq 0) { $startColumn } else { 0 }
@@ -196,49 +196,116 @@ function Read-GemLineConsole {
             continue
         }
 
-        # Ctrl+G cancels a history search and restores the original draft.
-        if ($ctrl -and $k.Key -eq [ConsoleKey]::G) {
-            if ($null -ne $historySearchTerm) {
-                $old = $b
+        # Ctrl+R starts reverse-i-search; type a term, Ctrl+R/S cycles matches.
+        if ($null -ne $historySearchTerm) {
+            $old = $b
+            $searchChanged = $false
+            if (($ctrl -and $k.Key -eq [ConsoleKey]::G) -or $k.Key -eq [ConsoleKey]::Escape) {
                 $b = [string]$historySearchDraft
                 $c = $b.Length
                 $script:MiraHistoryIndex = -1
                 $historySearchTerm = $null
+                $promptText = '> '
+                $prompt = $promptText.Length
                 Redraw $old $b $c
+                continue
+            }
+            if ($k.Key -eq [ConsoleKey]::Enter) {
+                $historySearchTerm = $null
+                $promptText = '> '
+                $prompt = $promptText.Length
+                [Console]::Write([Environment]::NewLine)
+                [Console]::TreatControlCAsInput = $oldTreatControlCAsInput
+                return $b
+            }
+            if ($ctrl -and ($k.Key -eq [ConsoleKey]::R -or $k.Key -eq [ConsoleKey]::S)) {
+                $historySearchDirection = if ($k.Key -eq [ConsoleKey]::R) { -1 } else { 1 }
+                $startIndex = if ($script:MiraHistoryIndex -ge 0) {
+                    $script:MiraHistoryIndex
+                } elseif ($historySearchDirection -lt 0) {
+                    $script:MiraInputHistory.Count
+                } else {
+                    -1
+                }
+                $matchIndex = Find-GemHistoryMatch -Term $historySearchTerm -Start $startIndex -Direction $historySearchDirection
+                if ($matchIndex -ge 0) {
+                    $script:MiraHistoryIndex = $matchIndex
+                    $b = $script:MiraInputHistory[$matchIndex]
+                    $c = $b.Length
+                } else {
+                    [Console]::Beep(700,60)
+                }
+                $searchChanged = $true
+            } elseif ($k.Key -eq [ConsoleKey]::Backspace -or ($ctrl -and $k.Key -eq [ConsoleKey]::H)) {
+                if ($historySearchTerm.Length -gt 0) {
+                    $historySearchTerm = $historySearchTerm.Substring(0,$historySearchTerm.Length - 1)
+                }
+                if ($historySearchTerm.Length -eq 0) {
+                    $b = [string]$historySearchDraft
+                    $c = $b.Length
+                    $script:MiraHistoryIndex = -1
+                } else {
+                    $script:MiraHistoryIndex = -1
+                    $matchIndex = Find-GemHistoryMatch -Term $historySearchTerm -Start $script:MiraInputHistory.Count -Direction -1
+                    if ($matchIndex -ge 0) {
+                        $script:MiraHistoryIndex = $matchIndex
+                        $b = $script:MiraInputHistory[$matchIndex]
+                        $c = $b.Length
+                    } else {
+                        [Console]::Beep(700,60)
+                    }
+                }
+                $searchChanged = $true
+            } elseif (-not [Char]::IsControl($k.KeyChar) -and -not $ctrl -and -not $alt) {
+                $historySearchTerm += [string]$k.KeyChar
+                $script:MiraHistoryIndex = -1
+                $matchIndex = Find-GemHistoryMatch -Term $historySearchTerm -Start $script:MiraInputHistory.Count -Direction -1
+                if ($matchIndex -ge 0) {
+                    $script:MiraHistoryIndex = $matchIndex
+                    $b = $script:MiraInputHistory[$matchIndex]
+                    $c = $b.Length
+                } else {
+                    [Console]::Beep(700,60)
+                }
+                $searchChanged = $true
             } else {
                 [Console]::Beep(700,60)
+            }
+
+            if ($searchChanged) {
+                $directionLabel = if ($historySearchDirection -gt 0) { 'forward' } else { 'reverse' }
+                if (-not $historySearchDirection) { $directionLabel = 'reverse' }
+                $promptText = '(' + $directionLabel + '-i-search) ' + $historySearchTerm + ': '
+                $prompt = $promptText.Length
+                Redraw $old $b $c
             }
             continue
         }
 
-        # Ctrl+R / Ctrl+S repeat reverse/forward searches for the current text.
+        if ($ctrl -and ($k.Key -eq [ConsoleKey]::G)) {
+            [Console]::Beep(700,60)
+            continue
+        }
         if ($ctrl -and ($k.Key -eq [ConsoleKey]::R -or $k.Key -eq [ConsoleKey]::S)) {
-            if ($null -eq $historySearchTerm) {
-                $historySearchTerm = $b
-                $historySearchDraft = $b
-                if ([string]::IsNullOrWhiteSpace($historySearchTerm)) {
+            $historySearchDraft = $b
+            $historySearchTerm = $b
+            $historySearchDirection = if ($k.Key -eq [ConsoleKey]::R) { -1 } else { 1 }
+            $script:MiraHistoryIndex = -1
+            $directionLabel = if ($historySearchDirection -gt 0) { 'forward' } else { 'reverse' }
+            $promptText = '(' + $directionLabel + '-i-search) ' + $historySearchTerm + ': '
+            $prompt = $promptText.Length
+            if ($historySearchTerm.Length -gt 0) {
+                $startIndex = if ($historySearchDirection -lt 0) { $script:MiraInputHistory.Count } else { -1 }
+                $matchIndex = Find-GemHistoryMatch -Term $historySearchTerm -Start $startIndex -Direction $historySearchDirection
+                if ($matchIndex -ge 0) {
+                    $script:MiraHistoryIndex = $matchIndex
+                    $b = $script:MiraInputHistory[$matchIndex]
+                    $c = $b.Length
+                } else {
                     [Console]::Beep(700,60)
-                    $historySearchTerm = $null
-                    continue
                 }
             }
-            if ($k.Key -eq [ConsoleKey]::R) {
-                $startIndex = if ($script:MiraHistoryIndex -ge 0) { $script:MiraHistoryIndex } else { $script:MiraInputHistory.Count }
-                $matchIndex = Find-GemHistoryMatch -Term $historySearchTerm -Start $startIndex -Direction -1
-            } else {
-                $startIndex = if ($script:MiraHistoryIndex -ge 0) { $script:MiraHistoryIndex } else { -1 }
-                $matchIndex = Find-GemHistoryMatch -Term $historySearchTerm -Start $startIndex -Direction 1
-            }
-            if ($matchIndex -ge 0) {
-                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
-                $old = $b
-                $script:MiraHistoryIndex = $matchIndex
-                $b = $script:MiraInputHistory[$matchIndex]
-                $c = $b.Length
-                Redraw $old $b $c
-            } else {
-                [Console]::Beep(700,60)
-            }
+            Redraw $b $b $c
             continue
         }
 
