@@ -2274,7 +2274,19 @@ while ($true) {
                             try { $status = [int]$response.StatusCode } catch {}
                             try {
                                 $header = [string]$response.Headers['Retry-After']
-                                if ($header -match '^\d+
+                                [void][int]::TryParse($header,[ref]$retryAfter)
+                            } catch {}
+                        }
+                        $message = [string]$failure.Exception.Message
+                        $transient = ($status -eq 408 -or $status -eq 429 -or $status -eq 500 -or $status -eq 502 -or $status -eq 503 -or $status -eq 504) -or
+                            ($message -match '(?i)timeout|temporarily unavailable|connection reset|connection closed|name resolution')
+                        if (-not $transient -or $attempt -ge 3) { throw }
+                        if ($retryAfter -gt 0) { $delay = [Math]::Min(30,$retryAfter) }
+                        else { $delay = [Math]::Min(12,2 * [Math]::Pow(2,$attempt)) }
+                        Start-Sleep -Seconds ([int]$delay)
+                    }
+                }
+            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders)
             $asyncResult = $powershell.BeginInvoke()
 
             $cancelled = $false
