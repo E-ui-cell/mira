@@ -74,7 +74,9 @@ function Get-GemmaTtsCachePath {
     finally {
         $sha.Dispose()
     }
-    return (Join-Path $script:MiraTtsAudioDirectory ($key + '.wav'))
+    # 80-bit filename keeps paths readable; the full SHA-256 still determines the cache identity.
+    $fileKey = $key.Substring(0,20)
+    return (Join-Path $script:MiraTtsAudioDirectory ($fileKey + '.wav'))
 }
 
 function Invoke-GemmaPlayTtsWave {
