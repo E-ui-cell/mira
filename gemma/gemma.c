@@ -604,45 +604,34 @@ static char *oauth_post(const char*body) {
 static char *access_token(State*s) {
     char*r=readfile(s->token);
     if(!r) {
-        fprintf(stderr,"Not signed in. Run .auth login.\n");
+        fprintf(stderr,"Not signed in. Run .auth login.\\n");
         return NULL;
     }
     Doc d;
     jp(r,&d);
     int t=jget(r,&d,0,"token");
-    char*a=jval(r,&d,t,"access_token"),*rt=jval(r,&d,t,"refresh_token"),*ex=jval(r,&d,t,"expiry");
+    if(t<0)t=0; /* Accept both Antigravity's wrapped and flat token files. */
+    char*a=jval(r,&d,t,"access_token"),*rt=jval(r,&d,t,"refresh_token");
+    char*ex=jval(r,&d,t,"expiry");
+    if(!*ex) { free(ex); ex=jval(r,&d,t,"expiry_date"); }
+    if(!*ex) { free(ex); ex=jval(r,&d,t,"expires_at"); }
     if(*a&&expiry(ex)>(int64_t)time(NULL)+60) {
-        free(r);
-        free(rt);
-        free(ex);
-        free(d.v);
+        free(r); free(rt); free(ex); free(d.v);
         return a;
     }
     free(a);
     free(ex);
     if(!*rt||!*s->cid||!*s->secret) {
-        fprintf(stderr,"OAuth refresh needs AGY_GOOGLE_CLIENT_ID and AGY_GOOGLE_CLIENT_SECRET.\n");
-        free(r);
-        free(rt);
-        free(d.v);
+        fprintf(stderr,"OAuth access token is expired or missing. Refresh requires AGY_GOOGLE_CLIENT_ID and AGY_GOOGLE_CLIENT_SECRET; a refresh token alone is not sufficient.\\n");
+        free(r); free(rt); free(d.v);
         return NULL;
     }
-    const char*k[]= {
-        "refresh_token","client_id","client_secret","grant_type"
-    };
-    const char*v[]= {
-        rt,s->cid,s->secret,"refresh_token"
-    };
+    const char*k[]={"refresh_token","client_id","client_secret","grant_type"};
+    const char*v[]={rt,s->cid,s->secret,"refresh_token"};
     char*oldrt=ds(rt);
     char*f=form(k,v,4),*z=oauth_post(f);
-    free(f);
-    free(r);
-    free(rt);
-    free(d.v);
-    if(!z) {
-        free(oldrt);
-        return NULL;
-    }
+    free(f); free(r); free(rt); free(d.v);
+    if(!z) { free(oldrt); return NULL; }
     Doc q;
     jp(z,&q);
     a=jval(z,&q,0,"access_token");
@@ -650,38 +639,27 @@ static char *access_token(State*s) {
     int ttl=atoi(sec);
     if(ttl<1)ttl=3600;
     if(!*a) {
-        fprintf(stderr,"OAuth refresh returned no access token.\n");
-        free(z);
-        free(q.v);
-        free(a);
-        free(nr);
-        free(sec);
+        fprintf(stderr,"OAuth refresh returned no access token.\\n");
+        free(z); free(q.v); free(a); free(nr); free(sec);
         return NULL;
     }
-    if(!*nr) {
-        free(nr);
-        nr=ds(oldrt);
-    }
+    if(!*nr) { free(nr); nr=ds(oldrt); }
     free(oldrt);
     time_t et=time(NULL)+ttl;
     struct tm*tm=gmtime(&et);
     char ts[64];
     strftime(ts,sizeof ts,"%Y-%m-%dT%H:%M:%SZ",tm);
-    Buf b;
-    init(&b);
-    put(&b,"{\"auth_method\":\"consumer\",\"token\":{\"access_token\":");
-    quote(&b,a);
-    put(&b,",\"refresh_token\":");
-    quote(&b,nr);
-    put(&b,",\"token_type\":\"Bearer\",\"expiry\":");
-    quote(&b,ts);
-    put(&b,"}}");
-    if(!savefile(s->token,b.s))fprintf(stderr,"Warning: token refresh could not be saved.\n");
-    free(b.s);
-    free(z);
-    free(q.v);
-    free(nr);
-    free(sec);
+    Buf out;
+    init(&out);
+    put(&out,"{\\"auth_method\\":\\"consumer\\",\\"token\\":{\\"access_token\\":");
+    quote(&out,a);
+    put(&out,",\\"refresh_token\\":");
+    quote(&out,nr);
+    put(&out,",\\"token_type\\":\\"Bearer\\",\\"expiry\\":");
+    quote(&out,ts);
+    put(&out,"}}");
+    if(!savefile(s->token,out.s))fprintf(stderr,"Warning: token refresh could not be saved.\\n");
+    free(out.s); free(z); free(q.v); free(nr); free(sec);
     return a;
 }
 static char *agy(State*s,const char*method,const char*body) {
