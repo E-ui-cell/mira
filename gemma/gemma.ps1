@@ -607,7 +607,7 @@ function Invoke-GemmaSearchCommand {
         if (-not $script:GoogleSearchGrounding) {
             $state = 'OFF globally (no provider can use Google Search)'
         } elseif ($script:Provider -eq 'antigravity') {
-            $state = "ON globally; native googleSearch is sent to the selected Antigravity chat model"
+            $state = "ON; mandatory Search-only preflight with selected Antigravity model; no ungrounded fallback"
         } elseif (-not $script:AgenticWebSearchEnabled) {
             $state = 'ON globally; Gemini API web_search is disabled by MIRA_ENABLE_AGENTIC_WEB_SEARCH'
         } elseif (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
@@ -628,6 +628,171 @@ function Invoke-GemmaAntigravityRequest {
     $requestId = 'agent-' + [guid]::NewGuid().ToString('N')
     $envelope = @{ project = $project; requestId = $requestId; request = $Payload; model = $Model; userAgent = 'antigravity'; requestType = 'agent' }
     return Invoke-AntigravityPost -Method 'generateContent' -Body $envelope -AccessToken $token
+}
+
+
+function Invoke-GemmaAntigravityGoogleSearchPreflight {
+    if (-not $script:GoogleSearchGrounding) {
+        throw 'Antigravity chat requires Google Search grounding. Enable it with .grounding on; ungrounded Antigravity answers are disabled.'
+    }
+    if ($script:CommandMode) { return }
+    if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
+        throw 'Mandatory Google Search requires Antigravity OAuth. Run .auth login.'
+    }
+
+    # Keep follow-up searches connected to the recent conversation while sending
+    # only text to the Search-only request.
+    $contextLines = New-Object System.Collections.Generic.List[string]
+    $firstContextIndex = [Math]::Max(0, $Contents.Count - 12)
+    for ($i = $firstContextIndex; $i -lt $Contents.Count; $i++) {
+        $entry = $Contents[$i]
+        if ($null -eq $entry -or $entry.role -notin @('user','model')) { continue }
+        $entryTextParts = @(
+            @($entry.parts) |
+                Where-Object { $null -ne $_.text -and -not $_.thought } |
+                ForEach-Object { ([string]$_.text).Trim() } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+        if ($entryTextParts.Count -gt 0) {
+            $speaker = if ($entry.role -eq 'user') { 'USER' } else { 'ASSISTANT' }
+            [void]$contextLines.Add(($speaker + ': ' + [string]::Join([Environment]::NewLine, $entryTextParts)))
+        }
+    }
+    if ($contextLines.Count -eq 0) {
+        throw 'Mandatory Google Search could not find a text request to research.'
+    }
+
+    $searchContext = [string]::Join(([Environment]::NewLine + [Environment]::NewLine), $contextLines)
+    if ($searchContext.Length -gt 16000) {
+        $searchContext = $searchContext.Substring($searchContext.Length - 16000)
+    }
+
+    # This is an isolated native Google Search request using the SAME selected
+    # Antigravity model. It is not mixed with the local functionDeclarations.
+    $searchInstruction = 'You are the mandatory Google Search phase for the selected Antigravity model. You MUST use the built-in Google Search tool to research the latest user request, using prior conversation only to resolve references. Do not answer from memory. Search for current facts, verify dates, and return a concise factual research brief with exact publication/event dates and source-specific details. Do not invent sources. If Google Search cannot be used or produces no grounded results, return no fabricated substitute.'
+    $searchPayload = @{
+        systemInstruction = @{
+            role = 'user'
+            parts = @(@{ text = $searchInstruction })
+        }
+        contents = @(@{
+            role = 'user'
+            parts = @(@{ text = $searchContext })
+        })
+        tools = @(@{ googleSearch = @{} })
+        toolConfig = @{ includeServerSideToolInvocations = $true }
+    }
+
+    Write-Host ("[Mandatory Google Search: searching with selected model {0}...]" -f $script:MODEL) -ForegroundColor DarkCyan
+    $searchResponse = $null
+    $lastFailure = ''
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        try {
+            # Retry only the identical request on the identical model after a
+            # transient service error. Never switch models or skip Search.
+            $searchResponse = Invoke-GemmaAntigravityRequest -Payload $searchPayload -Model $script:MODEL
+            $lastFailure = ''
+            break
+        } catch {
+            $lastFailure = $_.Exception.Message
+            $status = 0
+            $body = ''
+            try {
+                $webResponse = $_.Exception.Response
+                if ($null -ne $webResponse) {
+                    $status = [int]$webResponse.StatusCode
+                    $stream = $webResponse.GetResponseStream()
+                    if ($null -ne $stream) {
+                        $reader = New-Object System.IO.StreamReader($stream)
+                        $body = $reader.ReadToEnd()
+                        $reader.Dispose()
+                        $stream.Dispose()
+                    }
+                }
+            } catch {}
+            if ($body) { $lastFailure += ' | Google response: ' + $body }
+
+            $transient = $status -in @(408,429,500,502,503,504)
+            if (-not $transient -or $attempt -ge 2) {
+                if ($status -gt 0) {
+                    throw "Mandatory Google Search failed for selected Antigravity model '$script:MODEL' (HTTP $status). No ungrounded answer was generated. $lastFailure"
+                }
+                throw "Mandatory Google Search failed for selected Antigravity model '$script:MODEL'. No ungrounded answer was generated. $lastFailure"
+            }
+            $delay = [int][Math]::Min(8,2 * [Math]::Pow(2,$attempt))
+            Write-Host ("[Google Search service error HTTP {0}; retrying the same model and Search request in {1}s]" -f $status,$delay) -ForegroundColor DarkYellow
+            Start-Sleep -Seconds $delay
+        }
+    }
+
+    if ($null -eq $searchResponse -or $null -eq $searchResponse.response) {
+        throw "Mandatory Google Search returned no response from selected model '$script:MODEL'. No ungrounded answer was generated. $lastFailure"
+    }
+    $result = $searchResponse.response
+    if ($null -eq $result.candidates -or $result.candidates.Count -eq 0) {
+        throw "Mandatory Google Search returned no candidates from selected model '$script:MODEL'. No ungrounded answer was generated."
+    }
+
+    $candidate = $result.candidates[0]
+    $metadata = $candidate.groundingMetadata
+    if ($null -eq $metadata -or (
+        @($metadata.webSearchQueries).Count -eq 0 -and
+        @($metadata.groundingChunks).Count -eq 0
+    )) {
+        throw "Selected Antigravity model '$script:MODEL' did not return Google Search grounding metadata. No ungrounded answer was generated."
+    }
+
+    $researchParts = @(
+        @($candidate.content.parts) |
+            Where-Object { $_.text -and -not $_.thought } |
+            ForEach-Object { ([string]$_.text).Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    $queryLines = @(
+        @($metadata.webSearchQueries) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+            ForEach-Object { '- ' + [string]$_ }
+    )
+    $sourceLines = New-Object System.Collections.Generic.List[string]
+    $seenSources = @{}
+    foreach ($chunk in @($metadata.groundingChunks)) {
+        if ($chunk.web -and $chunk.web.uri) {
+            $uri = [string]$chunk.web.uri
+            if (-not $seenSources.ContainsKey($uri)) {
+                $seenSources[$uri] = $true
+                $title = if ($chunk.web.title) { [string]$chunk.web.title } else { $uri }
+                [void]$sourceLines.Add(('- ' + $title + ' — ' + $uri))
+            }
+        }
+    }
+
+    $researchText = [string]::Join(([Environment]::NewLine + [Environment]::NewLine), $researchParts)
+    if ($queryLines.Count -gt 0) {
+        if ($researchText) { $researchText += [Environment]::NewLine + [Environment]::NewLine }
+        $researchText += 'Google Search queries:' + [Environment]::NewLine + [string]::Join([Environment]::NewLine, $queryLines)
+    }
+    if ($sourceLines.Count -gt 0) {
+        if ($researchText) { $researchText += [Environment]::NewLine + [Environment]::NewLine }
+        $researchText += 'Google Search sources:' + [Environment]::NewLine + [string]::Join([Environment]::NewLine, @($sourceLines))
+    }
+    if ([string]::IsNullOrWhiteSpace($researchText)) {
+        throw "Selected Antigravity model '$script:MODEL' returned grounding metadata but no readable research. No ungrounded answer was generated."
+    }
+    if ($researchText.Length -gt $MIRA_MAX_SEARCH_OUTPUT_CHARS) {
+        $researchText = $researchText.Substring(0,$MIRA_MAX_SEARCH_OUTPUT_CHARS) + [Environment]::NewLine + '[Grounded Search context truncated]'
+    }
+
+    # Add verified Search material to the current user message. The answer
+    # request consumes grounded context and does not receive googleSearch.
+    $currentUserTurn = $Contents[$Contents.Count - 1]
+    if ($null -eq $currentUserTurn -or $currentUserTurn.role -ne 'user') {
+        throw 'Mandatory Google Search could not attach results to the current user turn.'
+    }
+    $currentUserTurn.parts = @($currentUserTurn.parts) + @(@{
+        text = "Mandatory Google Search results from selected Antigravity model '$script:MODEL'. Use these grounded results as the factual basis of your answer. Preserve dates and uncertainty, cite supplied source URLs, and do not claim additional searches." + [Environment]::NewLine + [Environment]::NewLine + $researchText
+    })
+
+    Write-Host ("[Mandatory Google Search succeeded | model={0} | queries={1} | sources={2}]" -f $script:MODEL,$queryLines.Count,$sourceLines.Count) -ForegroundColor Green
 }
 
 
@@ -2000,8 +2165,8 @@ while ($true) {
     # The model may request this function when it needs the real local date/time.
     # Gemini does NOT execute it; this PowerShell wrapper does.
     # ===========================================================================
-    # Local tools are available to both providers. The custom web_search research
-    # function is Gemini-API-only; Antigravity receives native googleSearch on supported models.
+    # Local tools are available to both providers. Antigravity performs a mandatory
+    # Search-only preflight with its selected model; Gemini API alone receives web_search.
     $functionDeclarations = @(
         @{
             name = "get_current_datetime"
@@ -2058,9 +2223,14 @@ while ($true) {
     $turnStopwatch = [Diagnostics.Stopwatch]::StartNew()
     $turnPromptTokens = 0
     $turnCompletionTokens = 0
-    $nativeSearchFallbackUsed = $false
 
     try {
+        # Antigravity must complete native Search before answer generation.
+        # A Search failure aborts this turn; there is no ungrounded fallback.
+        if ($script:Provider -eq 'antigravity' -and -not $script:CommandMode) {
+            Invoke-GemmaAntigravityGoogleSearchPreflight
+        }
+
         while ($toolLoop) {
         $toolRounds++
         if ($toolRounds -gt $maxToolRounds) {
@@ -2072,21 +2242,6 @@ while ($true) {
             -Contents $Contents
 
         $usingAntigravityOAuth = ($script:Provider -eq 'antigravity')
-        $nativeSearchAdded = $false
-
-        if ($usingAntigravityOAuth -and $script:GoogleSearchGrounding -and -not $script:CommandMode -and -not $nativeSearchFallbackUsed) {
-            # Do not filter the user's selected Antigravity model through the
-            # separate research-agent model list. Send native Search to the
-            # selected model; if Google rejects it, retry normal chat below.
-            $existingTools = @()
-            if ($payloadObj.Contains('tools') -and $null -ne $payloadObj.tools) {
-                $existingTools = @($payloadObj.tools)
-            }
-            $payloadObj.tools = @($existingTools + @(@{ googleSearch = @{} }))
-            if ($null -eq $payloadObj.toolConfig) { $payloadObj.toolConfig = @{} }
-            $payloadObj.toolConfig.includeServerSideToolInvocations = $true
-            $nativeSearchAdded = $true
-        }
 
         if ($usingAntigravityOAuth) {
             $accessToken = Get-AntigravityAccessToken
@@ -2204,18 +2359,44 @@ while ($true) {
             Write-Host (" " * 40) -NoNewline
             Write-Host "`r" -NoNewline
 
-            $response = $powershell.EndInvoke($asyncResult)
-            $hasRunspaceError = $powershell.Streams.Error.Count -gt 0
+            $response = $null
+            $endInvokeFailure = $null
+            try {
+                $response = $powershell.EndInvoke($asyncResult)
+            } catch {
+                # EndInvoke throws on terminating HTTP errors before the error
+                # stream can be inspected. Preserve the original exception.
+                $endInvokeFailure = $_
+            }
+            $hasRunspaceError = ($null -ne $endInvokeFailure -or $powershell.Streams.Error.Count -gt 0)
             $runspaceErrors = @($powershell.Streams.Error)
 
             if ($hasRunspaceError) {
-                if ($usingAntigravityOAuth -and $nativeSearchAdded -and -not $nativeSearchFallbackUsed) {
-                    # A Search-side failure must not make normal Antigravity chat unusable.
-                    # Retry this same conversation once without the optional native tool.
-                    $nativeSearchFallbackUsed = $true
-                    $toolRounds = [Math]::Max(0,$toolRounds - 1)
-                    Write-Host "`n[Native Google Search failed for this request; retrying ordinary Antigravity chat without Search.]" -ForegroundColor DarkYellow
-                    continue
+                if ($null -ne $endInvokeFailure) {
+                    $responseException = $endInvokeFailure.Exception
+                    $responseObject = $responseException.Response
+                    if ($null -ne $responseObject) {
+                        $failureStatus = 0
+                        $failureBody = ''
+                        try {
+                            $failureStatus = [int]$responseObject.StatusCode
+                            $failureStream = $responseObject.GetResponseStream()
+                            if ($null -ne $failureStream) {
+                                $failureReader = New-Object System.IO.StreamReader($failureStream)
+                                $failureBody = $failureReader.ReadToEnd()
+                                $failureReader.Dispose()
+                                $failureStream.Dispose()
+                            }
+                        } catch {}
+                        if ($failureBody) {
+                            Write-Host ("[API Failure]: HTTP {0}" -f $failureStatus) -ForegroundColor Red
+                            Write-Host $failureBody -ForegroundColor Gray
+                        } else {
+                            Write-Host ("[API Failure]: HTTP {0} {1}" -f $failureStatus,$responseException.Message) -ForegroundColor Red
+                        }
+                        throw "Antigravity request failed with HTTP $failureStatus."
+                    }
+                    throw "HTTP/REST Error: $($responseException.Message)"
                 }
 
                 $err = $runspaceErrors[0]
