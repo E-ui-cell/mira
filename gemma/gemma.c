@@ -24,6 +24,7 @@
 #include <curl/curl.h>
 #ifdef _WIN32
 # include <windows.h>
+# include <conio.h>
 # include <shellapi.h>
 # include <bcrypt.h>
 # include <direct.h>
@@ -343,6 +344,22 @@ static char *http(const char*u,const char*m,const char*body,const char**headers,
     curl_easy_setopt(c,CURLOPT_CONNECTTIMEOUT,25L);
     curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,1L);
     curl_easy_setopt(c,CURLOPT_USERAGENT,"Gemma-C/1.0");
+    const char *ca=getenv("CURL_CA_BUNDLE");
+    if(!ca||!*ca)ca=getenv("SSL_CERT_FILE");
+#ifdef _WIN32
+    char capath[PATH_MAX];
+    if(!ca||!*ca) {
+        DWORD z=GetModuleFileNameA(NULL,capath,(DWORD)sizeof capath);
+        if(z>0&&z<sizeof capath) {
+            char *slash=strrchr(capath,'\\');
+            if(slash) {
+                strcpy(slash+1,"cacert.pem");
+                ca=capath;
+            }
+        }
+    }
+#endif
+    if(ca&&*ca)curl_easy_setopt(c,CURLOPT_CAINFO,ca);
     if(!strcmp(m,"POST")) {
         curl_easy_setopt(c,CURLOPT_POST,1L);
         curl_easy_setopt(c,CURLOPT_POSTFIELDS,body?body:"");
@@ -819,10 +836,33 @@ static void search_preflight(State*s,char**c) {
     if(!s->grounding)return;
     Buf p;
     init(&p);
-    put(&p,"{\"systemInstruction\":{\"role\":\"user\",\"parts\":[{\"text\":\"Research the request using built-in Google Search only. Return concise factual notes with dates, qualifications and sources. Do not call local tools.\"}]},\"contents\":");
+    put(&p,"{\"contents\":");
     put(&p,*c);
-    put(&p,",\"tools\":[{\"googleSearch\":{}}],\"toolConfig\":{\"includeServerSideToolInvocations\":true}}");
-    char*r=agygen(s,s->search,p.s);
+    put(&p,",\"tools\":[{\"googleSearch\":{}}]}");
+    char*r=NULL;
+    if(eq(s->provider,"antigravity")) {
+        Buf ag;
+        init(&ag);
+        put(&ag,"{\"systemInstruction\":{\"role\":\"user\",\"parts\":[{\"text\":\"Research the request using built-in Google Search only. Return concise factual notes with dates, qualifications and sources. Do not call local tools.\"}]},\"contents\":");
+        put(&ag,*c);
+        put(&ag,",\"tools\":[{\"googleSearch\":{}}],\"toolConfig\":{\"includeServerSideToolInvocations\":true}}");
+        r=agygen(s,s->search,ag.s);
+        free(ag.s);
+    } else if(eq(s->provider,"gemini")) {
+        if(!*s->api) {
+            fprintf(stderr,"[Search unavailable: set GEMINI_APIJ for Gemini Search grounding]\n");
+            free(p.s);
+            return;
+        }
+        char*m=escape(s->search);
+        Buf u;
+        init(&u);
+        fmt(&u,"%s/models/%s:generateContent?key=%s",API,m,s->api);
+        free(m);
+        const char*h[]={"Content-Type: application/json"};
+        r=http(u.s,"POST",p.s,h,1);
+        free(u.s);
+    }
     free(p.s);
     if(!r) {
         fprintf(stderr,"[Search unavailable; continuing without web verification]\n");
@@ -830,7 +870,9 @@ static void search_preflight(State*s,char**c) {
     }
     Doc d;
     jp(r,&d);
-    int response=jget(r,&d,0,"response"),ca=jget(r,&d,response,"candidates"),cand=ca>=0?ca+1:-1;
+    int root=0;
+    if(eq(s->provider,"antigravity"))root=jget(r,&d,0,"response");
+    int ca=jget(r,&d,root,"candidates"),cand=ca>=0?ca+1:-1;
     if(cand<0||cand>=d.n) {
         fprintf(stderr,"[Search returned no candidate]\n");
         free(d.v);
@@ -1470,6 +1512,46 @@ static int load_session(State*s,const char*requested) {
     return 1;
 }
 static void prompt(State*s,const char*p,int command);
+#ifdef _WIN32
+static int read_prompt_line(char *buf,size_t cap) {
+    static const char *commands[]={".help",".q",".quit",".exit",".clear",".multi",".model",".provider",".effort",".grounding",".ask",".autopilot",".verbose",".auth",".save",".exportsession",".loadsession"};
+    size_t n=0;
+    for(;;) {
+        int ch=_getch();
+        if(ch=='\r') { putchar('\n'); buf[n]=0; return 1; }
+        if(ch==3) { putchar('^'); putchar('C'); putchar('\n'); buf[0]=0; return 1; }
+        if(ch==8||ch==127) {
+            if(n) { n--; buf[n]=0; fputs("\b \b",stdout); }
+            continue;
+        }
+        if(ch=='\t') {
+            if(n==0||buf[0]=='.') {
+                int matches=0,which=-1;
+                for(size_t i=0;i<sizeof(commands)/sizeof(commands[0]);i++)
+                    if(strncmp(commands[i],buf,n)==0) { matches++; which=(int)i; }
+                if(matches==1) {
+                    const char *tail=commands[which]+n;
+                    while(*tail&&n+1<cap) { buf[n++]=*tail++; putchar(buf[n-1]); }
+                    buf[n]=0;
+                } else if(matches>1) {
+                    putchar('\n');
+                    for(size_t i=0;i<sizeof(commands)/sizeof(commands[0]);i++)
+                        if(strncmp(commands[i],buf,n)==0) printf("%s  ",commands[i]);
+                    printf("\n> %s",buf);
+                }
+            }
+            continue;
+        }
+        if(ch==0||ch==224) { (void)_getch(); continue; }
+        if(ch>=32&&n+1<cap) { buf[n++]=(char)ch; putchar(ch); }
+    }
+}
+#else
+static int read_prompt_line(char *buf,size_t cap) {
+    if(!fgets(buf,(int)cap,stdin))return 0;
+    return 1;
+}
+#endif
 static void multiline(State*s) {
     Buf b;
     init(&b);
@@ -1674,7 +1756,7 @@ int main(int argc,char**argv) {
     for(;;) {
         printf("\n> ");
         fflush(stdout);
-        if(!fgets(linebuf,sizeof linebuf,stdin))break;
+        if(!read_prompt_line(linebuf,sizeof linebuf))break;
         char*t=trim(linebuf);
         if(!*t)continue;
         if(*t=='.') {
