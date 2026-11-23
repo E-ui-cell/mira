@@ -635,38 +635,95 @@ function Invoke-GemmaAntigravityRequest {
 }
 
 
+function Test-GemmaSearchIntent {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    $request = $Text.Trim()
+
+    # Questions ABOUT the previous Search operation are conversation, not
+    # requests to search again. Likewise, explicit instructions not to search.
+    if ($request -match '(?i)^\s*(?:why|what|how)\b.{0,120}\b(?:search(?:ing|ed)?|google\s+search|grounding)\b') {
+        return $false
+    }
+    if ($request -match '(?i)\b(?:do\s+not|don''t|dont|stop|without|avoid|no\s+need\s+to)\b.{0,40}\b(?:search|browse|google)\b') {
+        return $false
+    }
+
+    # Weather has a dedicated quick_web tool; do not spend the native Search
+    # preflight on ordinary weather requests.
+    $explicitSearch = $request -match '(?i)\b(?:search(?:\s+for)?|google(?:\s+search)?|browse(?:\s+the\s+web)?|look\s+up|research|fact[- ]?check)\b'
+    if ($request -match '(?i)\bweather\b' -and -not $explicitSearch) { return $false }
+    if ($explicitSearch) { return $true }
+
+    # Freshness/current-events requests need native Google Search. Short
+    # conversational replies ("ok", "what?", "ll", etc.) do not.
+    $freshness = $request -match '(?i)\b(?:latest|current|currently|recent|recently|newest|breaking|live|right\s+now|today|tonight|this\s+(?:morning|afternoon|evening|week|month|year)|last\s+(?:(?:\d+|few|several)\s+)?(?:minutes?|hours?|days?|weeks?)|past\s+\d+\s+(?:minutes?|hours?|days?|weeks?)|up[- ]to[- ]date|as\s+of\s+now)\b'
+    if ($freshness -and $request -match '(?i)\b(?:what|who|when|where|how|show|get|give|list|tell|find|check|verify|compare|update|updates|status|price|version|rate|news|headline|headlines|happening)\b') {
+        return $true
+    }
+
+    # A request for news/headlines implies current reporting unless it clearly
+    # asks a general or historical question.
+    if ($request -match '(?i)\b(?:news|headlines|breaking\s+news)\b' -and
+        $request -match '(?i)\b(?:show|get|give|list|tell|find|check|latest|today|recent|current|updates?)\b') {
+        return $true
+    }
+
+    return $false
+}
+
 function Invoke-GemmaAntigravityGoogleSearchPreflight {
     if (-not $script:GoogleSearchGrounding) {
-        throw 'Antigravity chat requires Google Search grounding. Enable it with .grounding on; ungrounded Antigravity answers are disabled.'
+        throw 'This request needs Google Search, but grounding is OFF. Enable it with .grounding on or rephrase as a normal chat request.'
     }
     if ($script:CommandMode) { return }
     if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
-        throw 'Mandatory Google Search requires Antigravity OAuth. Run .auth login.'
+        throw 'This request needs Google Search, but Antigravity OAuth is not available. Run .auth login.'
     }
 
-    # Keep follow-up searches connected to the recent conversation while sending
-    # only text to the Search-only request.
-    $contextLines = New-Object System.Collections.Generic.List[string]
-    $firstContextIndex = [Math]::Max(0, $Contents.Count - 12)
-    for ($i = $firstContextIndex; $i -lt $Contents.Count; $i++) {
-        $entry = $Contents[$i]
-        if ($null -eq $entry -or $entry.role -notin @('user','model')) { continue }
-        $entryTextParts = @(
-            @($entry.parts) |
-                Where-Object { $null -ne $_.text -and -not $_.thought } |
-                ForEach-Object { ([string]$_.text).Trim() } |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-        )
-        if ($entryTextParts.Count -gt 0) {
-            $speaker = if ($entry.role -eq 'user') { 'USER' } else { 'ASSISTANT' }
-            [void]$contextLines.Add(($speaker + ': ' + [string]::Join([Environment]::NewLine, $entryTextParts)))
+    # Search only the current user request. Include earlier user prompts solely
+    # when the current request explicitly refers back to prior context. Never
+    # feed assistant-generated news summaries back as Search instructions.
+    if ($Contents.Count -eq 0) {
+        throw 'Google Search could not find the current user request.'
+    }
+    $currentUserTurn = $Contents[$Contents.Count - 1]
+    if ($null -eq $currentUserTurn -or $currentUserTurn.role -ne 'user') {
+        throw 'Google Search could not identify the current user request.'
+    }
+    $currentTextParts = @(
+        @($currentUserTurn.parts) |
+            Where-Object { $null -ne $_.text -and -not $_.thought } |
+            ForEach-Object { ([string]$_.text).Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    if ($currentTextParts.Count -eq 0) {
+        throw 'Google Search could not find text in the current user request.'
+    }
+    $searchContext = [string]::Join([Environment]::NewLine, $currentTextParts)
+    if ($searchContext -match '(?i)\b(?:that|those|these|it|there|same|previous|above|earlier)\b') {
+        $priorUserRequests = New-Object System.Collections.Generic.List[string]
+        for ($i = $Contents.Count - 2; $i -ge 0 -and $priorUserRequests.Count -lt 3; $i--) {
+            $entry = $Contents[$i]
+            if ($null -eq $entry -or $entry.role -ne 'user') { continue }
+            $priorParts = @(
+                @($entry.parts) |
+                    Where-Object { $null -ne $_.text -and -not $_.thought } |
+                    ForEach-Object { ([string]$_.text).Trim() } |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            )
+            if ($priorParts.Count -gt 0) {
+                $priorUserRequests.Insert(0,[string]::Join([Environment]::NewLine,$priorParts))
+            }
+        }
+        if ($priorUserRequests.Count -gt 0) {
+            $searchContext = 'Earlier user requests for reference only:' + [Environment]::NewLine +
+                [string]::Join(([Environment]::NewLine + [Environment]::NewLine),$priorUserRequests) +
+                [Environment]::NewLine + [Environment]::NewLine +
+                'Current request (the only request to research):' + [Environment]::NewLine + $searchContext
         }
     }
-    if ($contextLines.Count -eq 0) {
-        throw 'Mandatory Google Search could not find a text request to research.'
-    }
-
-    $searchContext = [string]::Join(([Environment]::NewLine + [Environment]::NewLine), $contextLines)
     if ($searchContext.Length -gt 16000) {
         $searchContext = $searchContext.Substring($searchContext.Length - 16000)
     }
@@ -2226,9 +2283,11 @@ while ($true) {
     $turnCompletionTokens = 0
 
     try {
-        # Antigravity must complete native Search before answer generation.
-        # A Search failure aborts this turn; there is no ungrounded fallback.
-        if ($script:Provider -eq 'antigravity' -and -not $script:CommandMode) {
+        # Native Search is conditional, not mandatory for ordinary conversation.
+        # Only an explicit/current-information request invokes the Search phase.
+        # Follow-up chat and simple requests go directly to the selected model.
+        if ($script:Provider -eq 'antigravity' -and -not $script:CommandMode -and
+            (Test-GemmaSearchIntent -Text $rawInput)) {
             Invoke-GemmaAntigravityGoogleSearchPreflight
         }
 
