@@ -12,6 +12,7 @@ $modules = @(
     (Join-Path $repoRoot 'gemma\agent\Conversation.ps1'),
     (Join-Path $repoRoot 'gemma\windows\Native.ps1'),
     (Join-Path $repoRoot 'gemma\ui\Output.ps1'),
+    (Join-Path $repoRoot 'gemma\agent\ChatLoop.ps1'),
     (Join-Path $repoRoot 'gemma\ui\LineEditor.ps1')
 )
 
@@ -24,6 +25,7 @@ foreach ($modulePath in $modules) {
 
 $requiredFunctions = @(
     'Get-GeminiModels',
+    'Start-GemmaChatLoop',
     'Get-AntigravityModels',
     'Invoke-GemmaAntigravityGoogleSearchPreflight',
     'Invoke-GemmaWebSearch',
