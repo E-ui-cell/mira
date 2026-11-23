@@ -545,7 +545,7 @@ static int64_t expiry(const char*s) {
     if(!s||!*s)return 0;
     char*e;
     long long n=strtoll(s,&e,10);
-    if(!*e)return n;
+    if(!*e) { if(n>1000000000000LL)n/=1000; return n; }
     struct tm t= {
         0
     };
@@ -604,7 +604,7 @@ static char *oauth_post(const char*body) {
 static char *access_token(State*s) {
     char*r=readfile(s->token);
     if(!r) {
-        fprintf(stderr,"Not signed in. Run .auth login.\\n");
+        fprintf(stderr,"Not signed in. Run .auth login.\n");
         return NULL;
     }
     Doc d;
@@ -622,7 +622,7 @@ static char *access_token(State*s) {
     free(a);
     free(ex);
     if(!*rt||!*s->cid||!*s->secret) {
-        fprintf(stderr,"OAuth access token is expired or missing. Refresh requires AGY_GOOGLE_CLIENT_ID and AGY_GOOGLE_CLIENT_SECRET; a refresh token alone is not sufficient.\\n");
+        fprintf(stderr,"OAuth access token is expired or missing. Refresh requires AGY_GOOGLE_CLIENT_ID and AGY_GOOGLE_CLIENT_SECRET; a refresh token alone is not sufficient.\n");
         free(r); free(rt); free(d.v);
         return NULL;
     }
@@ -639,7 +639,7 @@ static char *access_token(State*s) {
     int ttl=atoi(sec);
     if(ttl<1)ttl=3600;
     if(!*a) {
-        fprintf(stderr,"OAuth refresh returned no access token.\\n");
+        fprintf(stderr,"OAuth refresh returned no access token.\n");
         free(z); free(q.v); free(a); free(nr); free(sec);
         return NULL;
     }
@@ -658,7 +658,7 @@ static char *access_token(State*s) {
     put(&out,",\\"token_type\\":\\"Bearer\\",\\"expiry\\":");
     quote(&out,ts);
     put(&out,"}}");
-    if(!savefile(s->token,out.s))fprintf(stderr,"Warning: token refresh could not be saved.\\n");
+    if(!savefile(s->token,out.s))fprintf(stderr,"Warning: token refresh could not be saved.\n");
     free(out.s); free(z); free(q.v); free(nr); free(sec);
     return a;
 }
