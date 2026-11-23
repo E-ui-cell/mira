@@ -40,6 +40,42 @@ function Get-GemFiles([string]$p) {
     )
 }
 
+function Add-GemUndoSnapshot {
+    param([System.Collections.Generic.List[object]]$Stack,[string]$Buffer,[int]$Cursor)
+    [void]$Stack.Add(@{ Buffer = $Buffer; Cursor = $Cursor })
+    if ($Stack.Count -gt 100) { $Stack.RemoveAt(0) }
+}
+
+function Get-GemWordStart {
+    param([string]$Text,[int]$Position)
+    $i = [Math]::Min($Position,$Text.Length)
+    while ($i -gt 0 -and [char]::IsWhiteSpace($Text[$i - 1])) { --$i }
+    while ($i -gt 0 -and -not [char]::IsWhiteSpace($Text[$i - 1])) { --$i }
+    return $i
+}
+
+function Get-GemWordEnd {
+    param([string]$Text,[int]$Position)
+    $i = [Math]::Max(0,[Math]::Min($Position,$Text.Length))
+    while ($i -lt $Text.Length -and [char]::IsWhiteSpace($Text[$i])) { ++$i }
+    while ($i -lt $Text.Length -and -not [char]::IsWhiteSpace($Text[$i])) { ++$i }
+    return $i
+}
+
+function Find-GemHistoryMatch {
+    param([string]$Term,[int]$Start,[int]$Direction)
+    if ($Direction -lt 0) {
+        for ($i = [Math]::Min($Start - 1,$script:MiraInputHistory.Count - 1); $i -ge 0; $i--) {
+            if ($script:MiraInputHistory[$i].IndexOf($Term,[StringComparison]::OrdinalIgnoreCase) -ge 0) { return $i }
+        }
+    } else {
+        for ($i = [Math]::Max(0,$Start + 1); $i -lt $script:MiraInputHistory.Count; $i++) {
+            if ($script:MiraInputHistory[$i].IndexOf($Term,[StringComparison]::OrdinalIgnoreCase) -ge 0) { return $i }
+        }
+    }
+    return -1
+}
+
 function Read-GemLineConsole {
     $oldTreatControlCAsInput = [Console]::TreatControlCAsInput
     [Console]::TreatControlCAsInput = $true
