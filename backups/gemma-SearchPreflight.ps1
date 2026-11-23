@@ -6,6 +6,13 @@
 $Host.UI.RawUI.WindowTitle = "GEMMA CLI"
 
 # ==============================================================================
+# Resolve the real Windows profile explicitly; $HOME can be overridden by a host.
+$script:GemmaHome = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
+if ([string]::IsNullOrWhiteSpace($script:GemmaHome)) { $script:GemmaHome = [string]$env:USERPROFILE }
+if ([string]::IsNullOrWhiteSpace($script:GemmaHome)) { $script:GemmaHome = [string]$HOME }
+if ([string]::IsNullOrWhiteSpace($script:GemmaHome)) { throw 'Could not determine the current Windows user profile directory.' }
+$script:GemmaHome = [System.IO.Path]::GetFullPath($script:GemmaHome)
+
 # CONFIGURATION & PERSONA INJECTION
 # ==============================================================================
 $API_KEY = if (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API)) {
@@ -16,7 +23,7 @@ $API_KEY = if (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API)) {
     $null
 }
 
-if (-not $API_KEY -and -not (Test-Path -LiteralPath (Join-Path (Join-Path $HOME '.gemini\antigravity-cli') 'antigravity-oauth-token'))) {
+if (-not $API_KEY -and -not (Test-Path -LiteralPath (Join-Path (Join-Path $script:GemmaHome '.gemini\antigravity-cli') 'antigravity-oauth-token'))) {
     Write-Host "No Gemini API key or Antigravity OAuth token found. Run .auth login or set GEMINI_API." -ForegroundColor Yellow
 }
 
@@ -155,7 +162,7 @@ function Get-AntigravityClientCredentials {
 }
 
 function Get-AntigravityTokenPath {
-    return (Join-Path (Join-Path $HOME '.gemini\antigravity-cli') 'antigravity-oauth-token')
+    return [System.IO.Path]::Combine($script:GemmaHome, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
 }
 
 function ConvertTo-GemmaBase64Url {
@@ -171,42 +178,32 @@ function New-GemmaRandomString {
     return ConvertTo-GemmaBase64Url -Bytes $bytes
 }
 
-function Set-GemmaPrivateAcl {
-    param([string]$Path, [switch]$Directory)
-    if (-not (Test-Path -LiteralPath $Path)) { throw "Cannot secure missing path: $Path" }
-    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-    $sid = $identity.User
-    $acl = Get-Acl -LiteralPath $Path
-    $acl.SetAccessRuleProtection($true, $false)
-    foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleAll($rule) }
-    if ($Directory) {
-        $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, $inheritance, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
-    } else {
-        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)
-    }
-    [void]$acl.AddAccessRule($rule)
-    Set-Acl -LiteralPath $Path -AclObject $acl
-}
-
 function Save-AntigravityToken {
     param([hashtable]$TokenData)
     $path = Get-AntigravityTokenPath
     $directory = Split-Path -Parent $path
     if (-not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Path $directory -Force | Out-Null }
-    Set-GemmaPrivateAcl -Path $directory -Directory
     $json = $TokenData | ConvertTo-Json -Depth 8
     $temp = $path + '.tmp-' + [guid]::NewGuid().ToString('N')
-    [System.IO.File]::WriteAllText($temp, $json, (New-Object System.Text.UTF8Encoding($false)))
+    $backup = $null
+
     try {
+        [System.IO.File]::WriteAllText($temp, $json, (New-Object System.Text.UTF8Encoding($false)))
         if (Test-Path -LiteralPath $path) {
-            [System.IO.File]::Replace($temp, $path, $null)
+            # A real backup path is required by some Windows/.NET versions.
+            $backup = $path + '.bak-' + [guid]::NewGuid().ToString('N')
+            [System.IO.File]::Replace($temp, $path, $backup)
+            if (Test-Path -LiteralPath $backup) {
+                Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+            }
         } else {
             [System.IO.File]::Move($temp, $path)
         }
-        Set-GemmaPrivateAcl -Path $path
     } finally {
         if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+        if ($backup -and (Test-Path -LiteralPath $backup)) {
+            Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -371,19 +368,31 @@ function Get-AntigravityModels {
 
 function Invoke-GemmaAuthCommand {
     param([string]$Argument = '')
-    switch -Regex ($Argument.Trim().ToLowerInvariant()) {
-        '^login { try { Invoke-AntigravityLogin } catch { Write-Host "`n[OAuth login failed]: $($_.Exception.Message)" -ForegroundColor Red }; return }
-        '^logout { try { Invoke-AntigravityLogout } catch { Write-Host "`n[OAuth logout failed]: $($_.Exception.Message)" -ForegroundColor Red }; return }
-        '^status$|^ {
-            $path = Get-AntigravityTokenPath
-            if (Test-Path -LiteralPath $path) {
-                try { $data = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json; $email = if ($data.email) { [string]$data.email } else { '(account email not recorded)' }; Write-Host "`nGoogle Antigravity: signed in ($email)" -ForegroundColor Green; Write-Host "Token file: $path" -ForegroundColor DarkGray }
-                catch { Write-Host '[Saved token file exists but could not be read.]' -ForegroundColor Red }
-            } else { Write-Host "`nGoogle Antigravity: not signed in" -ForegroundColor Yellow; Write-Host 'Run .auth login to connect.' -ForegroundColor DarkGray }
-            return
-        }
-        default { Write-Host 'Usage: .auth login | .auth status | .auth logout' -ForegroundColor Yellow; return }
+    $action = $Argument.Trim().ToLowerInvariant()
+    if ($action -eq 'login') {
+        try { Invoke-AntigravityLogin } catch { Write-Host "`n[OAuth login failed]: $($_.Exception.Message)" -ForegroundColor Red }
+        return
     }
+    if ($action -eq 'logout') {
+        try { Invoke-AntigravityLogout } catch { Write-Host "`n[OAuth logout failed]: $($_.Exception.Message)" -ForegroundColor Red }
+        return
+    }
+    if ($action -eq 'status' -or [string]::IsNullOrWhiteSpace($action)) {
+        $path = Get-AntigravityTokenPath
+        if (Test-Path -LiteralPath $path) {
+            try {
+                $data = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+                $email = if ($data.email) { [string]$data.email } else { '(account email not recorded)' }
+                Write-Host "`nGoogle Antigravity: signed in ($email)" -ForegroundColor Green
+                Write-Host "Token file: $path" -ForegroundColor DarkGray
+            } catch { Write-Host '[Saved token file exists but could not be read.]' -ForegroundColor Red }
+        } else {
+            Write-Host "`nGoogle Antigravity: not signed in" -ForegroundColor Yellow
+            Write-Host 'Run .auth login to connect.' -ForegroundColor DarkGray
+        }
+        return
+    }
+    Write-Host 'Usage: .auth login | .auth status | .auth logout' -ForegroundColor Yellow
 }
 
 function Invoke-GemmaSearchCommand {
