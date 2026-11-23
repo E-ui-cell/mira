@@ -241,11 +241,13 @@ function Read-GemLineConsole {
             if ($k.Key -eq [ConsoleKey]::J -or $k.Key -eq [ConsoleKey]::DownArrow) {
                 $completionIndex = ($completionIndex + 1) % $completionCandidates.Count
                 Draw-GemCompletionMenu
+                Redraw $b $b $c
                 continue
             }
             if ($k.Key -eq [ConsoleKey]::K -or $k.Key -eq [ConsoleKey]::UpArrow) {
                 $completionIndex = ($completionIndex - 1 + $completionCandidates.Count) % $completionCandidates.Count
                 Draw-GemCompletionMenu
+                Redraw $b $b $c
                 continue
             }
             if ($k.Key -eq [ConsoleKey]::Escape) {
