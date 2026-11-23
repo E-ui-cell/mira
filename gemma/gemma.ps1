@@ -646,9 +646,6 @@ $script:MiraHistoryMax = $MIRA_MAX_HISTORY
 # TAB COMPLETION
 # ==============================================================================
 
-# PSReadLine is not the Mira input reader.
-# Mira owns the console input buffer through Read-GemLineFallback.
-$script:UsePSReadLine = $false
 
 $script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.model','.provider','.effort','.verbose','.auth','.grounding','.ask','.autopilot')
 
