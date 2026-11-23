@@ -10,7 +10,7 @@ param(
 # suffix before Gemma processes any remaining CLI arguments.
 . (Join-Path $PSScriptRoot 'config\Cli.ps1')
 $Prompt = Initialize-GemmaCliMode -Prompt $Prompt -ExplainCommand $ExplainCommand -RemainingArgs $RemainingArgs
-. (Join-Path $PSScriptRoot 'config\Defaults.ps1'))
+. (Join-Path $PSScriptRoot 'config\Defaults.ps1')
 
 . (Join-Path $PSScriptRoot 'providers\GeminiApi.ps1')
 . (Join-Path $PSScriptRoot 'providers\Antigravity.ps1')
