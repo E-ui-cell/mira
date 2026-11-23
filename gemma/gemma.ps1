@@ -60,12 +60,11 @@ $MIRA_STOP_SEQUENCES = $null                # e.g. @('END')
 
 # Runtime behavior
 $MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'; ASK prompt defaults to Yes
-$MIRA_DEFAULT_GROUNDING = $true              # Google Search enabled where available
-$MIRA_ENABLE_AGENTIC_WEB_SEARCH = $true       # Allow on-demand web_search for either answer provider via Antigravity OAuth
+$MIRA_DEFAULT_GROUNDING = $true              # Global master switch for all Google Search grounding
+$MIRA_ENABLE_AGENTIC_WEB_SEARCH = $false      # Allow Gemini API models to call web_search through Antigravity OAuth
 $MIRA_DEFAULT_VERBOSE = $false                # Show Gemini thought summaries only when enabled with .verbose
-# Both answer providers use the same on-demand web_search function.
-# Gemma executes it as a separate Antigravity OAuth Search-only request;
-# the answer request never mixes Google Search with functionDeclarations.
+# Antigravity answer models use native Google Search grounding in their own request.
+# Gemini Developer API models may call web_search, delegated through Antigravity OAuth.
 $MIRA_DEFAULT_CACHED_CONTENT = if ($env:MIRA_GEMINI_CACHED_CONTENT) { $env:MIRA_GEMINI_CACHED_CONTENT } else { $null }
 $MIRA_DEFAULT_SYSTEM_PROMPT = @"
 You Professional assistant. Speak short, precise, no nonsense.
@@ -595,23 +594,34 @@ function Invoke-GemmaSearchCommand {
     param([string]$Argument = '')
     $value = $Argument.Trim().ToLowerInvariant()
     if ($value -eq 'on') {
-        if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) { Write-Host '[Google Search requires Antigravity OAuth. Run .auth login first.]' -ForegroundColor Yellow; return }
-        if (-not $script:AgenticWebSearchEnabled) { Write-Host '[Google Search is disabled by MIRA_ENABLE_AGENTIC_WEB_SEARCH.]' -ForegroundColor Yellow; return }
         $script:GoogleSearchGrounding = $true
-        if (-not (Test-GemmaAntigravityNativeSearchSupport -Model $MIRA_SEARCH_MODEL)) {
-            Write-Host "[Google Search is unavailable: no Search-capable Antigravity model is advertised for this account. Chat remains enabled.]" -ForegroundColor Yellow
+        if ($script:Provider -eq 'antigravity') {
+            Write-Host '[Native Google Search grounding enabled for Antigravity models.]' -ForegroundColor Green
+        } elseif ($script:AgenticWebSearchEnabled) {
+            if (Test-Path -LiteralPath (Get-AntigravityTokenPath)) {
+                Write-Host "[Google Search enabled for Gemini API models via Antigravity OAuth (research model: $MIRA_SEARCH_MODEL).]" -ForegroundColor Green
+            } else {
+                Write-Host '[Grounding switch is ON, but Gemini API web search needs Antigravity OAuth. Run .auth login.]' -ForegroundColor Yellow
+            }
         } else {
-            Write-Host "[Google Search enabled. The answer model can call web_search; separate Search-only requests use '$MIRA_SEARCH_MODEL'.]" -ForegroundColor Green
+            Write-Host '[Grounding is ON globally; Gemini API web search remains disabled by MIRA_ENABLE_AGENTIC_WEB_SEARCH.]' -ForegroundColor Yellow
         }
     } elseif ($value -eq 'off') {
         $script:GoogleSearchGrounding = $false
-        Write-Host '[Google Search disabled.]' -ForegroundColor Yellow
+        Write-Host '[Google Search grounding disabled globally for both providers.]' -ForegroundColor Yellow
     } elseif ($value -eq 'status' -or -not $value) {
-        if (-not $script:GoogleSearchGrounding) { $state = 'OFF' }
-        elseif (-not $script:AgenticWebSearchEnabled) { $state = 'ON requested, but agentic web_search is disabled' }
-        elseif (Test-GemmaAntigravityNativeSearchSupport -Model $MIRA_SEARCH_MODEL) { $state = "ON (on-demand web_search via Antigravity OAuth; research model: $MIRA_SEARCH_MODEL)" }
-        else { $state = "REQUESTED, but no Search-capable Antigravity model is advertised; chat continues without Search" }
-        Write-Host "[Google Search: $state]" -ForegroundColor Cyan
+        if (-not $script:GoogleSearchGrounding) {
+            $state = 'OFF globally (no provider can use Google Search)'
+        } elseif ($script:Provider -eq 'antigravity') {
+            $state = "ON (native Google Search for Antigravity model '$script:MODEL')"
+        } elseif (-not $script:AgenticWebSearchEnabled) {
+            $state = 'ON globally; Gemini API web_search is disabled by MIRA_ENABLE_AGENTIC_WEB_SEARCH'
+        } elseif (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
+            $state = 'ON globally; Gemini API web_search needs Antigravity OAuth (.auth login)'
+        } else {
+            $state = "ON (Gemini API web_search via Antigravity OAuth; research model: $MIRA_SEARCH_MODEL)"
+        }
+        Write-Host "[Google Search grounding: $state]" -ForegroundColor Cyan
     } else { Write-Host 'Usage: .grounding on | .grounding off | .grounding status' -ForegroundColor Yellow }
 }
 
@@ -1996,9 +2006,9 @@ while ($true) {
     # The model may request this function when it needs the real local date/time.
     # Gemini does NOT execute it; this PowerShell wrapper does.
     # ===========================================================================
-    # Gemini Developer API gets the optional client-executed web_search function.
-    # Antigravity native Google Search is executed separately in a Search-only
-    # preflight; never mix googleSearch with functionDeclarations on v1internal.
+    # Local tools are available to both providers. Google Search is provider-specific:
+    # Antigravity gets native googleSearch in the same model request; Gemini API
+    # gets web_search only when enabled, delegated through Antigravity OAuth.
     $functionDeclarations = @(
         @{
             name = "get_current_datetime"
@@ -2021,23 +2031,26 @@ while ($true) {
             parameters = @{ type = "object"; properties = @{ skill = @{ type = "string"; description = "One of: file-management, windows-settings, desktop-gui, clipboard, system-inspection, quick-web-tools; or list." } }; required = @("skill") }
         }
     )
-    $canUseWebSearch = ($script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled -and (Test-Path -LiteralPath (Get-AntigravityTokenPath)))
-    if ($canUseWebSearch) {
-        $searchDescription = "Search the web using Google Search through the Antigravity OAuth research backend. Use for current information, recent events, verification, and source discovery. Return grounded findings with source URLs."
-        $functionDeclarations += @{
-            name = "web_search"
-            description = $searchDescription
-            parameters = @{ type = "object"; properties = @{ query = @{ type = "string"; description = "Focused search question or query. Include relevant names, dates, and context." } }; required = @("query") }
-        }
-    }
     $GeminiTools = @(@{ functionDeclarations = $functionDeclarations })
     $GeminiToolConfig = @{
         functionCallingConfig = @{
             mode = "AUTO"
         }
     }
-    # web_search is a client-executed function; its separate Search-only request
-    # carries Google's built-in googleSearch tool.
+    if ($script:Provider -eq 'antigravity' -and $script:GoogleSearchGrounding) {
+        # Native Search is a separate Tool entry beside local function tools.
+        # The selected Antigravity answer model performs the search itself.
+        $GeminiTools += @{ googleSearch = @{} }
+        $GeminiToolConfig.includeServerSideToolInvocations = $true
+    } elseif ($script:Provider -eq 'gemini' -and $script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled -and (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
+        $searchDescription = "Search the web using Google Search through Antigravity OAuth. Use for current information, recent events, verification, and source discovery. Return grounded findings with source URLs."
+        $functionDeclarations += @{
+            name = "web_search"
+            description = $searchDescription
+            parameters = @{ type = "object"; properties = @{ query = @{ type = "string"; description = "Focused search question or query. Include relevant names, dates, and context." } }; required = @("query") }
+        }
+        $GeminiTools[0].functionDeclarations = $functionDeclarations
+    }
     if ($script:CommandMode) {
         $GeminiTools = $null
         $GeminiToolConfig = $null
@@ -2304,9 +2317,12 @@ while ($true) {
                             }
                         }
                         "web_search" {
-                            $searchAllowed = ($script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled -and (Test-Path -LiteralPath (Get-AntigravityTokenPath)))
-                            if (-not $searchAllowed) {
-                                $toolResult = @{ error = "Google Search is disabled or unavailable for the current provider/settings." }
+                            if (-not $script:GoogleSearchGrounding) {
+                                $toolResult = @{ error = "Google Search grounding is globally disabled by .grounding off. Do not search or claim current information was verified." }
+                            } elseif ($script:Provider -ne 'gemini' -or -not $script:AgenticWebSearchEnabled) {
+                                $toolResult = @{ error = "Agentic web_search is disabled for this provider/settings. Antigravity models use native Google Search; Gemini API requires the agentic search setting to be enabled." }
+                            } elseif (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
+                                $toolResult = @{ error = "Gemini API web_search requires Antigravity OAuth. Run .auth login." }
                             } else {
                                 try {
                                     $toolResult = Invoke-GemmaWebSearch -Query ([string]$call.args.query)
@@ -2367,6 +2383,24 @@ while ($true) {
                     }
             )
             $reply = Normalize-MiraReply ($replyTextParts -join "`n")
+            # Display native Antigravity grounding sources from this same answer.
+            if ($usingAntigravityOAuth -and $script:GoogleSearchGrounding -and $response.candidates[0].groundingMetadata) {
+                $nativeSources = New-Object System.Collections.Generic.List[string]
+                $seenNativeUris = @{}
+                foreach ($chunk in @($response.candidates[0].groundingMetadata.groundingChunks)) {
+                    if ($chunk.web -and $chunk.web.uri) {
+                        $sourceUri = [string]$chunk.web.uri
+                        if (-not $seenNativeUris.ContainsKey($sourceUri)) {
+                            $seenNativeUris[$sourceUri] = $true
+                            $sourceTitle = if ($chunk.web.title) { [string]$chunk.web.title } else { $sourceUri }
+                            [void]$nativeSources.Add(('- ' + $sourceTitle + ' — ' + $sourceUri))
+                        }
+                    }
+                }
+                if ($nativeSources.Count -gt 0) {
+                    $reply += "`n`nGoogle Search sources:`n" + [string]::Join("`n",$nativeSources)
+                }
+            }
             if ($script:CommandMode) { $reply = [regex]::Replace($reply.Trim(),'(?s)^```[a-zA-Z0-9_-]*\s*|\s*```$','').Trim() }
 
             try {
