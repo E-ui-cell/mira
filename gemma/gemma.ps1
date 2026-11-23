@@ -441,7 +441,21 @@ function Invoke-AntigravityPost {
     param([string]$Method, [hashtable]$Body, [string]$AccessToken)
     $url = 'https://daily-cloudcode-pa.googleapis.com/v1internal:' + $Method
     $headers = Get-AntigravityHeaders -AccessToken $AccessToken
-    return Invoke-RestMethod -Uri $url -Method Post -Headers $headers -ContentType 'application/json' -Body ($Body | ConvertTo-Json -Depth 30) -ErrorAction Stop
+    $requestParameters = @{
+        Uri = $url
+        Method = 'Post'
+        Headers = $headers
+        ContentType = 'application/json'
+        Body = ($Body | ConvertTo-Json -Depth 30)
+        ErrorAction = 'Stop'
+    }
+    # Antigravity deliberately uses a non-standard User-Agent. PowerShell 7
+    # validates it with HttpClient; PowerShell 5.1 accepts it unchanged.
+    $irmCommand = Get-Command Invoke-RestMethod
+    if ($irmCommand.Parameters.ContainsKey('SkipHeaderValidation')) {
+        $requestParameters.SkipHeaderValidation = $true
+    }
+    return Invoke-RestMethod @requestParameters
 }
 
 function Get-AntigravityProject {
@@ -2340,7 +2354,20 @@ while ($true) {
                 # Retry transient HTTP failures without changing the serialized request.
                 for ($attempt = 0; $attempt -lt 4; $attempt++) {
                     try {
-                        return Invoke-RestMethod -Uri $u -Method Post -Headers $h -ContentType "application/json; charset=utf-8" -Body $b -ErrorAction Stop
+                        $requestParameters = @{
+                            Uri = $u
+                            Method = 'Post'
+                            Headers = $h
+                            ContentType = "application/json; charset=utf-8"
+                            Body = $b
+                            ErrorAction = 'Stop'
+                        }
+                        # Preserve the Antigravity client header verbatim on PowerShell 7.
+                        $irmCommand = Get-Command Invoke-RestMethod
+                        if ($h.ContainsKey('User-Agent') -and $irmCommand.Parameters.ContainsKey('SkipHeaderValidation')) {
+                            $requestParameters.SkipHeaderValidation = $true
+                        }
+                        return Invoke-RestMethod @requestParameters
                     } catch {
                         $failure = $_
                         $response = $failure.Exception.Response
