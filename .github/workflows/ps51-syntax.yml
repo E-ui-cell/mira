@@ -18,3 +18,7 @@ jobs:
       - name: Parse gemma.ps1 with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\gemma.ps1
+
+      - name: Parse SearchPreflight backup with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\backups\gemma-SearchPreflight.ps1
