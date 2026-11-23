@@ -651,11 +651,11 @@ static char *access_token(State*s) {
     strftime(ts,sizeof ts,"%Y-%m-%dT%H:%M:%SZ",tm);
     Buf out;
     init(&out);
-    put(&out,"{\\"auth_method\\":\\"consumer\\",\\"token\\":{\\"access_token\\":");
+    put(&out,"{\"auth_method\":\"consumer\",\"token\":{\"access_token\":");
     quote(&out,a);
-    put(&out,",\\"refresh_token\\":");
+    put(&out,",\"refresh_token\":");
     quote(&out,nr);
-    put(&out,",\\"token_type\\":\\"Bearer\\",\\"expiry\\":");
+    put(&out,",\"token_type\":\"Bearer\",\"expiry\":");
     quote(&out,ts);
     put(&out,"}}");
     if(!savefile(s->token,out.s))fprintf(stderr,"Warning: token refresh could not be saved.\n");
