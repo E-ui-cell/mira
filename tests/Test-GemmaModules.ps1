@@ -2,6 +2,7 @@
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $modules = @(
+    (Join-Path $repoRoot 'gemma\config\Defaults.ps1'),
     (Join-Path $repoRoot 'gemma\providers\GeminiApi.ps1'),
     (Join-Path $repoRoot 'gemma\providers\Antigravity.ps1'),
     (Join-Path $repoRoot 'gemma\ui\ModelPicker.ps1'),
@@ -49,6 +50,13 @@ $requiredFunctions = @(
     'Find-GemHistoryMatch',
     'Get-GemHistorySearchPrompt'
 )
+
+if ($MIRA_DEFAULT_PROVIDER -notin @('antigravity','gemini')) {
+    throw 'Gemma defaults did not initialize a supported provider.'
+}
+if ([string]::IsNullOrWhiteSpace($MIRA_DEFAULT_MODEL)) {
+    throw 'Gemma defaults did not initialize the selected model.'
+}
 
 foreach ($functionName in $requiredFunctions) {
     $command = Get-Command -Name $functionName -CommandType Function -ErrorAction SilentlyContinue
