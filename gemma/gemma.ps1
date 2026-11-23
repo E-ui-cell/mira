@@ -725,7 +725,6 @@ function Invoke-GemmaAntigravityGoogleSearchPreflight {
                 throw "Mandatory Google Search failed for selected Antigravity model '$script:MODEL'. No ungrounded answer was generated. $lastFailure"
             }
             $delay = [int][Math]::Min(8,2 * [Math]::Pow(2,$attempt))
-            Write-Host ("[Google Search service error HTTP {0}; retrying the same model and Search request in {1}s]" -f $status,$delay) -ForegroundColor DarkYellow
             Start-Sleep -Seconds $delay
         }
     }
