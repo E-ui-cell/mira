@@ -1,7 +1,19 @@
 # WINDOWS POWERSHELL 5.1
 # ==============================================================================
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+# Keep Windows PowerShell 5.1's existing console behavior. PowerShell 7 can
+# inherit a legacy Windows console code page (for example CP1251), which
+# renders UTF-8 box-drawing characters as mojibake. Align the console and
+# native-pipeline encodings on UTF-8 before any UI is written.
+if ($PSVersionTable.PSVersion.Major -ge 7 -and $env:OS -eq 'Windows_NT') {
+    try { & "$env:SystemRoot\System32\chcp.com" 65001 > $null } catch {}
+    $MiraUtf8 = [System.Text.UTF8Encoding]::new($false)
+    try { [Console]::InputEncoding = $MiraUtf8 } catch {}
+    try { [Console]::OutputEncoding = $MiraUtf8 } catch {}
+    $OutputEncoding = $MiraUtf8
+} else {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+}
 
 # ==============================================================================
 # CONFIGURATION & PERSONA INJECTION
