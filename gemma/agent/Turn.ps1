@@ -332,6 +332,7 @@
             )
             $reply = Normalize-MiraReply ($replyTextParts -join "`n")
             if ($script:CommandMode) { $reply = [regex]::Replace($reply.Trim(),'(?s)^```[a-zA-Z0-9_-]*\s*|\s*```$','').Trim() }
+            $script:LastAssistantReply = $reply
 
             try {
                 $width = [Console]::WindowWidth
