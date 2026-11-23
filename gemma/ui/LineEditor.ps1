@@ -1,0 +1,374 @@
+function Get-GemCommands([string]$p) {
+    @(
+        Get-Command -CommandType Cmdlet,Function,Alias,Filter,ExternalScript,Application `
+            -ErrorAction SilentlyContinue |
+        Sort-Object Name -Unique |
+        Where-Object { $_.Name.StartsWith($p,[StringComparison]::OrdinalIgnoreCase) } |
+        Select-Object -ExpandProperty Name
+    )
+}
+
+function Get-GemFiles([string]$p) {
+    # No filename after ".file " means: do NOT run completion.
+    # Press Enter instead and the normal .file command opens the file dialog.
+    if ([String]::IsNullOrWhiteSpace($p)) {
+        return @()
+    }
+
+    $q = if ($p.StartsWith('"') -or $p.StartsWith("'")) { $p[0] } else { '' }
+    $x = if ($q) { $p.Substring(1) } else { $p }
+    if ([String]::IsNullOrWhiteSpace($x)) {
+        return @()
+    }
+
+    if ($x.StartsWith('~')) { $x = $env:USERPROFILE + $x.Substring(1) }
+
+    try {
+        $dir = [IO.Path]::GetDirectoryName($x)
+        $leaf = [IO.Path]::GetFileName($x)
+    }
+    catch {
+        return @()
+    }
+
+    if ([String]::IsNullOrEmpty($dir)) { $dir = (Get-Location).Path }
+
+    @(
+        Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name.StartsWith($leaf,[StringComparison]::OrdinalIgnoreCase) } |
+        Sort-Object Name
+    )
+}
+
+function Read-GemLineConsole {
+    $oldTreatControlCAsInput = [Console]::TreatControlCAsInput
+    [Console]::TreatControlCAsInput = $true
+
+    $b = ''; $c = 0; $prompt = 2
+    $row = [Console]::CursorTop
+    [Console]::Write('> ')
+
+    $renderedRows = 1
+    function Redraw($old,$new,$pos) {
+        $w = [Math]::Max(12,[Console]::WindowWidth)
+        $usable = $w - 1
+        $lines = @(([string]$new) -split [string][char]10,-1)
+        $rowOffsets = New-Object 'System.Collections.Generic.List[int]'
+        $totalRows = 0
+
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $rowOffsets.Add($totalRows)
+            $startColumn = if ($i -eq 0) { $prompt } else { 0 }
+            $firstCapacity = [Math]::Max(1,$usable - $startColumn)
+            $length = ([string]$lines[$i]).Length
+            $rowsForLine = if ($length -le $firstCapacity) { 1 } else { 1 + [int][Math]::Ceiling(($length - $firstCapacity) / [double]$usable) }
+            $totalRows += $rowsForLine
+        }
+
+        # Clear the previous and new physical rows, including wrapped long lines.
+        $clearRows = [Math]::Max($renderedRows,$totalRows)
+        for ($i = 0; $i -lt $clearRows; $i++) {
+            $targetRow = $row + $i
+            if ($targetRow -ge [Console]::BufferHeight) { break }
+            [Console]::SetCursorPosition(0,$targetRow)
+            [Console]::Write((' ' * $usable))
+        }
+
+        # Draw bounded chunks rather than relying on implicit console wrapping.
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $value = [string]$lines[$i]
+            $startColumn = if ($i -eq 0) { $prompt } else { 0 }
+            $firstCapacity = [Math]::Max(1,$usable - $startColumn)
+            $offset = 0
+            $physicalRow = $row + $rowOffsets[$i]
+            if ($i -eq 0 -and $physicalRow -lt [Console]::BufferHeight) {
+                [Console]::SetCursorPosition(0,$physicalRow)
+                [Console]::Write('> ')
+            }
+            while ($offset -lt $value.Length) {
+                $column = if ($offset -eq 0) { $startColumn } else { 0 }
+                $capacity = if ($offset -eq 0) { $firstCapacity } else { $usable }
+                $count = [Math]::Min($capacity,$value.Length - $offset)
+                if ($physicalRow -lt [Console]::BufferHeight) {
+                    [Console]::SetCursorPosition($column,$physicalRow)
+                    [Console]::Write($value.Substring($offset,$count))
+                }
+                $offset += $count
+                if ($offset -lt $value.Length) { ++$physicalRow }
+            }
+        }
+
+        $lineIndex = 0
+        $column = 0
+        if ($pos -gt 0) {
+            $prefix = ([string]$new).Substring(0,[Math]::Min($pos,([string]$new).Length))
+            $lineIndex = ([regex]::Matches($prefix,[string][char]10)).Count
+            $lastBreak = $prefix.LastIndexOf([char]10)
+            $column = if ($lastBreak -ge 0) { $prefix.Length - $lastBreak - 1 } else { $prefix.Length }
+        }
+        $startColumn = if ($lineIndex -eq 0) { $prompt } else { 0 }
+        $firstCapacity = [Math]::Max(1,$usable - $startColumn)
+        if ($column -lt $firstCapacity) {
+            $cursorRowOffset = 0
+            $cursorColumn = $startColumn + $column
+        } else {
+            $afterFirst = $column - $firstCapacity
+            $cursorRowOffset = 1 + [int][Math]::Floor($afterFirst / [double]$usable)
+            $cursorColumn = $afterFirst % $usable
+        }
+        $cursorRow = [Math]::Min($row + $rowOffsets[$lineIndex] + $cursorRowOffset,[Console]::BufferHeight - 1)
+        [Console]::SetCursorPosition([Math]::Min($cursorColumn,$usable - 1),$cursorRow)
+        $renderedRows = [Math]::Max(1,$totalRows)
+    }
+    function ShowChoices($choices,$current) {
+        [Console]::SetCursorPosition(0,[Console]::CursorTop)
+        [Console]::Write("`r`n" + ($choices -join '  ') + "`r`n> ")
+        $script:dummy = $null
+    }
+
+    while ($true) {
+        $k = [Console]::ReadKey($true)
+
+        if ($k.Key -eq [ConsoleKey]::C -and
+            (($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
+            $b = ''
+            $c = 0
+            [Console]::SetCursorPosition($prompt, $row)
+            [Console]::Write((' ' * ([Math]::Max(10, [Console]::WindowWidth - $prompt - 1))))
+            [Console]::SetCursorPosition($prompt, $row)
+            continue
+        }
+
+        if (($k.Key -eq [ConsoleKey]::J -or $k.KeyChar -eq [char]10) -and
+            (($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
+            $old = $b
+            $b = $b.Insert($c,[string][char]10)
+            ++$c
+            Redraw $old $b $c
+            continue
+        }
+
+        if ($k.Key -eq [ConsoleKey]::Enter) {
+            [Console]::Write("`r`n")
+            [Console]::TreatControlCAsInput = $oldTreatControlCAsInput
+            return $b
+        }
+
+        if ($k.Key -eq [ConsoleKey]::Backspace) {
+            if ($c -gt 0) {
+                $old = $b
+                $b = $b.Remove($c-1,1)
+                --$c
+                Redraw $old $b $c
+            }
+            continue
+        }
+
+        if ($k.Key -eq [ConsoleKey]::Delete) {
+            if ($c -lt $b.Length) {
+                $old = $b
+                $b = $b.Remove($c,1)
+                Redraw $old $b $c
+            }
+            continue
+        }
+
+        if ($k.Key -eq [ConsoleKey]::LeftArrow) {
+            if ($c -gt 0) { --$c; Redraw $b $b $c }
+            continue
+        }
+
+        if ($k.Key -eq [ConsoleKey]::RightArrow) {
+            if ($c -lt $b.Length) { ++$c; Redraw $b $b $c }
+            continue
+        }
+
+        if ($k.Key -eq [ConsoleKey]::Home) {
+            $c = 0; Redraw $b $b $c; continue
+        }
+
+        if ($k.Key -eq [ConsoleKey]::End) {
+            $c = $b.Length; Redraw $b $b $c; continue
+        }
+        # MIRA INPUT HISTORY - fallback Up/Down
+        if ($k.Key -eq [ConsoleKey]::UpArrow) {
+            if ($script:MiraInputHistory.Count -eq 0) {
+                [Console]::Beep(700,60)
+                continue
+            }
+
+            if ($script:MiraHistoryIndex -eq -1) {
+                $script:MiraHistoryDraft = $b
+                $script:MiraHistoryIndex = $script:MiraInputHistory.Count - 1
+            }
+            elseif ($script:MiraHistoryIndex -gt 0) {
+                --$script:MiraHistoryIndex
+            }
+
+            $old = $b
+            $b = $script:MiraInputHistory[$script:MiraHistoryIndex]
+            $c = $b.Length
+            Redraw $old $b $c
+            continue
+        }
+
+        if ($k.Key -eq [ConsoleKey]::DownArrow) {
+            if ($script:MiraHistoryIndex -eq -1) {
+                [Console]::Beep(700,60)
+                continue
+            }
+
+            if ($script:MiraHistoryIndex -lt ($script:MiraInputHistory.Count - 1)) {
+                ++$script:MiraHistoryIndex
+                $old = $b
+                $b = $script:MiraInputHistory[$script:MiraHistoryIndex]
+                $c = $b.Length
+                Redraw $old $b $c
+            }
+            else {
+                $old = $b
+                $b = $script:MiraHistoryDraft
+                $c = $b.Length
+                $script:MiraHistoryIndex = -1
+                Redraw $old $b $c
+            }
+            continue
+        }
+
+        if ($k.Key -eq [ConsoleKey]::Tab) {
+            if ($c -ne $b.Length) { continue }
+
+            # !<TAB> / !get-<TAB>
+            if ($b -match '^!(.*)$') {
+                $p = $matches[1]
+                $m = @(Get-GemCommands $p)
+                if ($m.Count -eq 1) {
+                    $old=$b; $b='!'+$m[0]; $c=$b.Length; Redraw $old $b $c
+                } elseif ($m.Count -gt 1) {
+                    [Console]::Write("`r`n" + ($m -join '  ') + "`r`n>  ")
+                    $row=[Console]::CursorTop; Redraw '' $b $c
+                } else { [Console]::Beep(700,60) }
+                continue
+            }
+
+            # .<TAB> / .f<TAB> / .file<TAB>
+            if ($b -match '^\.[^\s]*$') {
+                $m = @($script:GemCommands | Where-Object {
+                    $_.StartsWith($b,[StringComparison]::OrdinalIgnoreCase)
+                })
+                if ($m.Count -eq 1) {
+                    $old=$b; $b=$m[0]; $c=$b.Length; Redraw $old $b $c
+                } elseif ($m.Count -gt 1) {
+                    [Console]::Write("`r`n" + ($m -join '  ') + "`r`nYou: ")
+                    $row=[Console]::CursorTop; Redraw '' $b $c
+                } else { [Console]::Beep(700,60) }
+                continue
+            }
+
+            if ($b -match '^\.provider\s+(\S*)$') {
+                $m = @('antigravity','gemini' | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })
+                if ($m.Count -eq 1) { $old=$b; $b='.provider '+$m[0]; $c=$b.Length; Redraw $old $b $c }
+                elseif ($m.Count -gt 1) { [Console]::Write("`r`n"+($m -join '  ')+ "`r`nYou: "); $row=[Console]::CursorTop; Redraw '' $b $c }
+                else { [Console]::Beep(700,60) }
+                continue
+            }
+            if ($b -match '^\.(?:grounding|auth|effort)\s+(\S*)$') {
+                $options = if ($b.StartsWith('.grounding')) { @('on','off','status') } elseif ($b.StartsWith('.effort')) { @('low','medium','high') } else { @('login','status','logout') }
+                $m = @($options | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })
+                if ($m.Count -eq 1) { $head = if ($b.StartsWith('.grounding')) { '.grounding ' } elseif ($b.StartsWith('.effort')) { '.effort ' } else { '.auth ' }; $old=$b; $b=$head+$m[0]; $c=$b.Length; Redraw $old $b $c }
+                elseif ($m.Count -gt 1) { [Console]::Write("`r`n"+($m -join '  ')+ "`r`nYou: "); $row=[Console]::CursorTop; Redraw '' $b $c }
+                else { [Console]::Beep(700,60) }
+                continue
+            }
+
+            # .file <TAB> / .text <TAB> / session filename <TAB>
+            if ($b -match '^(\.(?:file|text|exportsession|loadsession))(\s+)(.*)$') {
+                $head = $matches[1] + $matches[2]
+                $typed = $matches[3]
+                $items = @(Get-GemFiles $typed)
+
+                if ($items.Count -eq 1) {
+                    $clean=$typed.Trim('"').Trim("'")
+                    if ([String]::IsNullOrEmpty($clean)) {
+                        $path=$items[0].Name
+                    } else {
+                        $dir=[IO.Path]::GetDirectoryName($clean)
+                        if ([String]::IsNullOrEmpty($dir)) { $path=$items[0].Name }
+                        elseif ($dir.EndsWith('\') -or $dir.EndsWith('/')) { $path=$dir+$items[0].Name }
+                        else { $path=$dir+'\'+$items[0].Name }
+                    }
+                    if ($typed.StartsWith('"') -or $typed.StartsWith("'")) { $path=$typed[0]+$path+$typed[0] }
+                    if ($items[0].PSIsContainer) { $path+='\' }
+                    $old=$b; $b=$head+$path; $c=$b.Length; Redraw $old $b $c
+                } elseif ($items.Count -gt 1) {
+                    $show=@($items | ForEach-Object { if($_.PSIsContainer){$_.Name+'\'}else{$_.Name} })
+                    [Console]::Write("`r`n"+($show -join '  ')+"`r`nYou: ")
+                    $row=[Console]::CursorTop; Redraw '' $b $c
+                } else { [Console]::Beep(700,60) }
+                continue
+            }
+
+            continue
+        }
+
+if (-not [Char]::IsControl($k.KeyChar)) {
+    $old = $b
+
+    if ($c -eq $b.Length) {
+        $b += $k.KeyChar
+    }
+    else {
+        $b = $b.Insert($c,[string]$k.KeyChar)
+    }
+    ++$c
+
+    # Drain a burst of pasted characters before redrawing.
+    while ([Console]::KeyAvailable) {
+        $pk = [Console]::ReadKey($true)
+
+        # A multiline paste is delivered as Enter/CR/LF control characters.
+        # Preserve those as text line breaks; Enter typed after the paste burst
+        # is handled by the outer input loop as submit.
+        if ($pk.Key -eq [ConsoleKey]::Enter -or $pk.KeyChar -eq [char]13 -or $pk.KeyChar -eq [char]10) {
+            if ($pk.KeyChar -eq [char]10 -and $b.EndsWith("`n")) { continue }
+            if ($b.EndsWith("`r")) { $b = $b.TrimEnd([char]13) }
+            $b = $b.Insert($c,"`n")
+            ++$c
+            continue
+        }
+
+        if (-not [Char]::IsControl($pk.KeyChar)) {
+            if ($c -eq $b.Length) {
+                $b += $pk.KeyChar
+            }
+            else {
+                $b = $b.Insert($c,[string]$pk.KeyChar)
+            }
+            ++$c
+        }
+    }
+
+    # One redraw for the whole burst instead of one per character.
+    Redraw $old $b $c
+}
+}
+}
+
+function Read-GemLineFallback {
+    $useConsoleReader = $false
+    try {
+        $useConsoleReader = ($Host.Name -eq 'ConsoleHost' -and -not [Console]::IsInputRedirected)
+    } catch {
+        $useConsoleReader = $false
+    }
+    if (-not $useConsoleReader) {
+        return Read-Host '> '
+    }
+    try {
+        return Read-GemLineConsole
+    } catch {
+        try { [Console]::TreatControlCAsInput = $false } catch {}
+        Write-Host "[Console input fallback] $($_.Exception.Message)" -ForegroundColor Yellow
+        return Read-Host '   >'
+    }
+}
