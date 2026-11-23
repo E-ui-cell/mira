@@ -1608,6 +1608,15 @@ function Read-GemLineConsole {
             continue
         }
 
+        if (($k.Key -eq [ConsoleKey]::J -or $k.KeyChar -eq [char]10) -and
+            (($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
+            $old = $b
+            $b = $b.Insert($c,[string][char]10)
+            ++$c
+            Redraw $old $b $c
+            continue
+        }
+
         if ($k.Key -eq [ConsoleKey]::Enter) {
             [Console]::Write("`r`n")
             [Console]::TreatControlCAsInput = $oldTreatControlCAsInput
