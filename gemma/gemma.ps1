@@ -263,10 +263,15 @@ function Read-GemmaModelSelection {
     $visibleRows = [Math]::Max(1,[Math]::Min(12,$windowHeight - 6))
     $visibleRows = [Math]::Min($visibleRows,$modelIds.Count)
     $menuHeight = $visibleRows + 3
+    $windowTop = [Console]::WindowTop
     $top = [Console]::CursorTop
-    $spaceBelow = $windowHeight - $top
-    if ($spaceBelow -lt $menuHeight) {
-        [Console]::WriteLine(([Environment]::NewLine * ($menuHeight - $spaceBelow + 1)))
+    $viewportBottom = $windowTop + $windowHeight
+    $spaceBelow = $viewportBottom - $top
+    if ($spaceBelow -lt ($menuHeight + 1)) {
+        $paddingRows = ($menuHeight + 1) - $spaceBelow
+        [Console]::Write(([Environment]::NewLine * $paddingRows))
+        $top = [Console]::CursorTop
+    }
         $top = [Console]::CursorTop
     }
 
