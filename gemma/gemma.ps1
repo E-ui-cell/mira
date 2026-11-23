@@ -24,6 +24,7 @@ $script:GemmaPromptDirectory = Join-Path $PSScriptRoot 'prompts'
 . (Join-Path $PSScriptRoot 'agent\Settings.ps1')
 . (Join-Path $PSScriptRoot 'agent\Conversation.ps1')
 . (Join-Path $PSScriptRoot 'ui\Output.ps1')
+. (Join-Path $PSScriptRoot 'agent\Tts.ps1')
 
 $Contents = [System.Collections.ArrayList]::new()
 
