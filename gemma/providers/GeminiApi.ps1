@@ -20,4 +20,3 @@ function Get-GeminiModels {
     return $allModels.ToArray()
 }
 
-. (Join-Path $PSScriptRoot 'ui\ModelPicker.ps1')
