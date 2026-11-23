@@ -551,6 +551,18 @@ function Read-GemLineConsole {
             continue
         }
 
+        # Ctrl+Shift+T speaks the latest assistant response without consuming the draft.
+        if ($ctrl -and (($k.Modifiers -band [ConsoleModifiers]::Shift) -ne 0) -and $k.Key -eq [ConsoleKey]::T) {
+            Redraw $b $b $b.Length
+            [Console]::WriteLine()
+            Invoke-GemmaSpeakLatest -Contents $Contents
+            $row = [Console]::CursorTop
+            [Console]::Write($promptText)
+            $renderedRows = 1
+            Redraw '' $b $c
+            continue
+        }
+
         # Ctrl+T transposes adjacent characters; Alt+T transposes adjacent words.
         if ($ctrl -and $k.Key -eq [ConsoleKey]::T) {
             if ($b.Length -ge 2 -and $c -gt 0) {
