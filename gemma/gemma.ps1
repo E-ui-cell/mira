@@ -587,40 +587,16 @@ function Invoke-GemmaSearchCommand {
     $value = $Argument.Trim().ToLowerInvariant()
     if ($value -eq 'on') {
         $script:GoogleSearchGrounding = $true
-        if ($script:Provider -eq 'antigravity') {
-            Write-Host '[Native googleSearch will be sent to the selected Antigravity chat model; Gemini API web_search remains provider-specific.]' -ForegroundColor Green
-        } elseif ($script:AgenticWebSearchEnabled) {
-            if (Test-Path -LiteralPath (Get-AntigravityTokenPath)) {
-                Write-Host "[Google Search enabled for Gemini API models via Antigravity OAuth (research model: $MIRA_SEARCH_MODEL).]" -ForegroundColor Green
-            } else {
-                Write-Host '[Grounding switch is ON, but Gemini API web search needs Antigravity OAuth. Run .auth login.]' -ForegroundColor Yellow
-            }
-        } else {
-            Write-Host '[Grounding is ON globally; Gemini API web search remains disabled by MIRA_ENABLE_AGENTIC_WEB_SEARCH.]' -ForegroundColor Yellow
-        }
+        Write-Host '[Grounding ON]' -ForegroundColor Green
     } elseif ($value -eq 'off') {
         $script:GoogleSearchGrounding = $false
-        if ($script:Provider -eq 'antigravity') {
-            Write-Host '[Grounding OFF. Normal Antigravity chat is blocked until .grounding on; no ungrounded fallback.]' -ForegroundColor Yellow
-        } else {
-            Write-Host '[Google Search grounding disabled for Gemini API web_search.]' -ForegroundColor Yellow
-        }
+        Write-Host '[Grounding OFF]' -ForegroundColor Yellow
     } elseif ($value -eq 'status' -or -not $value) {
-        if (-not $script:GoogleSearchGrounding -and $script:Provider -eq 'antigravity') {
-            $state = 'OFF; Antigravity chat blocked until .grounding on'
-        } elseif (-not $script:GoogleSearchGrounding) {
-            $state = 'OFF; Gemini API web_search disabled'
-        } elseif ($script:Provider -eq 'antigravity') {
-            $state = "ON; mandatory Search-only preflight with selected Antigravity model; no ungrounded fallback"
-        } elseif (-not $script:AgenticWebSearchEnabled) {
-            $state = 'ON globally; Gemini API web_search is disabled by MIRA_ENABLE_AGENTIC_WEB_SEARCH'
-        } elseif (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
-            $state = 'ON globally; Gemini API web_search needs Antigravity OAuth (.auth login)'
-        } else {
-            $state = "ON (Gemini API web_search via Antigravity OAuth; research model: $MIRA_SEARCH_MODEL)"
-        }
-        Write-Host "[Google Search grounding: $state]" -ForegroundColor Cyan
-    } else { Write-Host 'Usage: .grounding on | .grounding off | .grounding status' -ForegroundColor Yellow }
+        $state = if ($script:GoogleSearchGrounding) { 'ON' } else { 'OFF' }
+        Write-Host "[Grounding: $state]" -ForegroundColor Cyan
+    } else {
+        Write-Host 'Usage: .grounding on | .grounding off | .grounding status' -ForegroundColor Yellow
+    }
 }
 
 function Invoke-GemmaAntigravityRequest {
