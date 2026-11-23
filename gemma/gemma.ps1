@@ -1340,6 +1340,10 @@ function Read-GemLineConsole {
             $firstCapacity = [Math]::Max(1,$usable - $startColumn)
             $offset = 0
             $physicalRow = $row + $rowOffsets[$i]
+            if ($i -eq 0 -and $physicalRow -lt [Console]::BufferHeight) {
+                [Console]::SetCursorPosition(0,$physicalRow)
+                [Console]::Write('> ')
+            }
             while ($offset -lt $value.Length) {
                 $column = if ($offset -eq 0) { $startColumn } else { 0 }
                 $capacity = if ($offset -eq 0) { $firstCapacity } else { $usable }
