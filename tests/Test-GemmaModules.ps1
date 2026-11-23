@@ -65,6 +65,37 @@ foreach ($functionName in $requiredFunctions) {
     }
 }
 
+# Verify canonical and migration API-key environment variables.
+$defaultsPath = Join-Path $repoRoot 'gemma\config\Defaults.ps1'
+$oldGeminiApi = $env:GEMINI_API
+$oldGeminiApiKey = $env:GEMINI_API_KEY
+$oldGeminiApiJ = $env:GEMINI_APIJ
+try {
+    $env:GEMINI_API = 'canonical-test-key'
+    $env:GEMINI_API_KEY = 'standard-test-key'
+    $env:GEMINI_APIJ = 'legacy-test-key'
+    . $defaultsPath
+    if ($API_KEY -ne 'canonical-test-key') {
+        throw 'GEMINI_API must take precedence for API key selection.'
+    }
+
+    $env:GEMINI_API = ''
+    . $defaultsPath
+    if ($API_KEY -ne 'standard-test-key') {
+        throw 'GEMINI_API_KEY compatibility alias did not load.'
+    }
+
+    $env:GEMINI_API_KEY = ''
+    . $defaultsPath
+    if ($API_KEY -ne 'legacy-test-key') {
+        throw 'GEMINI_APIJ legacy compatibility alias did not load.'
+    }
+} finally {
+    $env:GEMINI_API = $oldGeminiApi
+    $env:GEMINI_API_KEY = $oldGeminiApiKey
+    $env:GEMINI_APIJ = $oldGeminiApiJ
+}
+
 # Verify common cursor-word calculations independently of terminal interaction.
 if ((Get-GemWordStart -Text 'one two' -Position 7) -ne 4) {
     throw 'Readline backward-word calculation failed.'
