@@ -91,6 +91,9 @@ function Read-GemLineConsole {
     $undoStack = New-Object 'System.Collections.Generic.List[object]'
     $historySearchTerm = $null
     $historySearchDraft = $null
+    $lastYankStart = -1
+    $lastYankLength = 0
+    $killRingIndex = 0
     function Redraw($old,$new,$pos) {
         $w = [Math]::Max(12,[Console]::WindowWidth)
         $usable = $w - 1
@@ -340,6 +343,8 @@ function Read-GemLineConsole {
                 $old = $b
                 [void]$script:GemKillRing.Insert(0,$b.Substring($start,$finish - $start))
                 while ($script:GemKillRing.Count -gt 20) { $script:GemKillRing.RemoveAt($script:GemKillRing.Count - 1) }
+                $lastYankStart = -1
+                $lastYankLength = 0
                 $b = $b.Remove($start,$finish - $start)
                 $c = $start
                 $script:MiraHistoryIndex = -1
@@ -356,6 +361,9 @@ function Read-GemLineConsole {
                 $old = $b
                 $text = $script:GemKillRing[0]
                 $b = $b.Insert($c,$text)
+                $lastYankStart = $c
+                $lastYankLength = $text.Length
+                $killRingIndex = 0
                 $c += $text.Length
                 Redraw $old $b $c
             }
@@ -408,6 +416,78 @@ function Read-GemLineConsole {
                 $c = [int]$state.Cursor
                 Redraw $old $b $c
             } else { [Console]::Beep(700,60) }
+            continue
+        }
+
+        # Ctrl+V/Ctrl+Q insert the next key literally.
+        if ($ctrl -and ($k.Key -eq [ConsoleKey]::V -or $k.Key -eq [ConsoleKey]::Q)) {
+            $quoted = [Console]::ReadKey($true)
+            $insertText = [string]$quoted.KeyChar
+            if ($quoted.Key -eq [ConsoleKey]::Enter -or $quoted.KeyChar -eq [char]13 -or $quoted.KeyChar -eq [char]10) {
+                $insertText = [string][char]10
+            }
+            if ($insertText.Length -gt 0 -and $insertText -ne [string][char]0) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b
+                $b = $b.Insert($c,$insertText)
+                $c += $insertText.Length
+                Redraw $old $b $c
+            }
+            continue
+        }
+
+        # Alt+C/U/L change the case of the word at the cursor.
+        if ($alt -and ($k.Key -eq [ConsoleKey]::C -or $k.Key -eq [ConsoleKey]::U -or $k.Key -eq [ConsoleKey]::L)) {
+            $wordStart = Get-GemWordStart -Text $b -Position $c
+            $wordEnd = Get-GemWordEnd -Text $b -Position $wordStart
+            if ($wordEnd -gt $wordStart) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b
+                $word = $b.Substring($wordStart,$wordEnd - $wordStart)
+                if ($k.Key -eq [ConsoleKey]::U) {
+                    $changedWord = $word.ToUpperInvariant()
+                } elseif ($k.Key -eq [ConsoleKey]::L) {
+                    $changedWord = $word.ToLowerInvariant()
+                } else {
+                    $changedWord = $word.Substring(0,1).ToUpperInvariant() + $word.Substring(1).ToLowerInvariant()
+                }
+                $b = $b.Substring(0,$wordStart) + $changedWord + $b.Substring($wordEnd)
+                $c = $wordStart + $changedWord.Length
+                Redraw $old $b $c
+            }
+            continue
+        }
+
+        # Alt+Y rotates through the recent kill ring after Ctrl+Y.
+        if ($alt -and $k.Key -eq [ConsoleKey]::Y) {
+            if ($lastYankStart -ge 0 -and $script:GemKillRing.Count -gt 1) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b
+                $b = $b.Remove($lastYankStart,$lastYankLength)
+                $killRingIndex = ($killRingIndex + 1) % $script:GemKillRing.Count
+                $text = $script:GemKillRing[$killRingIndex]
+                $b = $b.Insert($lastYankStart,$text)
+                $lastYankLength = $text.Length
+                $c = $lastYankStart + $lastYankLength
+                Redraw $old $b $c
+            } else {
+                [Console]::Beep(700,60)
+            }
+            continue
+        }
+
+        # Alt+< / Alt+> jump to the oldest/newest history entry.
+        if ($alt -and ($k.KeyChar -eq '<' -or $k.KeyChar -eq '>')) {
+            if ($script:MiraInputHistory.Count -gt 0) {
+                if ($script:MiraHistoryIndex -eq -1) { $script:MiraHistoryDraft = $b }
+                $script:MiraHistoryIndex = if ($k.KeyChar -eq '<') { 0 } else { $script:MiraInputHistory.Count - 1 }
+                $old = $b
+                $b = $script:MiraInputHistory[$script:MiraHistoryIndex]
+                $c = $b.Length
+                Redraw $old $b $c
+            } else {
+                [Console]::Beep(700,60)
+            }
             continue
         }
 
