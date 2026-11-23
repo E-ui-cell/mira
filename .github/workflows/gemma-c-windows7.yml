@@ -1,0 +1,67 @@
+name: Gemma C — Windows 7 x64
+
+on:
+  push:
+    branches: [gemma-c]
+    paths:
+      - 'gemma/gemma.c'
+      - '.github/workflows/gemma-c-windows7.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows7-x64:
+    name: Windows 7 x64 compatible build
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW-w64 dependencies
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-gcc mingw-w64-x86_64-curl mingw-w64-x86_64-openssl
+
+      - name: Compile with Windows 7 API baseline
+        shell: msys2 {0}
+        working-directory: gemma
+        run: |
+          gcc -D_WIN32_WINNT=0x0601 -DWINVER=0x0601 -Wall -Wextra -O2 -std=c11 gemma.c -lcurl -lcrypto -lbcrypt -lws2_32 -lshell32 -o gemma.exe
+          ./gemma.exe --self-test
+
+      - name: Package executable and runtime DLLs
+        shell: msys2 {0}
+        working-directory: gemma
+        run: |
+          mkdir -p ../dist/gemma-windows7-x64
+          cp gemma.exe ../dist/gemma-windows7-x64/
+          ldd gemma.exe | awk '/\/mingw64\/bin\// {print $3}' | sort -u | while read dll; do
+            test -f "$dll" && cp "$dll" ../dist/gemma-windows7-x64/
+          done
+          cat > ../dist/gemma-windows7-x64/README.txt <<'EOF'
+          Gemma C — Windows 7 x64 build
+
+          Keep gemma.exe and the supplied DLL files together in this folder.
+          Run gemma.exe from Command Prompt or PowerShell.
+
+          This build is compiled against the Windows 7 (0x0601) API baseline.
+          It is a 64-bit build and requires 64-bit Windows 7 SP1 or later.
+
+          For Antigravity OAuth, set AGY_GOOGLE_CLIENT_ID and
+          AGY_GOOGLE_CLIENT_SECRET before starting Gemma, then use:
+            .auth login
+
+          Offline smoke test:
+            gemma.exe --self-test
+          EOF
+
+      - name: Upload Windows 7 x64 package
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemma-windows7-x64
+          path: dist/gemma-windows7-x64/
+          if-no-files-found: error
+          retention-days: 30
