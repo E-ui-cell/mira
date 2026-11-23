@@ -369,7 +369,7 @@ function Complete-GemmaGuiWorker {
                 if ($result.Success) {
                     $g.LastReply = [string]$result.Reply
                     Append-GemmaGuiMessage -Role assistant -Text $g.LastReply
-                    $stats = 'Done in {0}s  |  ↑ {1}  ↓ {2}  |  {3}:{4}' -f $result.ElapsedSeconds,$result.PromptTokens,$result.CompletionTokens,$result.Provider,$result.Model
+                    $stats = 'Done in ' + [string]$result.ElapsedSeconds + 's  |  input ' + [string]$result.PromptTokens + '  output ' + [string]$result.CompletionTokens + '  |  ' + [string]$result.Provider + ':' + [string]$result.Model
                     Set-GemmaGuiStatus ($stats + '  |  One-shot')
                 } else {
                     Append-GemmaGuiMessage -Role error -Text ([string]$result.Error)
