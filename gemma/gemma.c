@@ -1549,7 +1549,7 @@ static int read_prompt_line(char *buf,size_t cap) {
     buf[0]=0;
     for(;;) {
         int ch=_getch();
-        if(ch=='\r') { putchar('\n'); buf[n]=0; return 1; }
+        if(ch=='\r') { if(pos<n)redraw_input_line(h,origin,buf,n,n,oldlen); putchar('\n'); buf[n]=0; return 1; }
         if(ch==3) { putchar('^'); putchar('C'); putchar('\n'); buf[0]=0; return 1; }
         if(ch==8||ch==127) {
             if(pos) {
