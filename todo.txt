@@ -1,18 +1,18 @@
 GEMMA — THIN REWRITE PLAN
 =========================
 
-Status: planning only. Do not implement until the owner explicitly approves the
-architecture and says GO. This branch currently contains the unchanged main
-branch plus this file only.
+Status: implementation authorized on branch thin. The rewrite is in progress.
+The native GUI frontend remains a separate architecture decision; do not build
+GUI code until the owner chooses the Win32 process/IPC architecture.
 
 BASE
 ----
 Repository: E-ui-cell/mira
 Working branch: thin
 Base branch: main
-Base commit: 20c7e48feb9b401ce7c1143c8dbe557df78f4a3f
+Base commit: latest main, merged into thin at 20c7e48 plus subsequent main fixes.
 Current implementation reviewed: gemma/gemma.ps1 (about 2,639 lines / 139 KB,
-41 PowerShell functions).
+41 PowerShell functions at initial planning time).
 
 PRIMARY GOAL
 ------------
@@ -198,6 +198,44 @@ NON-NEGOTIABLE PRODUCT PRINCIPLES
 [ ] Keep a small PowerShell launcher/CLI for users who prefer the terminal.
 [ ] Keep useful command completion, path completion, model completion,
     multiline input/paste, history navigation and common editing shortcuts.
+[ ] Implement Bash Readline / Emacs editing keys in the custom input editor:
+       - Ctrl+A / Ctrl+E: beginning / end of the current line.
+       - Ctrl+B / Ctrl+F: move backward / forward one character.
+       - Alt+B / Alt+F: move backward / forward one word.
+       - Ctrl+P / Ctrl+N: previous / next input-history entry.
+       - Ctrl+H / Backspace: delete character before cursor.
+       - Ctrl+D / Delete: delete character at cursor; EOF on an empty buffer.
+       - Ctrl+K: kill from cursor to end of current line.
+       - Ctrl+U: kill from beginning of current line to cursor.
+       - Ctrl+W: kill the previous word.
+       - Alt+D: kill the next word.
+       - Ctrl+Y: yank the most recently killed text.
+       - Ctrl+T: transpose adjacent characters.
+       - Alt+T: transpose adjacent words.
+       - Ctrl+L: clear and repaint the console without losing the edit buffer.
+       - Ctrl+R / Ctrl+S: reverse / forward incremental history search.
+       - Ctrl+G: cancel an active search or completion.
+       - Alt+Backspace: kill the previous word.
+       - Ctrl+Z / Ctrl+_: undo the last edit where practical.
+[ ] Ctrl+J inserts a newline in the current prompt buffer. It never submits
+    the request. Enter submits the complete multiline prompt.
+[ ] Preserve Unicode insertion, multi-line paste, cursor movement across lines,
+    redraw after resize, and history navigation without corrupting the buffer.
+[ ] Avoid conflicting bindings: when editing a multiline buffer, Up/Down move
+    between visual/logical lines where possible; use Ctrl+P/Ctrl+N for command
+    history. Document any unavoidable terminal-host limitations.
+[x] Rebuild the model picker as an interactive, scrollable list:
+       - Up / Down and j / k move the highlighted model.
+       - Home / End jump to first / last; PageUp / PageDown scroll a page.
+       - Enter selects the highlighted model; Esc or q cancels unchanged.
+       - Current model is visibly marked and initially highlighted.
+       - Long model IDs remain readable; the list scrolls within terminal size.
+       - Model IDs and provider metadata come from the live provider catalogue;
+         display labels must not be fabricated.
+       - Preserve direct .model <exact-id> selection without opening the menu.
+       - Keep menu feedback concise; no debug/status dumps while navigating.
+    Implemented on thin in gemma/gemma.ps1 by Read-GemmaModelSelection.
+    Interactive key handling is implemented; clean-host visual testing remains.
 [ ] Commands currently exposed and to review for parity:
        .q / quit
        .clear
@@ -368,6 +406,20 @@ DECISIONS NEEDED BEFORE GUI CODING:
 [ ] No debug chatter; meaningful errors are retained.
 [ ] PowerShell 5.1 and the agreed Windows versions pass automated/manual tests.
 
+IMPLEMENTATION PROGRESS (BRANCH thin)
+---------------------------------------
+- Merged the latest main into thin while preserving this plan.
+- Added the interactive provider model picker with Up/Down and j/k
+  navigation, Home/End, PageUp/PageDown, Enter, Esc and q.
+- Retained direct .model <exact-id> selection and a Read-Host fallback for
+  redirected/non-interactive sessions.
+- PowerShell 5.1 syntax validation is being run on every commit.
+- Emacs/Bash input bindings and Ctrl+J newline are specified above but are
+  not yet implemented.
+- The full agent-core decomposition/rewrite is still in progress. The current
+  gemma.ps1 remains the legacy implementation plus the first rewritten UI
+  component; do not describe the rewrite as complete.
+
 CURRENT INVENTORY NOTES
 -----------------------
 The reviewed script currently contains 41 functions and about 2,639 lines.
@@ -385,9 +437,11 @@ unless the owner later asks to merge or share code.
 
 SCOPE CONTROL
 -------------
-Until the owner says GO:
-    - Do not edit gemma.ps1 or any other existing source file.
-    - Do not add GUI source, project files, binaries, dependencies or modules.
-    - Do not implement the rewrite or refactor.
-    - Do not merge thin into main.
-    - Only update this plan after explicit review/consultation.
+AUTHORIZED SCOPE ON BRANCH thin:
+    - Rewrite/refactor Gemma on thin only. Never make rewrite commits on main.
+    - Keep main stable; do not merge thin into main until the owner asks.
+    - Add tests as behavior is rewritten; keep Windows PowerShell 5.1 support
+      unless the owner explicitly changes the platform target.
+    - Native GUI source remains blocked pending the separate Win32 architecture
+      decision. Planning and discussion are allowed; no GUI implementation yet.
+    - Keep todo.txt current as implementation decisions and features land.
