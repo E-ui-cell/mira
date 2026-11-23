@@ -123,6 +123,50 @@ try {
     $env:GEMINI_APIJ = $oldGeminiApiJ
 }
 
+# Verify the shared agent tool registry respects provider and command mode.
+$oldProvider = $script:Provider
+$oldCommandMode = $script:CommandMode
+$oldGrounding = $script:GoogleSearchGrounding
+$oldAgenticSearch = $script:AgenticWebSearchEnabled
+try {
+    $script:CommandMode = $false
+    $script:Provider = 'antigravity'
+    $script:GoogleSearchGrounding = $true
+    $script:AgenticWebSearchEnabled = $true
+    $toolSet = Get-GemmaToolConfiguration
+    $toolNames = @($toolSet.Tools[0].functionDeclarations | ForEach-Object { $_.name })
+    if ($toolNames -contains 'web_search') {
+        throw 'Antigravity tools must not expose Gemini API web_search.'
+    }
+    foreach ($requiredTool in @('get_current_datetime','run_powershell','quick_web','get_skill')) {
+        if ($toolNames -notcontains $requiredTool) {
+            throw "Shared tool registry omitted $requiredTool."
+        }
+    }
+
+    $dateResult = Invoke-GemmaToolCall -Call @{ name = 'get_current_datetime'; args = @{} }
+    if ([string]::IsNullOrWhiteSpace([string]$dateResult.iso8601) -or
+        [string]::IsNullOrWhiteSpace([string]$dateResult.timezone_id)) {
+        throw 'Local date/time tool returned incomplete data.'
+    }
+
+    $unknownResult = Invoke-GemmaToolCall -Call @{ name = 'not_a_real_tool'; args = @{} }
+    if (-not $unknownResult.error) {
+        throw 'Unknown tool dispatch must return a structured error.'
+    }
+
+    $script:CommandMode = $true
+    $commandToolSet = Get-GemmaToolConfiguration
+    if ($null -ne $commandToolSet.Tools -or $null -ne $commandToolSet.ToolConfig) {
+        throw 'Command-generation mode must disable local tool declarations.'
+    }
+} finally {
+    $script:Provider = $oldProvider
+    $script:CommandMode = $oldCommandMode
+    $script:GoogleSearchGrounding = $oldGrounding
+    $script:AgenticWebSearchEnabled = $oldAgenticSearch
+}
+
 # Keep Antigravity native Search conditional on the current user request.
 $searchCases = @(
     @{ Request = 'test'; Expected = $false },
