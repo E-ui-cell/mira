@@ -23,7 +23,11 @@ $requiredFunctions = @(
     'Read-GemmaModelSelection',
     'Invoke-GeminiModelSwitcher',
     'Read-GemLineConsole',
-    'Read-GemLineFallback'
+    'Read-GemLineFallback',
+    'Add-GemUndoSnapshot',
+    'Get-GemWordStart',
+    'Get-GemWordEnd',
+    'Find-GemHistoryMatch'
 )
 
 foreach ($functionName in $requiredFunctions) {
@@ -33,4 +37,24 @@ foreach ($functionName in $requiredFunctions) {
     }
 }
 
-Write-Host 'Gemma components loaded successfully in Windows PowerShell 5.1.'
+# Verify common cursor-word calculations independently of terminal interaction.
+if ((Get-GemWordStart -Text 'one two' -Position 7) -ne 4) {
+    throw 'Readline backward-word calculation failed.'
+}
+if ((Get-GemWordEnd -Text 'one two' -Position 4) -ne 7) {
+    throw 'Readline forward-word calculation failed.'
+}
+
+# Verify reverse/forward substring history search against a deterministic history.
+$script:MiraInputHistory = New-Object 'System.Collections.Generic.List[string]'
+[void]$script:MiraInputHistory.Add('open notes.txt')
+[void]$script:MiraInputHistory.Add('get process list')
+[void]$script:MiraInputHistory.Add('open report.txt')
+if ((Find-GemHistoryMatch -Term 'open' -Start 3 -Direction -1) -ne 2) {
+    throw 'Readline reverse history search failed.'
+}
+if ((Find-GemHistoryMatch -Term 'open' -Start 0 -Direction 1) -ne 2) {
+    throw 'Readline forward history search failed.'
+}
+
+Write-Host 'Gemma components and Readline helpers loaded successfully in Windows PowerShell 5.1.'
