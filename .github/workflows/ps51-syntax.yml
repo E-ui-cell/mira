@@ -27,6 +27,14 @@ jobs:
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\providers
 
+      - name: Parse Gemma agent modules with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\agent
+
+      - name: Parse Gemma native Windows modules with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\windows
+
       - name: Load Gemma components in Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-GemmaModules.ps1
