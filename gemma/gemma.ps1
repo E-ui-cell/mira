@@ -537,7 +537,7 @@ function Get-GemmaSearchModelCandidates {
     # Discover Search-capable models for the separate research agent used by
     # Gemini API web_search. This is not used to filter Antigravity chat models.
     if (-not $script:AntigravityCapabilityProbeAttempted) {
-        try { [void](Get-AntigravityModels) }
+        try { [void](Get-AntigravityModels) } catch { }
     }
 
     $preferred = ([string]$PreferredModel).Trim() -replace '^models/',''
