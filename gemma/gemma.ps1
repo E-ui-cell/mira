@@ -461,8 +461,9 @@ function Get-AntigravityModels {
     $project = Get-AntigravityProject
     $catalog = Invoke-AntigravityPost -Method 'fetchAvailableModels' -Body @{ project = $project } -AccessToken $token
 
-    # Google returns the authoritative per-account native Search capability list
-    # separately from the selectable model catalogue.
+    # Google returns a per-account Search model list for the dedicated research
+    # backend used by Gemini API web_search. This list does not gate native Search
+    # on the user's selected Antigravity chat model.
     $script:AntigravityCapabilityProbeAttempted = $true
     $script:AntigravityWebSearchModelIds = $null
     if ($catalog.PSObject.Properties['webSearchModelIds'] -and $null -ne $catalog.webSearchModelIds) {
@@ -534,8 +535,8 @@ function Invoke-GemmaAuthCommand {
 function Get-GemmaSearchModelCandidates {
     param([string]$PreferredModel = $MIRA_SEARCH_MODEL)
 
-    # Discover Google's per-account Search-capable model IDs before assuming
-    # the historical Flash-Lite fallback.
+    # Discover Search-capable models for the separate research agent used by
+    # Gemini API web_search. This is not used to filter Antigravity chat models.
     if (-not $script:AntigravityCapabilityProbeAttempted) {
         try { [void](Get-AntigravityModels) }
         catch { Write-Host "[Search capability discovery unavailable] $($_.Exception.Message)" -ForegroundColor DarkYellow }
@@ -555,24 +556,6 @@ function Get-GemmaSearchModelCandidates {
         [void]$ids.Add($preferred)
     }
     return @($ids)
-}
-
-function Test-GemmaAntigravityNativeSearchSupport {
-    param([string]$Model = $script:MODEL)
-    $modelId = ([string]$Model).Trim() -replace '^models/',''
-    if ([string]::IsNullOrWhiteSpace($modelId)) { return $false }
-
-    # Native Search is enabled only for an exact model ID explicitly advertised
-    # by this Antigravity account. Do not use the research-agent fallback here.
-    if (-not $script:AntigravityCapabilityProbeAttempted) {
-        try { [void](Get-AntigravityModels) }
-        catch {
-            Write-Host "[Google Search capability discovery unavailable; continuing without native Search] $($_.Exception.Message)" -ForegroundColor DarkYellow
-            return $false
-        }
-    }
-    if ($null -eq $script:AntigravityWebSearchModelIds) { return $false }
-    return (@($script:AntigravityWebSearchModelIds) -contains $modelId)
 }
 
 function Invoke-GemmaAntigravitySearchRequest {
