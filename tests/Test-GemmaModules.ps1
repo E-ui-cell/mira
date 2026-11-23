@@ -5,6 +5,9 @@ $modules = @(
     (Join-Path $repoRoot 'gemma\providers\GeminiApi.ps1'),
     (Join-Path $repoRoot 'gemma\providers\Antigravity.ps1'),
     (Join-Path $repoRoot 'gemma\ui\ModelPicker.ps1'),
+    (Join-Path $repoRoot 'gemma\agent\Execution.ps1'),
+    (Join-Path $repoRoot 'gemma\agent\Skills.ps1'),
+    (Join-Path $repoRoot 'gemma\windows\Native.ps1'),
     (Join-Path $repoRoot 'gemma\ui\LineEditor.ps1')
 )
 
@@ -20,6 +23,13 @@ $requiredFunctions = @(
     'Get-AntigravityModels',
     'Invoke-GemmaAntigravityGoogleSearchPreflight',
     'Invoke-GemmaWebSearch',
+    'Invoke-GemmaPermissionCommand',
+    'Invoke-GemmaPowerShellTool',
+    'Invoke-GemmaQuickWeb',
+    'Get-GemmaSkill',
+    'Initialize-GemmaNativeWindows',
+    'Confirm-GemmaDirectAction',
+    'Invoke-GemmaDirectCommand',
     'Read-GemmaModelSelection',
     'Invoke-GeminiModelSwitcher',
     'Read-GemLineConsole',
