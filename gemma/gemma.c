@@ -878,6 +878,30 @@ static void search_preflight(State*s,char**c) {
     fprintf(stderr,"[Search preflight] queries=%d sources=%d\n",nq,ns);
     free(ctx.s); free(item.s); free(research.s); free(d.v); free(r);
 }
+static char *quickweb(const char*a,const char*q) {
+    char url[4096];
+    if(eq(a,"weather")) {
+        char*e=escape(q);
+        snprintf(url,sizeof url,"https://wttr.in/%s?format=3",e);
+        free(e);
+    }
+    else if(eq(a,"public-ip"))snprintf(url,sizeof url,"https://api.ipify.org");
+    else if(eq(a,"cheatsheet")) {
+        char*e=escape(q);
+        snprintf(url,sizeof url,"https://cht.sh/%s",e);
+        free(e);
+    }
+    else return ds("{\"error\":\"unknown action\"}");
+    char*r=http(url,"GET",NULL,NULL,0);
+    if(!r)return ds("{\"error\":\"request failed\"}");
+    Buf b;
+    init(&b);
+    put(&b,"{\"result\":");
+    quote(&b,r);
+    put(&b,"}");
+    free(r);
+    return take(&b);
+}
 static char *antigravity_web_search(State*s,const char*query) {
     if(!*query)return ds("{\"error\":\"web_search requires a non-empty query\"}");
     Buf req;
