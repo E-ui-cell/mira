@@ -754,6 +754,23 @@ function Read-GemLineConsole {
                     $candidateLabels += $(if ($item.PSIsContainer) { $item.Name + '\' } else { $item.Name })
                 }
             }
+            elseif ($b -match '^\.diff\s+(.*)$') {
+                $diffText = $matches[1]
+                $tokenMatch = [regex]::Match($diffText,'(?:^|\s)([^\s]*)$')
+                $typedPath = $tokenMatch.Groups[1].Value
+                $prefixLength = $diffText.Length - $typedPath.Length
+                foreach ($item in @(Get-GemFiles $typedPath)) {
+                    $clean = $typedPath.Trim('"').Trim("'")
+                    $dir = [IO.Path]::GetDirectoryName($clean)
+                    if ([string]::IsNullOrEmpty($clean) -or [string]::IsNullOrEmpty($dir)) { $path = $item.Name }
+                    elseif ($dir.EndsWith('\') -or $dir.EndsWith('/')) { $path = $dir + $item.Name }
+                    else { $path = $dir + '\' + $item.Name }
+                    if ($typedPath.StartsWith('"') -or $typedPath.StartsWith("'")) { $path = $typedPath[0] + $path + $typedPath[0] }
+                    if ($item.PSIsContainer) { $path += '\' }
+                    $candidateBuffers += ('.diff ' + $diffText.Substring(0,$prefixLength) + $path)
+                    $candidateLabels += $(if ($item.PSIsContainer) { $item.Name + '\' } else { $item.Name })
+                }
+            }
             elseif ($b -match '^\.provider\s+(\S*)$') {
                 foreach ($item in @('antigravity','gemini' | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })) {
                     $candidateBuffers += ('.provider ' + $item); $candidateLabels += $item
