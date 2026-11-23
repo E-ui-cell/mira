@@ -11,6 +11,7 @@ param(
 . (Join-Path $PSScriptRoot 'config\Cli.ps1')
 $Prompt = Initialize-GemmaCliMode -Prompt $Prompt -ExplainCommand $ExplainCommand -RemainingArgs $RemainingArgs
 . (Join-Path $PSScriptRoot 'config\Defaults.ps1')
+$script:GemmaPromptDirectory = Join-Path $PSScriptRoot 'prompts'
 
 . (Join-Path $PSScriptRoot 'providers\GeminiApi.ps1')
 . (Join-Path $PSScriptRoot 'providers\Antigravity.ps1')
@@ -31,7 +32,7 @@ $script:MiraInputHistory = [System.Collections.Generic.List[string]]::new()
 $script:MiraHistoryIndex = -1
 $script:MiraHistoryDraft = ''
 $script:MiraHistoryMax = $MIRA_MAX_HISTORY
-$script:GemCommands = @('.q','.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.model','.provider','.effort','.verbose','.auth','.grounding','.ask','.autopilot','.skills','.skill')
+$script:GemCommands = @('.q','.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.model','.provider','.sysprompt','.effort','.verbose','.auth','.grounding','.ask','.autopilot','.skills','.skill')
 
 . (Join-Path $PSScriptRoot 'ui\LineEditor.ps1')
 
