@@ -430,7 +430,7 @@
             $elapsedSeconds = ([Math]::Round($turnStopwatch.Elapsed.TotalSeconds,1)).ToString('0.0',[Globalization.CultureInfo]::InvariantCulture)
             $leftStatus = '┌── ' + $elapsedSeconds + 's'
             $modelStatus = [string]$script:MODEL
-            $rightStatus = '↑ ' + $turnPromptTokens + '  ↓ ' + $turnCompletionTokens
+            $rightStatus = ('Tokens: {0} / {1}' -f [string]$turnPromptTokens,[string]$turnCompletionTokens)
             $statusWidth = [Math]::Max(1,$width - 1)
             $fixedWidth = $leftStatus.Length + $rightStatus.Length + 2
             $maxModelWidth = [Math]::Max(1,$statusWidth - $fixedWidth - 2)
