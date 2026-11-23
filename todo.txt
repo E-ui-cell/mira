@@ -196,9 +196,9 @@ NON-NEGOTIABLE PRODUCT PRINCIPLES
 7. CLI / CONSOLE FRONTEND
 -------------------------
 [ ] Keep a small PowerShell launcher/CLI for users who prefer the terminal.
-[ ] Keep useful command completion, path completion, model completion,
+[x] Keep useful command completion, path completion, model completion,
     multiline input/paste, history navigation and common editing shortcuts.
-[ ] Implement Bash Readline / Emacs editing keys in the custom input editor:
+[x] Implement Bash Readline / Emacs editing keys in the custom input editor:
        - Ctrl+A / Ctrl+E: beginning / end of the current line.
        - Ctrl+B / Ctrl+F: move backward / forward one character.
        - Alt+B / Alt+F: move backward / forward one word.
@@ -213,13 +213,21 @@ NON-NEGOTIABLE PRODUCT PRINCIPLES
        - Ctrl+T: transpose adjacent characters.
        - Alt+T: transpose adjacent words.
        - Ctrl+L: clear and repaint the console without losing the edit buffer.
-       - Ctrl+R / Ctrl+S: reverse / forward incremental history search.
-       - Ctrl+G: cancel an active search or completion.
+       - Ctrl+R / Ctrl+S: search the current buffer text in history and cycle
+         backward / forward through substring matches.
+       - Ctrl+G: cancel an active history-search selection.
        - Alt+Backspace: kill the previous word.
-       - Ctrl+Z / Ctrl+_: undo the last edit where practical.
+       - Ctrl+Z / Ctrl+_: undo the last edit.
+       - Ctrl+V / Ctrl+Q: insert the next key literally.
+       - Alt+C / Alt+U / Alt+L: capitalize / uppercase / lowercase the word.
+       - Alt+Y: cycle recent kill-ring entries after yanking.
+       - Alt+< / Alt+>: jump to oldest / newest history entry.
+    Implemented in gemma/ui/LineEditor.ps1. CI parser and helper tests cover
+    module loading and word/history operations; terminal interaction still
+    needs manual validation in Windows PowerShell 5.1.
 [x] Ctrl+J inserts a newline in the current prompt buffer. It never submits
     the request. Enter submits the complete multiline prompt.
-    Implemented in Read-GemLineConsole; Windows PowerShell 5.1 CI pending.
+    Implemented in Read-GemLineConsole; Windows PowerShell 5.1 CI covers module load.
 [ ] Preserve Unicode insertion, multi-line paste, cursor movement across lines,
     redraw after resize, and history navigation without corrupting the buffer.
 [ ] Avoid conflicting bindings: when editing a multiline buffer, Up/Down move
@@ -428,7 +436,9 @@ IMPLEMENTATION PROGRESS (BRANCH thin)
   decomposition; the rewrite is not complete.
 - CI parses the launcher and component directories with Windows PowerShell
   5.1, and also tests that component functions load into the calling process.
-- Remaining Emacs/Bash Readline editing bindings are still pending.
+- Bash/Emacs Readline editing bindings have been implemented in the custom
+  editor; helper functions are now included in the PowerShell 5.1 CI tests.
+  Manual key-by-key verification in a real console is still outstanding.
 
 CURRENT INVENTORY NOTES
 -----------------------
