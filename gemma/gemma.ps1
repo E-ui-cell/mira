@@ -575,7 +575,6 @@ function Invoke-GemmaAntigravitySearchRequest {
                 $transient = $lastError -match '(?i)(429|500|502|503|504|RESOURCE_EXHAUSTED|MODEL_CAPACITY_EXHAUSTED|temporarily unavailable)'
                 if (-not $transient -or $attempt -ge 2) { break }
                 $delay = [int][Math]::Min(12,2 * [Math]::Pow(2,$attempt))
-                Write-Host "[Google Search] $candidateModel is temporarily unavailable; retry $($attempt + 1)/2 in ${delay}s." -ForegroundColor DarkYellow
                 Start-Sleep -Seconds $delay
             }
         }
@@ -751,57 +750,6 @@ function Invoke-GemmaWebSearch {
     if ([string]::IsNullOrWhiteSpace($research)) { throw "Model '$searchModel' returned grounding metadata but no readable research or sources." }
     if ($research.Length -gt $MIRA_MAX_SEARCH_OUTPUT_CHARS) { $research = $research.Substring(0,$MIRA_MAX_SEARCH_OUTPUT_CHARS) + "`n[Search results truncated]" }
     return @{ query=$Query; research=$research; sources=@($sources); search_queries=@($metadata.webSearchQueries); search_model=$searchModel }
-}
-
-function Write-GemmaGroundingDiagnostics {
-    param(
-        [object]$Candidate,
-        [string]$Provider,
-        [string]$Model,
-        [bool]$GroundingEnabled
-    )
-    if ($script:CommandMode) { return }
-    $mode = if (-not $GroundingEnabled) {
-        'OFF'
-    } elseif ($Provider -eq 'antigravity' -and (Test-GemmaAntigravityNativeSearchSupport -Model $MIRA_SEARCH_MODEL)) {
-        "native Antigravity Search-only preflight via $MIRA_SEARCH_MODEL"
-    } elseif ($Provider -eq 'antigravity') {
-        "requested but unsupported search model $MIRA_SEARCH_MODEL"
-    } elseif ($script:AgenticWebSearchEnabled) {
-        "client web_search via Antigravity OAuth (research model: $MIRA_SEARCH_MODEL)"
-    } else {
-        'Gemini API grounding requested, but agentic web_search is disabled'
-    }
-    Write-Host "[Grounding diagnostics] provider=$Provider | answer_model=$Model | mode=$mode" -ForegroundColor DarkGray
-
-    $metadata = $Candidate.groundingMetadata
-    if ($null -eq $metadata) {
-        if ($Provider -eq 'antigravity' -and $GroundingEnabled -and (Test-GemmaAntigravityNativeSearchSupport -Model $MIRA_SEARCH_MODEL)) {
-            Write-Host "[Native grounding] Search ran separately through $MIRA_SEARCH_MODEL; final answer candidate has no direct grounding metadata." -ForegroundColor DarkGray
-        }
-        return
-    }
-
-    $queries = @($metadata.webSearchQueries | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
-    $sources = New-Object System.Collections.Generic.List[string]
-    $seen = @{}
-    foreach ($chunk in @($metadata.groundingChunks)) {
-        if ($chunk.web -and $chunk.web.uri) {
-            $uri = [string]$chunk.web.uri
-            if (-not $seen.ContainsKey($uri)) {
-                $seen[$uri] = $true
-                $title = if ($chunk.web.title) { [string]$chunk.web.title } else { $uri }
-                [void]$sources.Add("$title — $uri")
-            }
-        }
-    }
-
-    Write-Host ("[Grounding metadata] queries={0} | sources={1}" -f $queries.Count,$sources.Count) -ForegroundColor DarkGray
-    foreach ($query in $queries) { Write-Host "  [Search query] $query" -ForegroundColor DarkGray }
-    foreach ($source in $sources) { Write-Host "  [Search source] $source" -ForegroundColor DarkGray }
-    if ($queries.Count -eq 0 -and $sources.Count -eq 0) {
-        Write-Host '[Grounding metadata] Metadata object exists but contains no search queries or web sources.' -ForegroundColor Yellow
-    }
 }
 
 function Invoke-GemmaPermissionCommand {
@@ -2416,28 +2364,6 @@ while ($true) {
                 throw "No candidates returned. Possible safety filter block or malformed context."
             }
 
-            # ==================================================================
-            # SAFETY DIAGNOSTICS (read-only)
-            # ==================================================================
-            if ($null -ne $response.promptFeedback -and $null -ne $response.promptFeedback.blockReason) {
-                Write-Host "`n[Gemini Prompt Block]: $($response.promptFeedback.blockReason)" -ForegroundColor Yellow
-            }
-
-            if ($response.candidates.Count -gt 0) {
-                $candidate = $response.candidates[0]
-                Write-GemmaGroundingDiagnostics -Candidate $candidate -Provider $script:Provider -Model $script:MODEL -GroundingEnabled $script:GoogleSearchGrounding
-
-                if (-not $script:CommandMode -and $null -ne $candidate.finishReason) {
-                    Write-Host "[Gemini Finish Reason]: $($candidate.finishReason)" -ForegroundColor DarkGray
-                }
-
-                if (-not $script:CommandMode -and $null -ne $candidate.safetyRatings) {
-                    foreach ($rating in $candidate.safetyRatings) {
-                        Write-Host "[Safety] $($rating.category) = $($rating.probability) | blocked=$($rating.blocked)" -ForegroundColor DarkGray
-                    }
-                }
-            }
-
             $content = $response.candidates[0].content
             if ($null -eq $content -or $null -eq $content.parts -or $content.parts.Count -eq 0) {
                 $reason = $response.candidates[0].finishReason
@@ -2481,12 +2407,8 @@ while ($true) {
                             } else {
                                 try {
                                     $toolResult = Invoke-GemmaWebSearch -Query ([string]$call.args.query)
-                                    Write-Host ("[Agentic web_search] model={0} | queries={1} | sources={2}" -f $toolResult.search_model,@($toolResult.search_queries).Count,@($toolResult.sources).Count) -ForegroundColor DarkGray
-                                    foreach ($searchQuery in @($toolResult.search_queries)) { Write-Host "  [Search query] $searchQuery" -ForegroundColor DarkGray }
-                                    foreach ($source in @($toolResult.sources)) { Write-Host "  [Search source] $source" -ForegroundColor DarkGray }
                                 } catch {
                                     $searchError = $_.Exception.Message
-                                    Write-Host "[Agentic web_search failed; continuing without web verification] $searchError" -ForegroundColor Yellow
                                     $toolResult = @{ error = "Google Search failed. Do not claim that current information was verified. Error: $searchError" }
                                 }
                             }
@@ -2554,14 +2476,18 @@ while ($true) {
             if ($turnStopwatch.IsRunning) { $turnStopwatch.Stop() }
             $elapsedSeconds = ([Math]::Round($turnStopwatch.Elapsed.TotalSeconds,1)).ToString('0.0',[Globalization.CultureInfo]::InvariantCulture)
             $leftStatus = '┌── ' + $elapsedSeconds + 's'
+            $modelStatus = [string]$script:MODEL
             $rightStatus = '↑ ' + $turnPromptTokens + '  ↓ ' + $turnCompletionTokens
             $statusWidth = [Math]::Max(1,$width - 1)
-            $statusGap = $statusWidth - $leftStatus.Length - $rightStatus.Length
-            if ($statusGap -lt 1) {
-                $leftStatus = '┌── ' + $elapsedSeconds + 's'
-                $statusGap = [Math]::Max(1,$statusWidth - $leftStatus.Length - $rightStatus.Length)
+            $fixedWidth = $leftStatus.Length + $rightStatus.Length + 2
+            $maxModelWidth = [Math]::Max(1,$statusWidth - $fixedWidth - 2)
+            if ($modelStatus.Length -gt $maxModelWidth) {
+                if ($maxModelWidth -gt 3) { $modelStatus = $modelStatus.Substring(0,$maxModelWidth - 3) + '...' }
+                else { $modelStatus = $modelStatus.Substring(0,$maxModelWidth) }
             }
-            $topBoxLine = $leftStatus + (' ' * $statusGap) + $rightStatus
+            $statusGap = $statusWidth - $leftStatus.Length - $modelStatus.Length - $rightStatus.Length - 2
+            if ($statusGap -lt 1) { $statusGap = 1 }
+            $topBoxLine = $leftStatus + (' ' * $statusGap) + $modelStatus + '  ' + $rightStatus
             if ($topBoxLine.Length -gt $statusWidth) { $topBoxLine = $topBoxLine.Substring(0,$statusWidth) }
             $bottomRule = '────────────────────────────────────'
             $bottomIndent = [Math]::Max(0,[int](($width - $bottomRule.Length) / 2))
