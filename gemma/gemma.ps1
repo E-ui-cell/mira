@@ -25,22 +25,14 @@ $Prompt = Initialize-GemmaCliMode -Prompt $Prompt -ExplainCommand $ExplainComman
 
 $Contents = [System.Collections.ArrayList]::new()
 
-# MIRA INPUT HISTORY STATE - history-patch.ps1
+# Interactive input state
 $script:MiraInputHistory = [System.Collections.Generic.List[string]]::new()
 $script:MiraHistoryIndex = -1
 $script:MiraHistoryDraft = ''
 $script:MiraHistoryMax = $MIRA_MAX_HISTORY
-# ==============================================================================
-# TAB COMPLETION
-# ==============================================================================
-
-
 $script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.model','.provider','.effort','.verbose','.auth','.grounding','.ask','.autopilot')
 
 . (Join-Path $PSScriptRoot 'ui\LineEditor.ps1')
 
-# ==============================================================================
-# HELPER: EXTRACT AND SAVE CODE BLOCKS (.save)
-# ==============================================================================
 . (Join-Path $PSScriptRoot 'agent\ChatLoop.ps1')
 Start-GemmaChatLoop
