@@ -1309,34 +1309,72 @@ function Read-GemLineConsole {
 
     $renderedRows = 1
     function Redraw($old,$new,$pos) {
-        $w = [Console]::WindowWidth
-        $lines = @(([string]$new) -split "`n",-1)
+        $w = [Math]::Max(12,[Console]::WindowWidth)
+        $usable = $w - 1
+        $lines = @(([string]$new) -split [string][char]10,-1)
+        $rowOffsets = New-Object 'System.Collections.Generic.List[int]'
+        $totalRows = 0
+
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $rowOffsets.Add($totalRows)
+            $startColumn = if ($i -eq 0) { $prompt } else { 0 }
+            $firstCapacity = [Math]::Max(1,$usable - $startColumn)
+            $length = ([string]$lines[$i]).Length
+            $rowsForLine = if ($length -le $firstCapacity) { 1 } else { 1 + [int][Math]::Ceiling(($length - $firstCapacity) / [double]$usable) }
+            $totalRows += $rowsForLine
+        }
+
+        # Clear the previous and new physical rows, including wrapped long lines.
+        $clearRows = [Math]::Max($renderedRows,$totalRows)
+        for ($i = 0; $i -lt $clearRows; $i++) {
+            $targetRow = $row + $i
+            if ($targetRow -ge [Console]::BufferHeight) { break }
+            [Console]::SetCursorPosition(0,$targetRow)
+            [Console]::Write((' ' * $usable))
+        }
+
+        # Draw bounded chunks rather than relying on implicit console wrapping.
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            $value = [string]$lines[$i]
+            $startColumn = if ($i -eq 0) { $prompt } else { 0 }
+            $firstCapacity = [Math]::Max(1,$usable - $startColumn)
+            $offset = 0
+            $physicalRow = $row + $rowOffsets[$i]
+            while ($offset -lt $value.Length) {
+                $column = if ($offset -eq 0) { $startColumn } else { 0 }
+                $capacity = if ($offset -eq 0) { $firstCapacity } else { $usable }
+                $count = [Math]::Min($capacity,$value.Length - $offset)
+                if ($physicalRow -lt [Console]::BufferHeight) {
+                    [Console]::SetCursorPosition($column,$physicalRow)
+                    [Console]::Write($value.Substring($offset,$count))
+                }
+                $offset += $count
+                if ($offset -lt $value.Length) { ++$physicalRow }
+            }
+        }
+
         $lineIndex = 0
         $column = 0
         if ($pos -gt 0) {
             $prefix = ([string]$new).Substring(0,[Math]::Min($pos,([string]$new).Length))
-            $lineIndex = ([regex]::Matches($prefix,"`n")).Count
-            $lastBreak = $prefix.LastIndexOf("`n")
+            $lineIndex = ([regex]::Matches($prefix,[string][char]10)).Count
+            $lastBreak = $prefix.LastIndexOf([char]10)
             $column = if ($lastBreak -ge 0) { $prefix.Length - $lastBreak - 1 } else { $prefix.Length }
         }
-
-        for ($i = 0; $i -lt [Math]::Max($renderedRows,$lines.Count); $i++) {
-            $targetRow = $row + $i
-            if ($targetRow -ge [Console]::BufferHeight) { break }
-            [Console]::SetCursorPosition(0,$targetRow)
-            [Console]::Write((' ' * [Math]::Max(1,$w - 1)))
-            if ($i -lt $lines.Count) {
-                $startColumn = if ($i -eq 0) { $prompt } else { 0 }
-                [Console]::SetCursorPosition($startColumn,$targetRow)
-                [Console]::Write([string]$lines[$i])
-            }
+        $startColumn = if ($lineIndex -eq 0) { $prompt } else { 0 }
+        $firstCapacity = [Math]::Max(1,$usable - $startColumn)
+        if ($column -lt $firstCapacity) {
+            $cursorRowOffset = 0
+            $cursorColumn = $startColumn + $column
+        } else {
+            $afterFirst = $column - $firstCapacity
+            $cursorRowOffset = 1 + [int][Math]::Floor($afterFirst / [double]$usable)
+            $cursorColumn = $afterFirst % $usable
         }
-        $renderedRows = [Math]::Max(1,$lines.Count)
-        $cursorRow = [Math]::Min($row + $lineIndex,[Console]::BufferHeight - 1)
-        $cursorColumn = if ($lineIndex -eq 0) { $prompt + $column } else { $column }
-        [Console]::SetCursorPosition([Math]::Min($cursorColumn,$w - 1),$cursorRow)
+        $cursorRow = [Math]::Min($row + $rowOffsets[$lineIndex] + $cursorRowOffset,[Console]::BufferHeight - 1)
+        [Console]::SetCursorPosition([Math]::Min($cursorColumn,$usable - 1),$cursorRow)
+        $renderedRows = [Math]::Max(1,$totalRows)
     }
-
     function ShowChoices($choices,$current) {
         [Console]::SetCursorPosition(0,[Console]::CursorTop)
         [Console]::Write("`r`n" + ($choices -join '  ') + "`r`n> ")
