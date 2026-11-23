@@ -2182,6 +2182,11 @@ while ($true) {
     $toolLoop = $true
     $toolRounds = 0
     $maxToolRounds = $MIRA_MAX_TOOL_ROUNDS
+    # One stopwatch and token accumulator cover the entire turn, including
+    # function-call rounds, so the final header reports total request time.
+    $turnStopwatch = [Diagnostics.Stopwatch]::StartNew()
+    $turnPromptTokens = 0
+    $turnCompletionTokens = 0
 
     try {
         if (-not $script:CommandMode -and
@@ -2392,6 +2397,18 @@ while ($true) {
             if ($null -eq $response) {
                 throw "The API returned a null or empty response object."
             }
+
+            # Gemini usageMetadata is present on both Gemini API and
+            # Antigravity responses. Accumulate each model/tool round.
+            if ($null -ne $response.usageMetadata) {
+                if ($null -ne $response.usageMetadata.promptTokenCount) {
+                    $turnPromptTokens += [int]$response.usageMetadata.promptTokenCount
+                }
+                if ($null -ne $response.usageMetadata.candidatesTokenCount) {
+                    $turnCompletionTokens += [int]$response.usageMetadata.candidatesTokenCount
+                }
+            }
+
             if ($null -eq $response.candidates -or $response.candidates.Count -eq 0) {
                 if ($null -ne $response.error) {
                     throw "API Error JSON: $($response.error.message)"
@@ -2534,8 +2551,18 @@ while ($true) {
             }
             if ($width -le 10) { $width = 80 }
 
-            $boxWidth = $width - 1
-            $topBoxLine = '┌── GEMMA ─────────────'
+            if ($turnStopwatch.IsRunning) { $turnStopwatch.Stop() }
+            $elapsedSeconds = ([Math]::Round($turnStopwatch.Elapsed.TotalSeconds,1)).ToString('0.0',[Globalization.CultureInfo]::InvariantCulture)
+            $leftStatus = '┌── ' + $elapsedSeconds + 's'
+            $rightStatus = '↑ ' + $turnPromptTokens + '  ↓ ' + $turnCompletionTokens
+            $statusWidth = [Math]::Max(1,$width - 1)
+            $statusGap = $statusWidth - $leftStatus.Length - $rightStatus.Length
+            if ($statusGap -lt 1) {
+                $leftStatus = '┌── ' + $elapsedSeconds + 's'
+                $statusGap = [Math]::Max(1,$statusWidth - $leftStatus.Length - $rightStatus.Length)
+            }
+            $topBoxLine = $leftStatus + (' ' * $statusGap) + $rightStatus
+            if ($topBoxLine.Length -gt $statusWidth) { $topBoxLine = $topBoxLine.Substring(0,$statusWidth) }
             $bottomRule = '────────────────────────────────────'
             $bottomIndent = [Math]::Max(0,[int](($width - $bottomRule.Length) / 2))
             $bottomBoxLine = (' ' * $bottomIndent) + $bottomRule
