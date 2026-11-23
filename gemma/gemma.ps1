@@ -602,10 +602,16 @@ function Invoke-GemmaSearchCommand {
         }
     } elseif ($value -eq 'off') {
         $script:GoogleSearchGrounding = $false
-        Write-Host '[Google Search grounding disabled globally for both providers.]' -ForegroundColor Yellow
+        if ($script:Provider -eq 'antigravity') {
+            Write-Host '[Grounding OFF. Normal Antigravity chat is blocked until .grounding on; no ungrounded fallback.]' -ForegroundColor Yellow
+        } else {
+            Write-Host '[Google Search grounding disabled for Gemini API web_search.]' -ForegroundColor Yellow
+        }
     } elseif ($value -eq 'status' -or -not $value) {
-        if (-not $script:GoogleSearchGrounding) {
-            $state = 'OFF globally (no provider can use Google Search)'
+        if (-not $script:GoogleSearchGrounding -and $script:Provider -eq 'antigravity') {
+            $state = 'OFF; Antigravity chat blocked until .grounding on'
+        } elseif (-not $script:GoogleSearchGrounding) {
+            $state = 'OFF; Gemini API web_search disabled'
         } elseif ($script:Provider -eq 'antigravity') {
             $state = "ON; mandatory Search-only preflight with selected Antigravity model; no ungrounded fallback"
         } elseif (-not $script:AgenticWebSearchEnabled) {
@@ -2388,13 +2394,14 @@ while ($true) {
                                 $failureStream.Dispose()
                             }
                         } catch {}
+                        $requestProviderLabel = if ($usingAntigravityOAuth) { 'Antigravity' } else { 'Gemini API' }
                         if ($failureBody) {
-                            Write-Host ("[API Failure]: HTTP {0}" -f $failureStatus) -ForegroundColor Red
+                            Write-Host ("[{0} API Failure]: HTTP {1}" -f $requestProviderLabel,$failureStatus) -ForegroundColor Red
                             Write-Host $failureBody -ForegroundColor Gray
                         } else {
-                            Write-Host ("[API Failure]: HTTP {0} {1}" -f $failureStatus,$responseException.Message) -ForegroundColor Red
+                            Write-Host ("[{0} API Failure]: HTTP {1} {2}" -f $requestProviderLabel,$failureStatus,$responseException.Message) -ForegroundColor Red
                         }
-                        throw "Antigravity request failed with HTTP $failureStatus."
+                        throw "$requestProviderLabel request failed with HTTP $failureStatus."
                     }
                     throw "HTTP/REST Error: $($responseException.Message)"
                 }
