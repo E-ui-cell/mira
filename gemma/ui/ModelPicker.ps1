@@ -52,8 +52,6 @@ function Read-GemmaModelSelection {
         [Console]::Write(([Environment]::NewLine * $paddingRows))
         $top = [Console]::CursorTop
     }
-        $top = [Console]::CursorTop
-    }
 
     $oldForeground = [Console]::ForegroundColor
     $oldBackground = [Console]::BackgroundColor
