@@ -581,7 +581,7 @@ function Invoke-GemmaAntigravitySearchRequest {
         }
         if ($lastError) { Write-Host "[Google Search] $candidateModel failed: $lastError" -ForegroundColor DarkYellow }
     }
-    throw "Google Search failed on all advertised Search-capable models. Last error: $lastError"
+    throw "Google Search failed on all configured or account-advertised candidate models. Last error: $lastError"
 }
 
 function Invoke-GemmaSearchCommand {
