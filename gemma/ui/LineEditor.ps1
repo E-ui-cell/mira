@@ -85,6 +85,12 @@ function Read-GemLineConsole {
     [Console]::Write('> ')
 
     $renderedRows = 1
+    if ($null -eq $script:GemKillRing) {
+        $script:GemKillRing = New-Object 'System.Collections.Generic.List[string]'
+    }
+    $undoStack = New-Object 'System.Collections.Generic.List[object]'
+    $historySearchTerm = $null
+    $historySearchDraft = $null
     function Redraw($old,$new,$pos) {
         $w = [Math]::Max(12,[Console]::WindowWidth)
         $usable = $w - 1
@@ -164,6 +170,8 @@ function Read-GemLineConsole {
 
     while ($true) {
         $k = [Console]::ReadKey($true)
+        $ctrl = (($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0)
+        $alt = (($k.Modifiers -band [ConsoleModifiers]::Alt) -ne 0)
 
         if ($k.Key -eq [ConsoleKey]::C -and
             (($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
@@ -181,6 +189,233 @@ function Read-GemLineConsole {
             $b = $b.Insert($c,[string][char]10)
             ++$c
             Redraw $old $b $c
+            continue
+        }
+
+        # Ctrl+G cancels a history search and restores the original draft.
+        if ($ctrl -and $k.Key -eq [ConsoleKey]::G) {
+            if ($null -ne $historySearchTerm) {
+                $old = $b
+                $b = [string]$historySearchDraft
+                $c = $b.Length
+                $script:MiraHistoryIndex = -1
+                $historySearchTerm = $null
+                Redraw $old $b $c
+            } else {
+                [Console]::Beep(700,60)
+            }
+            continue
+        }
+
+        # Ctrl+R / Ctrl+S repeat reverse/forward searches for the current text.
+        if ($ctrl -and ($k.Key -eq [ConsoleKey]::R -or $k.Key -eq [ConsoleKey]::S)) {
+            if ($null -eq $historySearchTerm) {
+                $historySearchTerm = $b
+                $historySearchDraft = $b
+                if ([string]::IsNullOrWhiteSpace($historySearchTerm)) {
+                    [Console]::Beep(700,60)
+                    $historySearchTerm = $null
+                    continue
+                }
+            }
+            if ($k.Key -eq [ConsoleKey]::R) {
+                $startIndex = if ($script:MiraHistoryIndex -ge 0) { $script:MiraHistoryIndex } else { $script:MiraInputHistory.Count }
+                $matchIndex = Find-GemHistoryMatch -Term $historySearchTerm -Start $startIndex -Direction -1
+            } else {
+                $startIndex = if ($script:MiraHistoryIndex -ge 0) { $script:MiraHistoryIndex } else { -1 }
+                $matchIndex = Find-GemHistoryMatch -Term $historySearchTerm -Start $startIndex -Direction 1
+            }
+            if ($matchIndex -ge 0) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b
+                $script:MiraHistoryIndex = $matchIndex
+                $b = $script:MiraInputHistory[$matchIndex]
+                $c = $b.Length
+                Redraw $old $b $c
+            } else {
+                [Console]::Beep(700,60)
+            }
+            continue
+        }
+
+        # Ctrl+P/N are explicit previous/next history shortcuts.
+        if ($ctrl -and ($k.Key -eq [ConsoleKey]::P -or $k.Key -eq [ConsoleKey]::N)) {
+            if ($k.Key -eq [ConsoleKey]::P) {
+                if ($script:MiraInputHistory.Count -gt 0) {
+                    if ($script:MiraHistoryIndex -eq -1) {
+                        $script:MiraHistoryDraft = $b
+                        $script:MiraHistoryIndex = $script:MiraInputHistory.Count - 1
+                    } elseif ($script:MiraHistoryIndex -gt 0) {
+                        --$script:MiraHistoryIndex
+                    } else { [Console]::Beep(700,60); continue }
+                    $old = $b
+                    $b = $script:MiraInputHistory[$script:MiraHistoryIndex]
+                    $c = $b.Length
+                    Redraw $old $b $c
+                } else { [Console]::Beep(700,60) }
+            } else {
+                if ($script:MiraHistoryIndex -eq -1) {
+                    [Console]::Beep(700,60)
+                } elseif ($script:MiraHistoryIndex -lt ($script:MiraInputHistory.Count - 1)) {
+                    ++$script:MiraHistoryIndex
+                    $old = $b
+                    $b = $script:MiraInputHistory[$script:MiraHistoryIndex]
+                    $c = $b.Length
+                    Redraw $old $b $c
+                } else {
+                    $old = $b
+                    $b = $script:MiraHistoryDraft
+                    $c = $b.Length
+                    $script:MiraHistoryIndex = -1
+                    Redraw $old $b $c
+                }
+            }
+            $historySearchTerm = $null
+            continue
+        }
+
+        # Ctrl+D deletes forward, or exits cleanly on an empty prompt.
+        if ($ctrl -and $k.Key -eq [ConsoleKey]::D) {
+            if ($b.Length -eq 0) {
+                [Console]::TreatControlCAsInput = $oldTreatControlCAsInput
+                return '.q'
+            }
+            if ($c -lt $b.Length) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b
+                $b = $b.Remove($c,1)
+                $historySearchTerm = $null
+                Redraw $old $b $c
+            } else { [Console]::Beep(700,60) }
+            continue
+        }
+
+        # Ctrl+A/E move to the current logical line boundary.
+        if ($ctrl -and ($k.Key -eq [ConsoleKey]::A -or $k.Key -eq [ConsoleKey]::E)) {
+            if ($k.Key -eq [ConsoleKey]::A) {
+                $lineStart = $b.LastIndexOf([char]10,[Math]::Max(0,$c - 1))
+                $c = if ($lineStart -lt 0) { 0 } else { $lineStart + 1 }
+            } else {
+                $lineEnd = $b.IndexOf([char]10,$c)
+                $c = if ($lineEnd -lt 0) { $b.Length } else { $lineEnd }
+            }
+            Redraw $b $b $c
+            continue
+        }
+
+        # Ctrl+B/F and Alt+B/F provide character and word motion.
+        if ($ctrl -and ($k.Key -eq [ConsoleKey]::B -or $k.Key -eq [ConsoleKey]::F)) {
+            if ($k.Key -eq [ConsoleKey]::B) { $c = [Math]::Max(0,$c - 1) }
+            else { $c = [Math]::Min($b.Length,$c + 1) }
+            Redraw $b $b $c
+            continue
+        }
+        if ($alt -and ($k.Key -eq [ConsoleKey]::B -or $k.Key -eq [ConsoleKey]::F)) {
+            if ($k.Key -eq [ConsoleKey]::B) { $c = Get-GemWordStart -Text $b -Position $c }
+            else { $c = Get-GemWordEnd -Text $b -Position $c }
+            Redraw $b $b $c
+            continue
+        }
+
+        # Ctrl+K/U/W and Alt+D/Backspace use a shared kill ring.
+        if (($ctrl -and ($k.Key -eq [ConsoleKey]::K -or $k.Key -eq [ConsoleKey]::U -or $k.Key -eq [ConsoleKey]::W)) -or
+            ($alt -and ($k.Key -eq [ConsoleKey]::D -or $k.Key -eq [ConsoleKey]::Backspace))) {
+            $start = $c
+            $finish = $c
+            if ($ctrl -and $k.Key -eq [ConsoleKey]::K) {
+                $lineEnd = $b.IndexOf([char]10,$c)
+                if ($lineEnd -lt 0) { $lineEnd = $b.Length }
+                $finish = if ($lineEnd -eq $c -and $lineEnd -lt $b.Length) { $lineEnd + 1 } else { $lineEnd }
+            } elseif ($ctrl -and $k.Key -eq [ConsoleKey]::U) {
+                $lineStart = $b.LastIndexOf([char]10,[Math]::Max(0,$c - 1))
+                $start = if ($lineStart -lt 0) { 0 } else { $lineStart + 1 }
+            } elseif ($ctrl -and $k.Key -eq [ConsoleKey]::W -or ($alt -and $k.Key -eq [ConsoleKey]::Backspace)) {
+                $start = Get-GemWordStart -Text $b -Position $c
+            } else {
+                $finish = Get-GemWordEnd -Text $b -Position $c
+            }
+            if ($finish -gt $start) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b
+                [void]$script:GemKillRing.Insert(0,$b.Substring($start,$finish - $start))
+                while ($script:GemKillRing.Count -gt 20) { $script:GemKillRing.RemoveAt($script:GemKillRing.Count - 1) }
+                $b = $b.Remove($start,$finish - $start)
+                $c = $start
+                $script:MiraHistoryIndex = -1
+                $historySearchTerm = $null
+                Redraw $old $b $c
+            }
+            continue
+        }
+
+        # Ctrl+Y pastes the most recently killed text.
+        if ($ctrl -and $k.Key -eq [ConsoleKey]::Y) {
+            if ($script:GemKillRing.Count -gt 0) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b
+                $text = $script:GemKillRing[0]
+                $b = $b.Insert($c,$text)
+                $c += $text.Length
+                Redraw $old $b $c
+            }
+            continue
+        }
+
+        # Ctrl+T transposes adjacent characters; Alt+T transposes adjacent words.
+        if ($ctrl -and $k.Key -eq [ConsoleKey]::T) {
+            if ($b.Length -ge 2 -and $c -gt 0) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b
+                $left = if ($c -eq $b.Length) { $c - 2 } else { $c - 1 }
+                $chars = $b.ToCharArray()
+                $temp = $chars[$left]
+                $chars[$left] = $chars[$left + 1]
+                $chars[$left + 1] = $temp
+                $b = -join $chars
+                $c = [Math]::Min($b.Length,$c + 1)
+                Redraw $old $b $c
+            }
+            continue
+        }
+        if ($alt -and $k.Key -eq [ConsoleKey]::T) {
+            $firstStart = Get-GemWordStart -Text $b -Position $c
+            $firstEnd = Get-GemWordEnd -Text $b -Position $firstStart
+            $secondStart = Get-GemWordEnd -Text $b -Position $firstEnd
+            if ($firstEnd -gt $firstStart -and $secondStart -lt $b.Length) {
+                $secondEnd = Get-GemWordEnd -Text $b -Position $secondStart
+                if ($secondEnd -gt $secondStart) {
+                    Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                    $old = $b
+                    $firstWord = $b.Substring($firstStart,$firstEnd - $firstStart)
+                    $separator = $b.Substring($firstEnd,$secondStart - $firstEnd)
+                    $secondWord = $b.Substring($secondStart,$secondEnd - $secondStart)
+                    $b = $b.Substring(0,$firstStart) + $secondWord + $separator + $firstWord + $b.Substring($secondEnd)
+                    $c = $firstStart + $secondWord.Length + $separator.Length + $firstWord.Length
+                    Redraw $old $b $c
+                }
+            }
+            continue
+        }
+
+        # Ctrl+Z/Ctrl+_ undo the most recent edit.
+        if (($ctrl -and $k.Key -eq [ConsoleKey]::Z) -or $k.KeyChar -eq [char]31) {
+            if ($undoStack.Count -gt 0) {
+                $state = $undoStack[$undoStack.Count - 1]
+                $undoStack.RemoveAt($undoStack.Count - 1)
+                $old = $b
+                $b = [string]$state.Buffer
+                $c = [int]$state.Cursor
+                Redraw $old $b $c
+            } else { [Console]::Beep(700,60) }
+            continue
+        }
+
+        # Ctrl+L clears and redraws without losing the current draft.
+        if ($ctrl -and $k.Key -eq [ConsoleKey]::L) {
+            [Console]::Clear()
+            $row = [Console]::CursorTop
+            $renderedRows = 1
+            Redraw '' $b $c
             continue
         }
 
