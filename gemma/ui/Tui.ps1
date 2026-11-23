@@ -126,7 +126,7 @@ function Get-GemTuiCompletionLayout {
     $innerWidth = [Math]::Max(1,$width - 2)
     $cellWidth = [Math]::Max(1,[int][Math]::Floor($innerWidth / [double]$columns))
 
-    $visibleRows = [Math]::Min($maxRows,[Math]::Max(1,[int][Math]::Ceiling($Items.Count / [double]($columns * $maxRows))))
+    $visibleRows = [Math]::Min($maxRows,[Math]::Max(1,[int][Math]::Ceiling($Items.Count / [double]$columns)))
     $menuHeight = $visibleRows + 3
     $below = $windowBottom - ($PromptRow + 1)
     $above = $PromptRow - $windowTop
