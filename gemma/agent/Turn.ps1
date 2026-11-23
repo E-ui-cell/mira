@@ -346,7 +346,9 @@
             $frameHorizontal = [string][char]0x2500
             $leftStatus = $frameCorner + ($frameHorizontal * 2) + ' ' + $elapsedSeconds + 's'
             $modelStatus = [string]$script:MODEL
-            $rightStatus = ('Tokens: {0} / {1}' -f [string]$turnPromptTokens,[string]$turnCompletionTokens)
+            $upArrow = [string][char]0x2191
+            $downArrow = [string][char]0x2193
+            $rightStatus = ('{0} {1}  {2} {3}' -f $upArrow,[string]$turnPromptTokens,$downArrow,[string]$turnCompletionTokens)
             $statusWidth = [Math]::Max(1,$width - 1)
             $fixedWidth = $leftStatus.Length + $rightStatus.Length + 2
             $maxModelWidth = [Math]::Max(1,$statusWidth - $fixedWidth - 2)
