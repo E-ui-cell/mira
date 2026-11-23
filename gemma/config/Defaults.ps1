@@ -83,6 +83,7 @@ if ([string]::IsNullOrWhiteSpace($API_KEY) -and
 
 $MODEL = $MIRA_DEFAULT_MODEL
 
+$script:ActiveSystemPromptName = 'default'
 $SystemInstruction = @{
     parts = @(
         @{ text = $MIRA_DEFAULT_SYSTEM_PROMPT }
