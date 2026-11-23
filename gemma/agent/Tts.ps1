@@ -1,9 +1,9 @@
 # WINDOWS POWERSHELL 5.1
 # On-demand Gemini 3.8 Flash TTS playback.
 
-$script:MiraTtsModel = 'gemini-3.8-flash-tts'
-$script:MiraTtsVoice = 'Sulafat'
-$script:MiraTtsDirectorCore = 'You are having sex.'
+$script:MiraTtsModel = $MIRA_TTS_MODEL
+$script:MiraTtsVoice = $MIRA_TTS_VOICE
+$script:MiraTtsDirectorCore = $MIRA_TTS_DIRECTOR_CORE
 
 function Get-GemmaTtsDirectorStyle {
     param([System.Collections.IList]$Contents)
@@ -75,7 +75,7 @@ function Invoke-GemmaSpeakLatest {
         $audioBytes = [Convert]::FromBase64String([string]$audioPart.inlineData.data)
         if ($audioBytes.Length -lt 44 -or [Text.Encoding]::ASCII.GetString($audioBytes,0,4) -ne 'RIFF') { throw 'Gemini TTS response was not a complete WAV file.' }
         [IO.File]::WriteAllBytes($tempWave,$audioBytes)
-        $player = New-Object System.Media.SoundPlayer($tempWave)
+        $player = [System.Media.SoundPlayer]::new($tempWave)
         $player.Load()
         $player.PlaySync()
     }
