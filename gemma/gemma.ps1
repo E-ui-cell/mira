@@ -575,7 +575,7 @@ function Invoke-GemmaAntigravitySearchRequest {
                 $transient = $lastError -match '(?i)(429|500|502|503|504|RESOURCE_EXHAUSTED|MODEL_CAPACITY_EXHAUSTED|temporarily unavailable)'
                 if (-not $transient -or $attempt -ge 2) { break }
                 $delay = [int][Math]::Min(12,2 * [Math]::Pow(2,$attempt))
-                Write-Host "[Google Search] $candidateModel is temporarily unavailable; retry $($attempt + 1)/2 in \${delay}s." -ForegroundColor DarkYellow
+                Write-Host "[Google Search] $candidateModel is temporarily unavailable; retry $($attempt + 1)/2 in ${delay}s." -ForegroundColor DarkYellow
                 Start-Sleep -Seconds $delay
             }
         }
