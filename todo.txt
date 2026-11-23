@@ -217,8 +217,9 @@ NON-NEGOTIABLE PRODUCT PRINCIPLES
        - Ctrl+G: cancel an active search or completion.
        - Alt+Backspace: kill the previous word.
        - Ctrl+Z / Ctrl+_: undo the last edit where practical.
-[ ] Ctrl+J inserts a newline in the current prompt buffer. It never submits
+[x] Ctrl+J inserts a newline in the current prompt buffer. It never submits
     the request. Enter submits the complete multiline prompt.
+    Implemented in Read-GemLineConsole; Windows PowerShell 5.1 CI pending.
 [ ] Preserve Unicode insertion, multi-line paste, cursor movement across lines,
     redraw after resize, and history navigation without corrupting the buffer.
 [ ] Avoid conflicting bindings: when editing a multiline buffer, Up/Down move
@@ -414,8 +415,8 @@ IMPLEMENTATION PROGRESS (BRANCH thin)
 - Retained direct .model <exact-id> selection and a Read-Host fallback for
   redirected/non-interactive sessions.
 - PowerShell 5.1 syntax validation is being run on every commit.
-- Emacs/Bash input bindings and Ctrl+J newline are specified above but are
-  not yet implemented.
+- Ctrl+J multiline insertion is implemented; the remaining Emacs/Bash
+  Readline editing bindings are specified above and still pending.
 - The full agent-core decomposition/rewrite is still in progress. The current
   gemma.ps1 remains the legacy implementation plus the first rewritten UI
   component; do not describe the rewrite as complete.
