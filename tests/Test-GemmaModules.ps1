@@ -27,6 +27,7 @@ $requiredFunctions = @(
     'Get-GeminiModels',
     'Start-GemmaChatLoop',
     'Get-AntigravityModels',
+    'Test-GemmaSearchIntent',
     'Invoke-GemmaAntigravityGoogleSearchPreflight',
     'Invoke-GemmaWebSearch',
     'Invoke-GemmaPermissionCommand',
@@ -96,6 +97,28 @@ try {
     $env:GEMINI_API = $oldGeminiApi
     $env:GEMINI_API_KEY = $oldGeminiApiKey
     $env:GEMINI_APIJ = $oldGeminiApiJ
+}
+
+# Keep Antigravity native Search conditional on the current user request.
+$searchCases = @(
+    @{ Request = 'test'; Expected = $false },
+    @{ Request = 'll'; Expected = $false },
+    @{ Request = 'ok'; Expected = $false },
+    @{ Request = 'what?'; Expected = $false },
+    @{ Request = 'search latest hour news for kyiv'; Expected = $true },
+    @{ Request = 'search news, show dates and sources for each news'; Expected = $true },
+    @{ Request = 'show latest lviv news in last hours'; Expected = $true },
+    @{ Request = 'why you searching again? talk like engineer, what made you continue searching data'; Expected = $false },
+    @{ Request = '.grounding off'; Expected = $false },
+    @{ Request = "tell me today's date"; Expected = $false },
+    @{ Request = 'show weather in Lviv'; Expected = $false },
+    @{ Request = 'search weather in Lviv'; Expected = $true }
+)
+foreach ($case in $searchCases) {
+    $actual = [bool](Test-GemmaSearchIntent -Text $case.Request)
+    if ($actual -ne [bool]$case.Expected) {
+        throw "Search-intent classifier mismatch for '$($case.Request)': expected $($case.Expected), got $actual."
+    }
 }
 
 # Verify common cursor-word calculations independently of terminal interaction.
