@@ -44,7 +44,7 @@ if ($script:CommandMode) { $Prompt = $ExplainCommand }
 $MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity' or 'gemini'; no automatic provider switching
 $MIRA_DEFAULT_MODEL = 'gemini-3.1-flash-lite'
 $MIRA_DEFAULT_EFFORT = 'high'                # 'low', 'medium', or 'high'
-$MIRA_SEARCH_MODEL = if ($env:MIRA_SEARCH_MODEL) { [string]$env:MIRA_SEARCH_MODEL } else { 'gemini-3.1-flash-lite' } # Preferred Search model; account capability list may select a fallback
+$MIRA_SEARCH_MODEL = if ($env:MIRA_SEARCH_MODEL) { [string]$env:MIRA_SEARCH_MODEL } else { 'gemini-3.1-flash-lite' } # Dedicated Antigravity OAuth research model for Gemini API web_search
 
 # Generation defaults ($null means: let the selected model use its own default)
 $MIRA_TEMPERATURE = $null                   # 0.0–2.0 where supported
@@ -608,7 +608,7 @@ function Invoke-GemmaSearchCommand {
     if ($value -eq 'on') {
         $script:GoogleSearchGrounding = $true
         if ($script:Provider -eq 'antigravity') {
-            Write-Host '[Native Google Search is enabled for Antigravity models advertised by this account; Gemini API web_search remains provider-specific.]' -ForegroundColor Green
+            Write-Host '[Native googleSearch will be sent to the selected Antigravity chat model; Gemini API web_search remains provider-specific.]' -ForegroundColor Green
         } elseif ($script:AgenticWebSearchEnabled) {
             if (Test-Path -LiteralPath (Get-AntigravityTokenPath)) {
                 Write-Host "[Google Search enabled for Gemini API models via Antigravity OAuth (research model: $MIRA_SEARCH_MODEL).]" -ForegroundColor Green
@@ -625,7 +625,7 @@ function Invoke-GemmaSearchCommand {
         if (-not $script:GoogleSearchGrounding) {
             $state = 'OFF globally (no provider can use Google Search)'
         } elseif ($script:Provider -eq 'antigravity') {
-            $state = "ON globally; Antigravity native googleSearch is sent only to account-advertised models"
+            $state = "ON globally; native googleSearch is sent to the selected Antigravity chat model"
         } elseif (-not $script:AgenticWebSearchEnabled) {
             $state = 'ON globally; Gemini API web_search is disabled by MIRA_ENABLE_AGENTIC_WEB_SEARCH'
         } elseif (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
