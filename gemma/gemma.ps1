@@ -2092,7 +2092,7 @@ while ($true) {
         $usingAntigravityOAuth = ($script:Provider -eq 'antigravity')
         $nativeSearchAdded = $false
 
-        if ($usingAntigravityOAuth -and $script:GoogleSearchGrounding -and -not $nativeSearchFallbackUsed) {
+        if ($usingAntigravityOAuth -and $script:GoogleSearchGrounding -and -not $script:CommandMode -and -not $nativeSearchFallbackUsed) {
             if (Test-GemmaAntigravityNativeSearchSupport -Model $script:MODEL) {
                 $existingTools = @()
                 if ($payloadObj.Contains('tools') -and $null -ne $payloadObj.tools) {
