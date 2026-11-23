@@ -165,16 +165,14 @@ function Read-GemLineConsole {
         [Console]::SetCursorPosition([Math]::Min($cursorColumn,$usable - 1),$cursorRow)
         $renderedRows = [Math]::Max(1,$totalRows)
     }
-    function ShowChoices($choices,$current) {
-        [Console]::SetCursorPosition(0,[Console]::CursorTop)
-        [Console]::Write("`r`n" + ($choices -join '  ') + "`r`n> ")
-        $script:dummy = $null
-    }
-
     while ($true) {
         $k = [Console]::ReadKey($true)
         $ctrl = (($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0)
         $alt = (($k.Modifiers -band [ConsoleModifiers]::Alt) -ne 0)
+        if (-not ($alt -and $k.Key -eq [ConsoleKey]::Y)) {
+            $lastYankStart = -1
+            $lastYankLength = 0
+        }
 
         if ($k.Key -eq [ConsoleKey]::C -and
             (($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
@@ -192,6 +190,8 @@ function Read-GemLineConsole {
             $old = $b
             $b = $b.Insert($c,[string][char]10)
             ++$c
+            $script:MiraHistoryIndex = -1
+            $historySearchTerm = $null
             Redraw $old $b $c
             continue
         }
@@ -512,6 +512,8 @@ function Read-GemLineConsole {
                 $old = $b
                 $b = $b.Remove($c-1,1)
                 --$c
+                $script:MiraHistoryIndex = -1
+                $historySearchTerm = $null
                 Redraw $old $b $c
             }
             continue
@@ -522,6 +524,8 @@ function Read-GemLineConsole {
                 Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
                 $old = $b
                 $b = $b.Remove($c,1)
+                $script:MiraHistoryIndex = -1
+                $historySearchTerm = $null
                 Redraw $old $b $c
             }
             continue
@@ -538,11 +542,15 @@ function Read-GemLineConsole {
         }
 
         if ($k.Key -eq [ConsoleKey]::Home) {
-            $c = 0; Redraw $b $b $c; continue
+            $lineStart = $b.LastIndexOf([char]10,[Math]::Max(0,$c - 1))
+            $c = if ($lineStart -lt 0) { 0 } else { $lineStart + 1 }
+            Redraw $b $b $c; continue
         }
 
         if ($k.Key -eq [ConsoleKey]::End) {
-            $c = $b.Length; Redraw $b $b $c; continue
+            $lineEnd = $b.IndexOf([char]10,$c)
+            $c = if ($lineEnd -lt 0) { $b.Length } else { $lineEnd }
+            Redraw $b $b $c; continue
         }
         # MIRA INPUT HISTORY - fallback Up/Down
         if ($k.Key -eq [ConsoleKey]::UpArrow) {
