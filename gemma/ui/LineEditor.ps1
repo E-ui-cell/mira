@@ -76,6 +76,20 @@ function Find-GemHistoryMatch {
     return -1
 }
 
+function Get-GemHistorySearchPrompt {
+    param([int]$Direction,[string]$Term,[int]$Width)
+    $label = if ($Direction -gt 0) { '(fwd) ' } else { '(rev) ' }
+    if ($Width -ge 28) {
+        $label = if ($Direction -gt 0) { '(forward-i-search) ' } else { '(reverse-i-search) ' }
+    }
+    $maxTerm = [Math]::Max(0,$Width - $label.Length - 3)
+    $displayTerm = [string]$Term
+    if ($displayTerm.Length -gt $maxTerm) {
+        if ($maxTerm -gt 0) { $displayTerm = $displayTerm.Substring($displayTerm.Length - $maxTerm) } else { $displayTerm = '' }
+    }
+    return $label + $displayTerm + ': '
+}
+
 function Read-GemLineConsole {
     $oldTreatControlCAsInput = [Console]::TreatControlCAsInput
     [Console]::TreatControlCAsInput = $true
@@ -275,7 +289,7 @@ function Read-GemLineConsole {
             if ($searchChanged) {
                 $directionLabel = if ($historySearchDirection -gt 0) { 'forward' } else { 'reverse' }
                 if (-not $historySearchDirection) { $directionLabel = 'reverse' }
-                $promptText = '(' + $directionLabel + '-i-search) ' + $historySearchTerm + ': '
+                $promptText = Get-GemHistorySearchPrompt -Direction $historySearchDirection -Term $historySearchTerm -Width ([Console]::WindowWidth)
                 $prompt = $promptText.Length
                 Redraw $old $b $c
             }
@@ -292,7 +306,7 @@ function Read-GemLineConsole {
             $historySearchDirection = if ($k.Key -eq [ConsoleKey]::R) { -1 } else { 1 }
             $script:MiraHistoryIndex = -1
             $directionLabel = if ($historySearchDirection -gt 0) { 'forward' } else { 'reverse' }
-            $promptText = '(' + $directionLabel + '-i-search) ' + $historySearchTerm + ': '
+            $promptText = Get-GemHistorySearchPrompt -Direction $historySearchDirection -Term $historySearchTerm -Width ([Console]::WindowWidth)
             $prompt = $promptText.Length
             if ($historySearchTerm.Length -gt 0) {
                 $startIndex = if ($historySearchDirection -lt 0) { $script:MiraInputHistory.Count } else { -1 }
