@@ -262,13 +262,619 @@ function Read-GemLineConsole {
                     $candidateLabels += $(if ($item.PSIsContainer) { $item.Name + '\' } else { $item.Name })
                 }
             }
-            # .diff accepts two paths; complete whichever path is being typed.
-            elseif ($b -match '^\.diff\s+(.+)            elseif ($b -match '^\.provider\s+(\S*)$') {
+            elseif ($b -match '^\.provider\s+(\S*)$') {
+                foreach ($item in @('antigravity','gemini' | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })) {
+                    $candidateBuffers += ('.provider ' + $item); $candidateLabels += $item
+                }
+            }
+            elseif ($b -match '^\.(grounding|auth|effort)\s+(\S*)
+                $head = '.' + $matches[1] + ' '
+                $options = if ($matches[1] -eq 'grounding') { @('on','off','status') } elseif ($matches[1] -eq 'effort') { @('low','medium','high') } else { @('login','status','logout') }
+                foreach ($item in @($options | Where-Object { $_.StartsWith($matches[2],[StringComparison]::OrdinalIgnoreCase) })) {
+                    $candidateBuffers += ($head + $item); $candidateLabels += $item
+                }
+            }
+
+            if ($candidateBuffers.Count -eq 1) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b; $b = [string]$candidateBuffers[0]; $c = $b.Length
+                Redraw $old $b $c
+            } elseif ($candidateBuffers.Count -gt 1) {
+                $completionOriginal = $b
+                $completionCandidates = @($candidateBuffers)
+                $completionIndex = 0
+                $old = $b; $b = [string]$completionCandidates[0]; $c = $b.Length
+                [Console]::WriteLine()
+                for ($n = 0; $n -lt $candidateLabels.Count; $n++) {
+                    $prefix = if ($n -eq 0) { '> ' } else { '  ' }
+                    [Console]::WriteLine($prefix + [string]$candidateLabels[$n])
+                }
+                [Console]::WriteLine('j/k navigate  Enter accept  Esc cancel')
+                $row = [Console]::CursorTop
+                Redraw $old $b $c
+            } else {
+                [Console]::Beep(700,60)
+            }
+            continue
+        }
+
+        
+if (-not [Char]::IsControl($k.KeyChar)) {
+    Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+    $old = $b
+
+    if ($c -eq $b.Length) {
+        $b += $k.KeyChar
+    }
+    else {
+        $b = $b.Insert($c,[string]$k.KeyChar)
+    }
+    ++$c
+    $script:MiraHistoryIndex = -1
+    $historySearchTerm = $null
+
+    # Drain a burst of pasted characters before redrawing.
+    while ([Console]::KeyAvailable) {
+        $pk = [Console]::ReadKey($true)
+
+        # A multiline paste is delivered as Enter/CR/LF control characters.
+        # Preserve those as text line breaks; Enter typed after the paste burst
+        # is handled by the outer input loop as submit.
+        if ($pk.Key -eq [ConsoleKey]::Enter -or $pk.KeyChar -eq [char]13 -or $pk.KeyChar -eq [char]10) {
+            if ($pk.KeyChar -eq [char]10 -and $b.EndsWith("`n")) { continue }
+            if ($b.EndsWith("`r")) { $b = $b.TrimEnd([char]13) }
+            $b = $b.Insert($c,"`n")
+            ++$c
+            continue
+        }
+
+        if (-not [Char]::IsControl($pk.KeyChar)) {
+            if ($c -eq $b.Length) {
+                $b += $pk.KeyChar
+            }
+            else {
+                $b = $b.Insert($c,[string]$pk.KeyChar)
+            }
+            ++$c
+        }
+    }
+
+    # One redraw for the whole burst instead of one per character.
+    Redraw $old $b $c
+}
+}
+}
+
+function Read-GemLineFallback {
+    $useConsoleReader = $false
+    try {
+        $useConsoleReader = ($Host.Name -eq 'ConsoleHost' -and -not [Console]::IsInputRedirected)
+    } catch {
+        $useConsoleReader = $false
+    }
+    if (-not $useConsoleReader) {
+        return Read-Host '> '
+    }
+    try {
+        return Read-GemLineConsole
+    } catch {
+        try { [Console]::TreatControlCAsInput = $false } catch {}
+        Write-Host "[Console input fallback] $($_.Exception.Message)" -ForegroundColor Yellow
+        return Read-Host '   >'
+    }
+}
+) {
+                $head = '.' + $matches[1] + ' '
+                $options = if ($matches[1] -eq 'grounding') { @('on','off','status') } elseif ($matches[1] -eq 'effort') { @('low','medium','high') } else { @('login','status','logout') }
+                foreach ($item in @($options | Where-Object { $_.StartsWith($matches[2],[StringComparison]::OrdinalIgnoreCase) })) {
+                    $candidateBuffers += ($head + $item); $candidateLabels += $item
+                }
+            }
+
+            if ($candidateBuffers.Count -eq 1) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b; $b = [string]$candidateBuffers[0]; $c = $b.Length
+                Redraw $old $b $c
+            } elseif ($candidateBuffers.Count -gt 1) {
+                $completionOriginal = $b
+                $completionCandidates = @($candidateBuffers)
+                $completionIndex = 0
+                $old = $b; $b = [string]$completionCandidates[0]; $c = $b.Length
+                [Console]::WriteLine()
+                for ($n = 0; $n -lt $candidateLabels.Count; $n++) {
+                    $prefix = if ($n -eq 0) { '> ' } else { '  ' }
+                    [Console]::WriteLine($prefix + [string]$candidateLabels[$n])
+                }
+                [Console]::WriteLine('j/k navigate  Enter accept  Esc cancel')
+                $row = [Console]::CursorTop
+                Redraw $old $b $c
+            } else {
+                [Console]::Beep(700,60)
+            }
+            continue
+        }
+
+        
+if (-not [Char]::IsControl($k.KeyChar)) {
+    Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+    $old = $b
+
+    if ($c -eq $b.Length) {
+        $b += $k.KeyChar
+    }
+    else {
+        $b = $b.Insert($c,[string]$k.KeyChar)
+    }
+    ++$c
+    $script:MiraHistoryIndex = -1
+    $historySearchTerm = $null
+
+    # Drain a burst of pasted characters before redrawing.
+    while ([Console]::KeyAvailable) {
+        $pk = [Console]::ReadKey($true)
+
+        # A multiline paste is delivered as Enter/CR/LF control characters.
+        # Preserve those as text line breaks; Enter typed after the paste burst
+        # is handled by the outer input loop as submit.
+        if ($pk.Key -eq [ConsoleKey]::Enter -or $pk.KeyChar -eq [char]13 -or $pk.KeyChar -eq [char]10) {
+            if ($pk.KeyChar -eq [char]10 -and $b.EndsWith("`n")) { continue }
+            if ($b.EndsWith("`r")) { $b = $b.TrimEnd([char]13) }
+            $b = $b.Insert($c,"`n")
+            ++$c
+            continue
+        }
+
+        if (-not [Char]::IsControl($pk.KeyChar)) {
+            if ($c -eq $b.Length) {
+                $b += $pk.KeyChar
+            }
+            else {
+                $b = $b.Insert($c,[string]$pk.KeyChar)
+            }
+            ++$c
+        }
+    }
+
+    # One redraw for the whole burst instead of one per character.
+    Redraw $old $b $c
+}
+}
+}
+
+function Read-GemLineFallback {
+    $useConsoleReader = $false
+    try {
+        $useConsoleReader = ($Host.Name -eq 'ConsoleHost' -and -not [Console]::IsInputRedirected)
+    } catch {
+        $useConsoleReader = $false
+    }
+    if (-not $useConsoleReader) {
+        return Read-Host '> '
+    }
+    try {
+        return Read-GemLineConsole
+    } catch {
+        try { [Console]::TreatControlCAsInput = $false } catch {}
+        Write-Host "[Console input fallback] $($_.Exception.Message)" -ForegroundColor Yellow
+        return Read-Host '   >'
+    }
+}
+) {
+                $diffText = $matches[1]
+                $tokenMatch = [regex]::Match($diffText,'(?:^|\s)([^\s]*)            elseif ($b -match '^\.provider\s+(\S*)$') {
                 foreach ($item in @('antigravity','gemini' | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })) {
                     $candidateBuffers += ('.provider ' + $item); $candidateLabels += $item
                 }
             }
             elseif ($b -match '^\.(grounding|auth|effort)\s+(\S*) {
+                $head = '.' + $matches[1] + ' '
+                $options = if ($matches[1] -eq 'grounding') { @('on','off','status') } elseif ($matches[1] -eq 'effort') { @('low','medium','high') } else { @('login','status','logout') }
+                foreach ($item in @($options | Where-Object { $_.StartsWith($matches[2],[StringComparison]::OrdinalIgnoreCase) })) {
+                    $candidateBuffers += ($head + $item); $candidateLabels += $item
+                }
+            }
+
+            if ($candidateBuffers.Count -eq 1) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b; $b = [string]$candidateBuffers[0]; $c = $b.Length
+                Redraw $old $b $c
+            } elseif ($candidateBuffers.Count -gt 1) {
+                $completionOriginal = $b
+                $completionCandidates = @($candidateBuffers)
+                $completionIndex = 0
+                $old = $b; $b = [string]$completionCandidates[0]; $c = $b.Length
+                [Console]::WriteLine()
+                for ($n = 0; $n -lt $candidateLabels.Count; $n++) {
+                    $prefix = if ($n -eq 0) { '> ' } else { '  ' }
+                    [Console]::WriteLine($prefix + [string]$candidateLabels[$n])
+                }
+                [Console]::WriteLine('j/k navigate  Enter accept  Esc cancel')
+                $row = [Console]::CursorTop
+                Redraw $old $b $c
+            } else {
+                [Console]::Beep(700,60)
+            }
+            continue
+        }
+
+        
+if (-not [Char]::IsControl($k.KeyChar)) {
+    Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+    $old = $b
+
+    if ($c -eq $b.Length) {
+        $b += $k.KeyChar
+    }
+    else {
+        $b = $b.Insert($c,[string]$k.KeyChar)
+    }
+    ++$c
+    $script:MiraHistoryIndex = -1
+    $historySearchTerm = $null
+
+    # Drain a burst of pasted characters before redrawing.
+    while ([Console]::KeyAvailable) {
+        $pk = [Console]::ReadKey($true)
+
+        # A multiline paste is delivered as Enter/CR/LF control characters.
+        # Preserve those as text line breaks; Enter typed after the paste burst
+        # is handled by the outer input loop as submit.
+        if ($pk.Key -eq [ConsoleKey]::Enter -or $pk.KeyChar -eq [char]13 -or $pk.KeyChar -eq [char]10) {
+            if ($pk.KeyChar -eq [char]10 -and $b.EndsWith("`n")) { continue }
+            if ($b.EndsWith("`r")) { $b = $b.TrimEnd([char]13) }
+            $b = $b.Insert($c,"`n")
+            ++$c
+            continue
+        }
+
+        if (-not [Char]::IsControl($pk.KeyChar)) {
+            if ($c -eq $b.Length) {
+                $b += $pk.KeyChar
+            }
+            else {
+                $b = $b.Insert($c,[string]$pk.KeyChar)
+            }
+            ++$c
+        }
+    }
+
+    # One redraw for the whole burst instead of one per character.
+    Redraw $old $b $c
+}
+}
+}
+
+function Read-GemLineFallback {
+    $useConsoleReader = $false
+    try {
+        $useConsoleReader = ($Host.Name -eq 'ConsoleHost' -and -not [Console]::IsInputRedirected)
+    } catch {
+        $useConsoleReader = $false
+    }
+    if (-not $useConsoleReader) {
+        return Read-Host '> '
+    }
+    try {
+        return Read-GemLineConsole
+    } catch {
+        try { [Console]::TreatControlCAsInput = $false } catch {}
+        Write-Host "[Console input fallback] $($_.Exception.Message)" -ForegroundColor Yellow
+        return Read-Host '   >'
+    }
+}
+) {
+                $head = '.' + $matches[1] + ' '
+                $options = if ($matches[1] -eq 'grounding') { @('on','off','status') } elseif ($matches[1] -eq 'effort') { @('low','medium','high') } else { @('login','status','logout') }
+                foreach ($item in @($options | Where-Object { $_.StartsWith($matches[2],[StringComparison]::OrdinalIgnoreCase) })) {
+                    $candidateBuffers += ($head + $item); $candidateLabels += $item
+                }
+            }
+
+            if ($candidateBuffers.Count -eq 1) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b; $b = [string]$candidateBuffers[0]; $c = $b.Length
+                Redraw $old $b $c
+            } elseif ($candidateBuffers.Count -gt 1) {
+                $completionOriginal = $b
+                $completionCandidates = @($candidateBuffers)
+                $completionIndex = 0
+                $old = $b; $b = [string]$completionCandidates[0]; $c = $b.Length
+                [Console]::WriteLine()
+                for ($n = 0; $n -lt $candidateLabels.Count; $n++) {
+                    $prefix = if ($n -eq 0) { '> ' } else { '  ' }
+                    [Console]::WriteLine($prefix + [string]$candidateLabels[$n])
+                }
+                [Console]::WriteLine('j/k navigate  Enter accept  Esc cancel')
+                $row = [Console]::CursorTop
+                Redraw $old $b $c
+            } else {
+                [Console]::Beep(700,60)
+            }
+            continue
+        }
+
+        
+if (-not [Char]::IsControl($k.KeyChar)) {
+    Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+    $old = $b
+
+    if ($c -eq $b.Length) {
+        $b += $k.KeyChar
+    }
+    else {
+        $b = $b.Insert($c,[string]$k.KeyChar)
+    }
+    ++$c
+    $script:MiraHistoryIndex = -1
+    $historySearchTerm = $null
+
+    # Drain a burst of pasted characters before redrawing.
+    while ([Console]::KeyAvailable) {
+        $pk = [Console]::ReadKey($true)
+
+        # A multiline paste is delivered as Enter/CR/LF control characters.
+        # Preserve those as text line breaks; Enter typed after the paste burst
+        # is handled by the outer input loop as submit.
+        if ($pk.Key -eq [ConsoleKey]::Enter -or $pk.KeyChar -eq [char]13 -or $pk.KeyChar -eq [char]10) {
+            if ($pk.KeyChar -eq [char]10 -and $b.EndsWith("`n")) { continue }
+            if ($b.EndsWith("`r")) { $b = $b.TrimEnd([char]13) }
+            $b = $b.Insert($c,"`n")
+            ++$c
+            continue
+        }
+
+        if (-not [Char]::IsControl($pk.KeyChar)) {
+            if ($c -eq $b.Length) {
+                $b += $pk.KeyChar
+            }
+            else {
+                $b = $b.Insert($c,[string]$pk.KeyChar)
+            }
+            ++$c
+        }
+    }
+
+    # One redraw for the whole burst instead of one per character.
+    Redraw $old $b $c
+}
+}
+}
+
+function Read-GemLineFallback {
+    $useConsoleReader = $false
+    try {
+        $useConsoleReader = ($Host.Name -eq 'ConsoleHost' -and -not [Console]::IsInputRedirected)
+    } catch {
+        $useConsoleReader = $false
+    }
+    if (-not $useConsoleReader) {
+        return Read-Host '> '
+    }
+    try {
+        return Read-GemLineConsole
+    } catch {
+        try { [Console]::TreatControlCAsInput = $false } catch {}
+        Write-Host "[Console input fallback] $($_.Exception.Message)" -ForegroundColor Yellow
+        return Read-Host '   >'
+    }
+}
+)
+                $typedPath = $tokenMatch.Groups[1].Value
+                $pathItems = @(Get-GemFiles $typedPath)
+                $prefixLength = $diffText.Length - $typedPath.Length
+                foreach ($item in $pathItems) {
+                    $clean = $typedPath.Trim('"').Trim("'")
+                    $path = if ([string]::IsNullOrEmpty($clean)) { $item.Name } else {
+                        $dir = [IO.Path]::GetDirectoryName($clean)
+                        if ([string]::IsNullOrEmpty($dir)) { $item.Name }
+                        elseif ($dir.EndsWith('\') -or $dir.EndsWith('/')) { $dir + $item.Name }
+                        else { $dir + '\' + $item.Name }
+                    }
+                    if ($typedPath.StartsWith('"') -or $typedPath.StartsWith("'")) { $path = $typedPath[0] + $path + $typedPath[0] }
+                    if ($item.PSIsContainer) { $path += '\' }
+                    $candidateBuffers += ('.diff ' + $diffText.Substring(0,$prefixLength) + $path)
+                    $candidateLabels += $(if ($item.PSIsContainer) { $item.Name + '\' } else { $item.Name })
+                }
+            }
+            # Argument completions for built-in commands.
+            elseif ($b -match '^\.provider\s+(\S*)$') {
+                foreach ($item in @('antigravity','gemini' | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })) {
+                    $candidateBuffers += ('.provider ' + $item); $candidateLabels += $item
+                }
+            }
+            elseif ($b -match '^\.(grounding|auth|effort)\s+(\S*) {
+                $head = '.' + $matches[1] + ' '
+                $options = if ($matches[1] -eq 'grounding') { @('on','off','status') } elseif ($matches[1] -eq 'effort') { @('low','medium','high') } else { @('login','status','logout') }
+                foreach ($item in @($options | Where-Object { $_.StartsWith($matches[2],[StringComparison]::OrdinalIgnoreCase) })) {
+                    $candidateBuffers += ($head + $item); $candidateLabels += $item
+                }
+            }
+
+            if ($candidateBuffers.Count -eq 1) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b; $b = [string]$candidateBuffers[0]; $c = $b.Length
+                Redraw $old $b $c
+            } elseif ($candidateBuffers.Count -gt 1) {
+                $completionOriginal = $b
+                $completionCandidates = @($candidateBuffers)
+                $completionIndex = 0
+                $old = $b; $b = [string]$completionCandidates[0]; $c = $b.Length
+                [Console]::WriteLine()
+                for ($n = 0; $n -lt $candidateLabels.Count; $n++) {
+                    $prefix = if ($n -eq 0) { '> ' } else { '  ' }
+                    [Console]::WriteLine($prefix + [string]$candidateLabels[$n])
+                }
+                [Console]::WriteLine('j/k navigate  Enter accept  Esc cancel')
+                $row = [Console]::CursorTop
+                Redraw $old $b $c
+            } else {
+                [Console]::Beep(700,60)
+            }
+            continue
+        }
+
+        
+if (-not [Char]::IsControl($k.KeyChar)) {
+    Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+    $old = $b
+
+    if ($c -eq $b.Length) {
+        $b += $k.KeyChar
+    }
+    else {
+        $b = $b.Insert($c,[string]$k.KeyChar)
+    }
+    ++$c
+    $script:MiraHistoryIndex = -1
+    $historySearchTerm = $null
+
+    # Drain a burst of pasted characters before redrawing.
+    while ([Console]::KeyAvailable) {
+        $pk = [Console]::ReadKey($true)
+
+        # A multiline paste is delivered as Enter/CR/LF control characters.
+        # Preserve those as text line breaks; Enter typed after the paste burst
+        # is handled by the outer input loop as submit.
+        if ($pk.Key -eq [ConsoleKey]::Enter -or $pk.KeyChar -eq [char]13 -or $pk.KeyChar -eq [char]10) {
+            if ($pk.KeyChar -eq [char]10 -and $b.EndsWith("`n")) { continue }
+            if ($b.EndsWith("`r")) { $b = $b.TrimEnd([char]13) }
+            $b = $b.Insert($c,"`n")
+            ++$c
+            continue
+        }
+
+        if (-not [Char]::IsControl($pk.KeyChar)) {
+            if ($c -eq $b.Length) {
+                $b += $pk.KeyChar
+            }
+            else {
+                $b = $b.Insert($c,[string]$pk.KeyChar)
+            }
+            ++$c
+        }
+    }
+
+    # One redraw for the whole burst instead of one per character.
+    Redraw $old $b $c
+}
+}
+}
+
+function Read-GemLineFallback {
+    $useConsoleReader = $false
+    try {
+        $useConsoleReader = ($Host.Name -eq 'ConsoleHost' -and -not [Console]::IsInputRedirected)
+    } catch {
+        $useConsoleReader = $false
+    }
+    if (-not $useConsoleReader) {
+        return Read-Host '> '
+    }
+    try {
+        return Read-GemLineConsole
+    } catch {
+        try { [Console]::TreatControlCAsInput = $false } catch {}
+        Write-Host "[Console input fallback] $($_.Exception.Message)" -ForegroundColor Yellow
+        return Read-Host '   >'
+    }
+}
+) {
+                $head = '.' + $matches[1] + ' '
+                $options = if ($matches[1] -eq 'grounding') { @('on','off','status') } elseif ($matches[1] -eq 'effort') { @('low','medium','high') } else { @('login','status','logout') }
+                foreach ($item in @($options | Where-Object { $_.StartsWith($matches[2],[StringComparison]::OrdinalIgnoreCase) })) {
+                    $candidateBuffers += ($head + $item); $candidateLabels += $item
+                }
+            }
+
+            if ($candidateBuffers.Count -eq 1) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                $old = $b; $b = [string]$candidateBuffers[0]; $c = $b.Length
+                Redraw $old $b $c
+            } elseif ($candidateBuffers.Count -gt 1) {
+                $completionOriginal = $b
+                $completionCandidates = @($candidateBuffers)
+                $completionIndex = 0
+                $old = $b; $b = [string]$completionCandidates[0]; $c = $b.Length
+                [Console]::WriteLine()
+                for ($n = 0; $n -lt $candidateLabels.Count; $n++) {
+                    $prefix = if ($n -eq 0) { '> ' } else { '  ' }
+                    [Console]::WriteLine($prefix + [string]$candidateLabels[$n])
+                }
+                [Console]::WriteLine('j/k navigate  Enter accept  Esc cancel')
+                $row = [Console]::CursorTop
+                Redraw $old $b $c
+            } else {
+                [Console]::Beep(700,60)
+            }
+            continue
+        }
+
+        
+if (-not [Char]::IsControl($k.KeyChar)) {
+    Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+    $old = $b
+
+    if ($c -eq $b.Length) {
+        $b += $k.KeyChar
+    }
+    else {
+        $b = $b.Insert($c,[string]$k.KeyChar)
+    }
+    ++$c
+    $script:MiraHistoryIndex = -1
+    $historySearchTerm = $null
+
+    # Drain a burst of pasted characters before redrawing.
+    while ([Console]::KeyAvailable) {
+        $pk = [Console]::ReadKey($true)
+
+        # A multiline paste is delivered as Enter/CR/LF control characters.
+        # Preserve those as text line breaks; Enter typed after the paste burst
+        # is handled by the outer input loop as submit.
+        if ($pk.Key -eq [ConsoleKey]::Enter -or $pk.KeyChar -eq [char]13 -or $pk.KeyChar -eq [char]10) {
+            if ($pk.KeyChar -eq [char]10 -and $b.EndsWith("`n")) { continue }
+            if ($b.EndsWith("`r")) { $b = $b.TrimEnd([char]13) }
+            $b = $b.Insert($c,"`n")
+            ++$c
+            continue
+        }
+
+        if (-not [Char]::IsControl($pk.KeyChar)) {
+            if ($c -eq $b.Length) {
+                $b += $pk.KeyChar
+            }
+            else {
+                $b = $b.Insert($c,[string]$pk.KeyChar)
+            }
+            ++$c
+        }
+    }
+
+    # One redraw for the whole burst instead of one per character.
+    Redraw $old $b $c
+}
+}
+}
+
+function Read-GemLineFallback {
+    $useConsoleReader = $false
+    try {
+        $useConsoleReader = ($Host.Name -eq 'ConsoleHost' -and -not [Console]::IsInputRedirected)
+    } catch {
+        $useConsoleReader = $false
+    }
+    if (-not $useConsoleReader) {
+        return Read-Host '> '
+    }
+    try {
+        return Read-GemLineConsole
+    } catch {
+        try { [Console]::TreatControlCAsInput = $false } catch {}
+        Write-Host "[Console input fallback] $($_.Exception.Message)" -ForegroundColor Yellow
+        return Read-Host '   >'
+    }
+}
+) {
                 $head = '.' + $matches[1] + ' '
                 $options = if ($matches[1] -eq 'grounding') { @('on','off','status') } elseif ($matches[1] -eq 'effort') { @('low','medium','high') } else { @('login','status','logout') }
                 foreach ($item in @($options | Where-Object { $_.StartsWith($matches[2],[StringComparison]::OrdinalIgnoreCase) })) {
