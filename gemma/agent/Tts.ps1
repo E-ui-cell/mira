@@ -60,7 +60,7 @@ function Get-GemmaTtsCachePath {
     )
     # The exact synthesis inputs form the key. Different replies, user contexts,
     # voices or models cannot accidentally select another reply's audio.
-    $cacheMaterial = [string]::Join([char]0,@(
+    $cacheMaterial = [string]::Join([string][char]0,@(
         $Transcript,
         [string]$script:MiraTtsModel,
         [string]$script:MiraTtsVoice,
