@@ -61,12 +61,11 @@ $MIRA_STOP_SEQUENCES = $null                # e.g. @('END')
 # Runtime behavior
 $MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'; ASK prompt defaults to Yes
 $MIRA_DEFAULT_GROUNDING = $true              # Google Search enabled where available
-$MIRA_ENABLE_AGENTIC_WEB_SEARCH = $true       # Gemini API provider uses web_search via the Antigravity OAuth Search-only backend
+$MIRA_ENABLE_AGENTIC_WEB_SEARCH = $true       # Allow on-demand web_search for either answer provider via Antigravity OAuth
 $MIRA_DEFAULT_VERBOSE = $false                # Show Gemini thought summaries only when enabled with .verbose
-# Antigravity OAuth models use Google's native server-side Google Search grounding.
-# They do not receive the script-defined web_search function.
-# Gemini Developer API models use the agentic web_search function,
-# backed by the Antigravity OAuth Google Search-only endpoint.
+# Both answer providers use the same on-demand web_search function.
+# Gemma executes it as a separate Antigravity OAuth Search-only request;
+# the answer request never mixes Google Search with functionDeclarations.
 $MIRA_DEFAULT_CACHED_CONTENT = if ($env:MIRA_GEMINI_CACHED_CONTENT) { $env:MIRA_GEMINI_CACHED_CONTENT } else { $null }
 $MIRA_DEFAULT_SYSTEM_PROMPT = @"
 You Professional assistant. Speak short, precise, no nonsense.
@@ -2037,8 +2036,8 @@ while ($true) {
             mode = "AUTO"
         }
     }
-    # Native Search is never attached to the function-enabled answer request.
-    # The Search-only preflight carries includeServerSideToolInvocations=true.
+    # web_search is a client-executed function; its separate Search-only request
+    # carries Google's built-in googleSearch tool.
     if ($script:CommandMode) {
         $GeminiTools = $null
         $GeminiToolConfig = $null
