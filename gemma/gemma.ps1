@@ -17,6 +17,7 @@ $Prompt = Initialize-GemmaCliMode -Prompt $Prompt -ExplainCommand $ExplainComman
 . (Join-Path $PSScriptRoot 'ui\ModelPicker.ps1')
 . (Join-Path $PSScriptRoot 'agent\Execution.ps1')
 . (Join-Path $PSScriptRoot 'agent\Skills.ps1')
+. (Join-Path $PSScriptRoot 'agent\Tools.ps1')
 . (Join-Path $PSScriptRoot 'windows\Native.ps1')
 
 . (Join-Path $PSScriptRoot 'agent\Settings.ps1')
