@@ -188,17 +188,19 @@ function Read-GemLineConsole {
             $lastYankLength = 0
         }
 
-        if ($k.Key -eq [ConsoleKey]::C -and
+        if ($null -eq $historySearchTerm -and $k.Key -eq [ConsoleKey]::C -and
             (($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
             $b = ''
             $c = 0
+            $script:MiraHistoryIndex = -1
+            $historySearchTerm = $null
             [Console]::SetCursorPosition($prompt, $row)
             [Console]::Write((' ' * ([Math]::Max(10, [Console]::WindowWidth - $prompt - 1))))
             [Console]::SetCursorPosition($prompt, $row)
             continue
         }
 
-        if (($k.Key -eq [ConsoleKey]::J -or $k.KeyChar -eq [char]10) -and
+        if ($null -eq $historySearchTerm -and ($k.Key -eq [ConsoleKey]::J -or $k.KeyChar -eq [char]10) -and
             (($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
             Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
             $old = $b
@@ -226,6 +228,7 @@ function Read-GemLineConsole {
             }
             if ($k.Key -eq [ConsoleKey]::Enter) {
                 $historySearchTerm = $null
+                $script:MiraHistoryIndex = -1
                 $promptText = '> '
                 $prompt = $promptText.Length
                 [Console]::Write([Environment]::NewLine)
@@ -369,6 +372,7 @@ function Read-GemLineConsole {
                 Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
                 $old = $b
                 $b = $b.Remove($c,1)
+                $script:MiraHistoryIndex = -1
                 $historySearchTerm = $null
                 Redraw $old $b $c
             } else { [Console]::Beep(700,60) }
@@ -442,6 +446,8 @@ function Read-GemLineConsole {
                 $old = $b
                 $text = $script:GemKillRing[0]
                 $b = $b.Insert($c,$text)
+                $script:MiraHistoryIndex = -1
+                $historySearchTerm = $null
                 $lastYankStart = $c
                 $lastYankLength = $text.Length
                 $killRingIndex = 0
@@ -462,6 +468,8 @@ function Read-GemLineConsole {
                 $chars[$left] = $chars[$left + 1]
                 $chars[$left + 1] = $temp
                 $b = -join $chars
+                $script:MiraHistoryIndex = -1
+                $historySearchTerm = $null
                 $c = [Math]::Min($b.Length,$c + 1)
                 Redraw $old $b $c
             }
@@ -480,6 +488,8 @@ function Read-GemLineConsole {
                     $separator = $b.Substring($firstEnd,$secondStart - $firstEnd)
                     $secondWord = $b.Substring($secondStart,$secondEnd - $secondStart)
                     $b = $b.Substring(0,$firstStart) + $secondWord + $separator + $firstWord + $b.Substring($secondEnd)
+                    $script:MiraHistoryIndex = -1
+                    $historySearchTerm = $null
                     $c = $firstStart + $secondWord.Length + $separator.Length + $firstWord.Length
                     Redraw $old $b $c
                 }
@@ -512,6 +522,8 @@ function Read-GemLineConsole {
                 $old = $b
                 $b = $b.Insert($c,$insertText)
                 $c += $insertText.Length
+                $script:MiraHistoryIndex = -1
+                $historySearchTerm = $null
                 Redraw $old $b $c
             }
             continue
@@ -533,6 +545,8 @@ function Read-GemLineConsole {
                     $changedWord = $word.Substring(0,1).ToUpperInvariant() + $word.Substring(1).ToLowerInvariant()
                 }
                 $b = $b.Substring(0,$wordStart) + $changedWord + $b.Substring($wordEnd)
+                $script:MiraHistoryIndex = -1
+                $historySearchTerm = $null
                 $c = $wordStart + $changedWord.Length
                 Redraw $old $b $c
             }
@@ -766,6 +780,8 @@ if (-not [Char]::IsControl($k.KeyChar)) {
         $b = $b.Insert($c,[string]$k.KeyChar)
     }
     ++$c
+    $script:MiraHistoryIndex = -1
+    $historySearchTerm = $null
 
     # Drain a burst of pasted characters before redrawing.
     while ([Console]::KeyAvailable) {
