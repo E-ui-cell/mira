@@ -81,6 +81,13 @@ while ($true) {
         continue
     }
 
+    if ($trimmedInput -eq ".sysprompt" -or $trimmedInput.StartsWith(".sysprompt ", [StringComparison]::OrdinalIgnoreCase)) {
+        $systemPromptArgument = ""
+        if ($trimmedInput.Length -gt ".sysprompt".Length) { $systemPromptArgument = $trimmedInput.Substring(".sysprompt".Length).Trim() }
+        Invoke-GemmaSystemPromptCommand -Argument $systemPromptArgument
+        continue
+    }
+
     if ($trimmedInput -eq ".provider" -or $trimmedInput.StartsWith(".provider ", [StringComparison]::OrdinalIgnoreCase)) {
         $providerArgument = ""
         if ($trimmedInput.Length -gt 9) { $providerArgument = $trimmedInput.Substring(9).Trim() }
