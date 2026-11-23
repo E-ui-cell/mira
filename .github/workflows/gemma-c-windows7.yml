@@ -38,13 +38,14 @@ jobs:
         run: |
           mkdir -p ../dist/gemma-windows7-x64
           cp gemma.exe ../dist/gemma-windows7-x64/
+          curl -fL --retry 3 https://curl.se/ca/cacert.pem -o ../dist/gemma-windows7-x64/cacert.pem
           ldd gemma.exe | awk '/\/mingw64\/bin\// {print $3}' | sort -u | while read dll; do
             test -f "$dll" && cp "$dll" ../dist/gemma-windows7-x64/
           done
           cat > ../dist/gemma-windows7-x64/README.txt <<'EOF'
           Gemma C — Windows 7 x64 build
 
-          Keep gemma.exe and the supplied DLL files together in this folder.
+          Keep gemma.exe, cacert.pem, and the supplied DLL files together in this folder.
           Run gemma.exe from Command Prompt or PowerShell.
 
           This build is compiled against the Windows 7 (0x0601) API baseline.
