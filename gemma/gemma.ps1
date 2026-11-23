@@ -56,3 +56,4 @@ $script:GemCommands = @('.clear','.diff','.file','.text','.save','.exportsession
 # HELPER: EXTRACT AND SAVE CODE BLOCKS (.save)
 # ==============================================================================
 . (Join-Path $PSScriptRoot 'agent\ChatLoop.ps1')
+Start-GemmaChatLoop
