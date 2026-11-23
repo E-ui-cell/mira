@@ -68,11 +68,11 @@ function Read-GemmaModelSelection {
         [Console]::SetCursorPosition(0,$top)
 
         [Console]::ForegroundColor = [ConsoleColor]::Cyan
-        $title = 'Models — ' + $script:Provider
+        $title = 'Models - ' + $script:Provider
         [Console]::Write($title.PadRight($clearWidth).Substring(0,$clearWidth))
         [Console]::WriteLine()
         [Console]::ForegroundColor = [ConsoleColor]::DarkGray
-        [Console]::Write('↑/↓ or j/k move · Enter select · Esc/q cancel'.PadRight($clearWidth).Substring(0,$clearWidth))
+        [Console]::Write(('Up/Down or j/k move; Enter select; Esc or q cancel').PadRight($clearWidth).Substring(0,$clearWidth))
         [Console]::WriteLine()
 
         for ($row = 0; $row -lt $visibleRows; $row++) {
