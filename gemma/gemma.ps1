@@ -538,7 +538,6 @@ function Get-GemmaSearchModelCandidates {
     # Gemini API web_search. This is not used to filter Antigravity chat models.
     if (-not $script:AntigravityCapabilityProbeAttempted) {
         try { [void](Get-AntigravityModels) }
-        catch { Write-Host "[Search capability discovery unavailable] $($_.Exception.Message)" -ForegroundColor DarkYellow }
     }
 
     $preferred = ([string]$PreferredModel).Trim() -replace '^models/',''
@@ -579,7 +578,6 @@ function Invoke-GemmaAntigravitySearchRequest {
                 Start-Sleep -Seconds $delay
             }
         }
-        if ($lastError) { Write-Host "[Google Search] $candidateModel failed: $lastError" -ForegroundColor DarkYellow }
     }
     throw "Google Search failed on all configured or account-advertised candidate models. Last error: $lastError"
 }
@@ -2547,7 +2545,6 @@ while ($true) {
                         }
                     }
 
-                    Write-Host "`n[Gemini tool call: $toolName]" -ForegroundColor DarkYellow
 
                     $functionResponse = @{
                         name     = $toolName
