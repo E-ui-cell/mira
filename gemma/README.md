@@ -44,7 +44,8 @@ gcc -O2 -std=c11 gemma.c -lcurl -lcrypto -lbcrypt -lws2_32 -lshell32 -o gemma.ex
 - `.model` — fetch the current provider's model catalogue and choose by number or ID; `.model ID` selects directly.
 - `.provider antigravity|gemini`
 - `.effort low|medium|high` — Gemini 3 uses `thinkingLevel`; Gemini 2.5 uses `thinkingBudget`.
-- `.grounding on|off` — Search runs as a separate Antigravity OAuth request. It is never combined with function declarations in one request.
+- `.grounding on|off` — Antigravity uses a separate native Search-only preflight. Gemini API exposes `web_search`, which uses the Antigravity OAuth Search backend only when the model calls it. Search is never mixed with local function declarations in one request.
+- Windows console input supports cursor editing, long-line redraw, and Tab completion for commands.
 - `.ask` — each local command asks for confirmation; Enter means Yes (default).
 - `.autopilot` — local commands run without per-command confirmation.
 - `.verbose on|off` — request thought summaries where supported.
@@ -65,7 +66,7 @@ The client reuses and refreshes that token. For a new OAuth login, provide:
 
 The C source intentionally contains no OAuth client credentials. This also means refresh of an expired token requires those environment variables.
 
-Gemini Developer API uses the existing `GEMINI_APIJ` environment variable.
+Gemini Developer API uses the existing `GEMINI_APIJ` environment variable for model requests. Switching to `.provider gemini` does not require Antigravity OAuth for ordinary chat. With grounding enabled, a model may call `web_search`, which then uses the saved Antigravity session; `.grounding off` removes that tool and avoids Search OAuth entirely.
 
 Optional environment variables:
 
@@ -76,7 +77,7 @@ Optional environment variables:
 
 ## Scope and current limitations
 
-Implemented in this first C pass: Antigravity OAuth token reuse/refresh/login, Gemini API requests, model catalogue, Gemini 3/2.5 effort controls, Search-only grounding preflight, function calling, quick weather/IP/cheatsheet lookups, local shell commands with captured output and ASK/AUTOPILOT, multiline input mode, session save/load/export, and `-p`/`-e`.
+Implemented in this C pass: Antigravity OAuth token reuse/refresh/login, Gemini API requests, model catalogue, Gemini 3/2.5 effort controls, provider-specific Google Search grounding, function calling, quick weather/IP/cheatsheet lookups, local shell commands with captured output and ASK/AUTOPILOT, editable Windows console input with command Tab completion, multiline input mode, session save/load/export, and `-p`/`-e`.
 
 Not yet ported from the PowerShell application: Windows UI Automation and native desktop helpers, clipboard/window controls, skill loading, Explorer-specific integration, and spinner.
 
