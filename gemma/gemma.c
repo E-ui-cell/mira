@@ -1248,6 +1248,14 @@ static void browser(const char*u) {
 #endif
 }
 static int login(State*s) {
+    if(readfile(s->token)) {
+        char *existing=access_token(s);
+        if(existing) {
+            free(existing);
+            puts("[Existing Antigravity session is usable; no new login needed]");
+            return 1;
+        }
+    }
     if(!*s->cid||!*s->secret) {
         fprintf(stderr,"Set AGY_GOOGLE_CLIENT_ID and AGY_GOOGLE_CLIENT_SECRET before .auth login.\n");
         return 0;
