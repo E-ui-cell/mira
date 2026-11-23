@@ -8,22 +8,9 @@ param(
 # Explorer's legacy "Run with PowerShell" association can append an
 # execution-policy wrapper after -File. Capture and remove only that exact
 # suffix before Gemma processes any remaining CLI arguments.
-function Get-GemmaCliArgs {
-    param([object[]]$RawArgs)
-
-    $a = @($RawArgs | ForEach-Object { [string]$_ })
-    if ($a.Count -ge 2 -and $a[0] -ieq '-Command') {
-        $cmd = ([string]$a[1]).Replace(' ', '').Replace([string][char]9, '').Replace([string][char]13, '').Replace([string][char]10, '')
-        $expected = 'if((Get-ExecutionPolicy)-neAllSigned){Set-ExecutionPolicy-ScopeProcessBypass}'
-        if ($cmd -ieq $expected) {
-            return @($a | Select-Object -Skip 2)
-        }
-    }
-
-    return $a
-}
-
-. (Join-Path $PSScriptRoot 'config\Defaults.ps1')
+. (Join-Path $PSScriptRoot 'config\Cli.ps1')
+$Prompt = Initialize-GemmaCliMode -Prompt $Prompt -ExplainCommand $ExplainCommand -RemainingArgs $RemainingArgs
+. (Join-Path $PSScriptRoot 'config\Defaults.ps1'))
 
 . (Join-Path $PSScriptRoot 'providers\GeminiApi.ps1')
 . (Join-Path $PSScriptRoot 'providers\Antigravity.ps1')
