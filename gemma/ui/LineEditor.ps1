@@ -551,18 +551,6 @@ function Read-GemLineConsole {
             continue
         }
 
-        # Ctrl+Shift+T speaks the latest assistant response without consuming the draft.
-        if ($ctrl -and (($k.Modifiers -band [ConsoleModifiers]::Shift) -ne 0) -and $k.Key -eq [ConsoleKey]::T) {
-            Redraw $b $b $b.Length
-            [Console]::WriteLine()
-            Invoke-GemmaSpeakLatest -Contents $Contents
-            $row = [Console]::CursorTop
-            [Console]::Write($promptText)
-            $renderedRows = 1
-            Redraw '' $b $c
-            continue
-        }
-
         # Ctrl+T transposes adjacent characters; Alt+T transposes adjacent words.
         if ($ctrl -and $k.Key -eq [ConsoleKey]::T) {
             if ($b.Length -ge 2 -and $c -gt 0) {
@@ -799,6 +787,17 @@ function Read-GemLineConsole {
         }
 
         if ($k.Key -eq [ConsoleKey]::Tab) {
+            # Empty prompt + cursor at zero: speak the latest reply on demand.
+            # With any input present, Tab remains the normal completion key.
+            if ($b.Length -eq 0 -and $c -eq 0) {
+                [Console]::WriteLine()
+                Invoke-GemmaSpeakLatest -Contents $Contents
+                $row = [Console]::CursorTop
+                [Console]::Write($promptText)
+                $renderedRows = 1
+                Redraw '' $b $c
+                continue
+            }
             if ($c -ne $b.Length) { continue }
             $candidateBuffers = @()
             $candidateLabels = @()
