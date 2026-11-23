@@ -6,8 +6,11 @@ $modules = @(
     (Join-Path $repoRoot 'gemma\providers\Antigravity.ps1'),
     (Join-Path $repoRoot 'gemma\ui\ModelPicker.ps1'),
     (Join-Path $repoRoot 'gemma\agent\Execution.ps1'),
+    (Join-Path $repoRoot 'gemma\agent\Settings.ps1'),
     (Join-Path $repoRoot 'gemma\agent\Skills.ps1'),
+    (Join-Path $repoRoot 'gemma\agent\Conversation.ps1'),
     (Join-Path $repoRoot 'gemma\windows\Native.ps1'),
+    (Join-Path $repoRoot 'gemma\ui\Output.ps1'),
     (Join-Path $repoRoot 'gemma\ui\LineEditor.ps1')
 )
 
@@ -30,6 +33,12 @@ $requiredFunctions = @(
     'Initialize-GemmaNativeWindows',
     'Confirm-GemmaDirectAction',
     'Invoke-GemmaDirectCommand',
+    'Invoke-GemmaEffortCommand',
+    'Invoke-GemmaProviderCommand',
+    'Build-GeminiPayload',
+    'Rollback-MiraTurn',
+    'Save-GeminiCodeBlocks',
+    'Normalize-MiraReply',
     'Read-GemmaModelSelection',
     'Invoke-GeminiModelSwitcher',
     'Read-GemLineConsole',
