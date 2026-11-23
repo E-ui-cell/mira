@@ -48,6 +48,11 @@ while ($true) {
         continue
     }
 
+    if ($trimmedInput -ieq '.replay') {
+        Invoke-GemmaReplayLatest -Contents $Contents
+        continue
+    }
+
     if ($trimmedInput -eq ".auth" -or $trimmedInput.StartsWith(".auth ", [StringComparison]::OrdinalIgnoreCase)) {
         $authArgument = ""
         if ($trimmedInput.Length -gt 5) { $authArgument = $trimmedInput.Substring(5).Trim() }
