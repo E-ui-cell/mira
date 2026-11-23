@@ -650,6 +650,13 @@ function Test-GemmaSearchIntent {
         return $false
     }
 
+    # The host exposes a dedicated local date/time tool. Do not Search for
+    # the computer's current date/time when that tool can answer directly.
+    if ($request -match '(?i)\b(?:what(?:''s|\s+is)\s+(?:the\s+)?(?:current\s+|local\s+)?(?:date|time)|current\s+(?:local\s+)?(?:date|time)|today''s\s+date|what\s+day\s+is\s+it|local\s+time)\b' -and
+        $request -notmatch '(?i)\b(?:in|for)\s+[A-Z][a-z]+\b') {
+        return $false
+    }
+
     # Weather has a dedicated quick_web tool; do not spend the native Search
     # preflight on ordinary weather requests.
     $explicitSearch = $request -match '(?i)\b(?:search(?:\s+for)?|google(?:\s+search)?|browse(?:\s+the\s+web)?|look\s+up|research|fact[- ]?check)\b'
@@ -730,7 +737,7 @@ function Invoke-GemmaAntigravityGoogleSearchPreflight {
 
     # This is an isolated native Google Search request using the SAME selected
     # Antigravity model. It is not mixed with the local functionDeclarations.
-    $searchInstruction = 'You are the mandatory Google Search phase for the selected Antigravity model. You MUST use the built-in Google Search tool to research the latest user request, using prior conversation only to resolve references. Do not answer from memory. Search for current facts, verify dates, and return a concise factual research brief with exact publication/event dates and source-specific details. Do not invent sources. If Google Search cannot be used or produces no grounded results, return no fabricated substitute.'
+    $searchInstruction = 'You are the Google Search phase for an explicit web/current-information request. Research ONLY the current user request. Use earlier user requests solely to resolve explicit references; never re-search an earlier topic merely because it appears in conversation history. Do not answer from memory. Verify dates and return a concise factual research brief with source-specific details. Do not invent sources. If Google Search cannot be used or produces no grounded results, return no fabricated substitute.'
     $searchPayload = @{
         systemInstruction = @{
             role = 'user'
