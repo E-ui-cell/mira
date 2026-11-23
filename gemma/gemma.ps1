@@ -2093,16 +2093,17 @@ while ($true) {
         $nativeSearchAdded = $false
 
         if ($usingAntigravityOAuth -and $script:GoogleSearchGrounding -and -not $script:CommandMode -and -not $nativeSearchFallbackUsed) {
-            if (Test-GemmaAntigravityNativeSearchSupport -Model $script:MODEL) {
-                $existingTools = @()
-                if ($payloadObj.Contains('tools') -and $null -ne $payloadObj.tools) {
-                    $existingTools = @($payloadObj.tools)
-                }
-                $payloadObj.tools = @($existingTools + @(@{ googleSearch = @{} }))
-                if ($null -eq $payloadObj.toolConfig) { $payloadObj.toolConfig = @{} }
-                $payloadObj.toolConfig.includeServerSideToolInvocations = $true
-                $nativeSearchAdded = $true
+            # Do not filter the user's selected Antigravity model through the
+            # separate research-agent model list. Send native Search to the
+            # selected model; if Google rejects it, retry normal chat below.
+            $existingTools = @()
+            if ($payloadObj.Contains('tools') -and $null -ne $payloadObj.tools) {
+                $existingTools = @($payloadObj.tools)
             }
+            $payloadObj.tools = @($existingTools + @(@{ googleSearch = @{} }))
+            if ($null -eq $payloadObj.toolConfig) { $payloadObj.toolConfig = @{} }
+            $payloadObj.toolConfig.includeServerSideToolInvocations = $true
+            $nativeSearchAdded = $true
         }
 
         if ($usingAntigravityOAuth) {
