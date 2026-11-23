@@ -2,6 +2,7 @@
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $modules = @(
+    (Join-Path $repoRoot 'gemma\config\Cli.ps1'),
     (Join-Path $repoRoot 'gemma\config\Defaults.ps1'),
     (Join-Path $repoRoot 'gemma\providers\GeminiApi.ps1'),
     (Join-Path $repoRoot 'gemma\providers\Antigravity.ps1'),
@@ -25,6 +26,8 @@ foreach ($modulePath in $modules) {
 
 $requiredFunctions = @(
     'Get-GeminiModels',
+    'Get-GemmaCliArgs',
+    'Initialize-GemmaCliMode',
     'Start-GemmaChatLoop',
     'Get-AntigravityModels',
     'Test-GemmaSearchIntent',
@@ -66,6 +69,24 @@ foreach ($functionName in $requiredFunctions) {
     if ($null -eq $command) {
         throw "Gemma component did not load expected function: $functionName"
     }
+}
+
+# Verify -p, -e and Explorer Run with PowerShell argument handling.
+$normalPrompt = Initialize-GemmaCliMode -Prompt 'hello' -ExplainCommand '' -RemainingArgs @('--sample')
+if ($script:OneShot -ne $true -or $script:CommandMode -ne $false -or $normalPrompt -ne 'hello') {
+    throw 'Normal one-shot prompt mode was not initialized correctly.'
+}
+if ($script:RemainingCliArgs.Count -ne 1 -or $script:RemainingCliArgs[0] -ne '--sample') {
+    throw 'Remaining CLI arguments were not preserved.'
+}
+$commandPrompt = Initialize-GemmaCliMode -Prompt '' -ExplainCommand 'Get-ChildItem' -RemainingArgs @()
+if ($script:OneShot -ne $true -or $script:CommandMode -ne $true -or $commandPrompt -ne 'Get-ChildItem') {
+    throw 'Command-generation mode was not initialized correctly.'
+}
+$wrappedArgs = @('-Command','if((Get-ExecutionPolicy) -ne AllSigned) { Set-ExecutionPolicy -Scope Process Bypass }','-File','gemma.ps1')
+$cleanArgs = @(Get-GemmaCliArgs -RawArgs $wrappedArgs)
+if ($cleanArgs.Count -ne 2 -or $cleanArgs[0] -ne '-File' -or $cleanArgs[1] -ne 'gemma.ps1') {
+    throw 'Explorer Run with PowerShell argument wrapper was not stripped correctly.'
 }
 
 # Verify canonical and migration API-key environment variables.
