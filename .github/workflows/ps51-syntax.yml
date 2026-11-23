@@ -19,6 +19,10 @@ jobs:
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\gemma.ps1
 
+      - name: Parse Gemma UI modules with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\ui
+
       - name: Parse SearchPreflight backup with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\backups\gemma-SearchPreflight.ps1
