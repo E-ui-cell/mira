@@ -185,6 +185,7 @@ function Read-GemLineConsole {
 
         if (($k.Key -eq [ConsoleKey]::J -or $k.KeyChar -eq [char]10) -and
             (($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
+            Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
             $old = $b
             $b = $b.Insert($c,[string][char]10)
             ++$c
@@ -425,8 +426,9 @@ function Read-GemLineConsole {
             return $b
         }
 
-        if ($k.Key -eq [ConsoleKey]::Backspace) {
+        if ($k.Key -eq [ConsoleKey]::Backspace -or ($ctrl -and $k.Key -eq [ConsoleKey]::H)) {
             if ($c -gt 0) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
                 $old = $b
                 $b = $b.Remove($c-1,1)
                 --$c
@@ -437,6 +439,7 @@ function Read-GemLineConsole {
 
         if ($k.Key -eq [ConsoleKey]::Delete) {
             if ($c -lt $b.Length) {
+                Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
                 $old = $b
                 $b = $b.Remove($c,1)
                 Redraw $old $b $c
@@ -514,6 +517,7 @@ function Read-GemLineConsole {
                 $p = $matches[1]
                 $m = @(Get-GemCommands $p)
                 if ($m.Count -eq 1) {
+                    Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
                     $old=$b; $b='!'+$m[0]; $c=$b.Length; Redraw $old $b $c
                 } elseif ($m.Count -gt 1) {
                     [Console]::Write("`r`n" + ($m -join '  ') + "`r`n>  ")
@@ -583,6 +587,7 @@ function Read-GemLineConsole {
         }
 
 if (-not [Char]::IsControl($k.KeyChar)) {
+    Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
     $old = $b
 
     if ($c -eq $b.Length) {
