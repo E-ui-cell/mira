@@ -27,6 +27,10 @@ jobs:
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\providers
 
+      - name: Parse Gemma configuration with Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\config
+
       - name: Parse Gemma agent modules with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\agent
