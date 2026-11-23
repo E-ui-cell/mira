@@ -689,7 +689,6 @@ function Invoke-GemmaAntigravityGoogleSearchPreflight {
         toolConfig = @{ includeServerSideToolInvocations = $true }
     }
 
-    Write-Host ("[Mandatory Google Search: searching with selected model {0}...]" -f $script:MODEL) -ForegroundColor DarkCyan
     $searchResponse = $null
     $lastFailure = ''
     for ($attempt = 0; $attempt -lt 3; $attempt++) {
@@ -798,7 +797,6 @@ function Invoke-GemmaAntigravityGoogleSearchPreflight {
         text = "Mandatory Google Search results from selected Antigravity model '$script:MODEL'. Use these grounded results as the factual basis of your answer. Preserve dates and uncertainty, cite supplied source URLs, and do not claim additional searches." + [Environment]::NewLine + [Environment]::NewLine + $researchText
     })
 
-    Write-Host ("[Mandatory Google Search succeeded | model={0} | queries={1} | sources={2}]" -f $script:MODEL,$queryLines.Count,$sourceLines.Count) -ForegroundColor Green
 }
 
 
