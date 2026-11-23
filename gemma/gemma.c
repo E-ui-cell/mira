@@ -1514,37 +1514,97 @@ static int load_session(State*s,const char*requested) {
 }
 static void prompt(State*s,const char*p,int command);
 #ifdef _WIN32
+static void redraw_input_line(HANDLE h,COORD origin,const char *buf,size_t len,size_t cursor,size_t oldlen) {
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    DWORD written=0;
+    if(!GetConsoleScreenBufferInfo(h,&info))return;
+    SetConsoleCursorPosition(h,origin);
+    if(len)WriteConsoleA(h,buf,(DWORD)len,&written,NULL);
+    if(oldlen>len) {
+        static const char spaces[]="                                                                ";
+        size_t left=oldlen-len;
+        while(left) {
+            DWORD n=(DWORD)(left>sizeof(spaces)-1?sizeof(spaces)-1:left);
+            WriteConsoleA(h,spaces,n,&written,NULL);
+            left-=n;
+        }
+    }
+    if(!GetConsoleScreenBufferInfo(h,&info))return;
+    int width=info.dwSize.X;
+    if(width<1)return;
+    long absolute=(long)origin.X+(long)cursor;
+    COORD at;
+    at.X=(SHORT)(absolute%width);
+    at.Y=(SHORT)(origin.Y+absolute/width);
+    if(at.Y>=info.dwSize.Y)at.Y=(SHORT)(info.dwSize.Y-1);
+    SetConsoleCursorPosition(h,at);
+}
 static int read_prompt_line(char *buf,size_t cap) {
     static const char *commands[]={".help",".q",".quit",".exit",".clear",".multi",".model",".provider",".effort",".grounding",".ask",".autopilot",".verbose",".auth",".save",".exportsession",".loadsession"};
-    size_t n=0;
+    HANDLE h=GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    COORD origin={0,0};
+    if(GetConsoleScreenBufferInfo(h,&info))origin=info.dwCursorPosition;
+    size_t n=0,pos=0,oldlen=0;
+    buf[0]=0;
     for(;;) {
         int ch=_getch();
         if(ch=='\r') { putchar('\n'); buf[n]=0; return 1; }
         if(ch==3) { putchar('^'); putchar('C'); putchar('\n'); buf[0]=0; return 1; }
         if(ch==8||ch==127) {
-            if(n) { n--; buf[n]=0; fputs("\b \b",stdout); }
+            if(pos) {
+                memmove(buf+pos-1,buf+pos,n-pos);
+                n--; pos--; buf[n]=0;
+                redraw_input_line(h,origin,buf,n,pos,oldlen);
+                oldlen=n;
+            }
             continue;
         }
-        if(ch=='\t') {
-            if(n==0||buf[0]=='.') {
+        if(ch==9) {
+            if(pos==n&&(n==0||buf[0]=='.')) {
                 int matches=0,which=-1;
                 for(size_t i=0;i<sizeof(commands)/sizeof(commands[0]);i++)
                     if(strncmp(commands[i],buf,n)==0) { matches++; which=(int)i; }
                 if(matches==1) {
                     const char *tail=commands[which]+n;
-                    while(*tail&&n+1<cap) { buf[n++]=*tail++; putchar(buf[n-1]); }
-                    buf[n]=0;
+                    size_t add=strlen(tail);
+                    if(add>cap-1-n)add=cap-1-n;
+                    memmove(buf+pos+add,buf+pos,n-pos);
+                    memcpy(buf+pos,tail,add);
+                    n+=add; pos+=add; buf[n]=0;
+                    redraw_input_line(h,origin,buf,n,pos,oldlen);
+                    oldlen=n;
                 } else if(matches>1) {
                     putchar('\n');
                     for(size_t i=0;i<sizeof(commands)/sizeof(commands[0]);i++)
-                        if(strncmp(commands[i],buf,n)==0) printf("%s  ",commands[i]);
-                    printf("\n> %s",buf);
+                        if(strncmp(commands[i],buf,n)==0)printf("%s  ",commands[i]);
+                    printf("\n> ");
+                    if(GetConsoleScreenBufferInfo(h,&info))origin=info.dwCursorPosition;
+                    redraw_input_line(h,origin,buf,n,pos,0);
+                    oldlen=n;
                 }
             }
             continue;
         }
-        if(ch==0||ch==224) { (void)_getch(); continue; }
-        if(ch>=32&&n+1<cap) { buf[n++]=(char)ch; putchar(ch); }
+        if(ch==0||ch==224) {
+            int key=_getch();
+            if(key==75&&pos)pos--;
+            else if(key==77&&pos<n)pos++;
+            else if(key==71)pos=0;
+            else if(key==79)pos=n;
+            else if(key==83&&pos<n) { memmove(buf+pos,buf+pos+1,n-pos-1); n--; buf[n]=0; }
+            else continue;
+            redraw_input_line(h,origin,buf,n,pos,oldlen);
+            oldlen=n;
+            continue;
+        }
+        if(ch>=32&&n+1<cap) {
+            memmove(buf+pos+1,buf+pos,n-pos);
+            buf[pos]=(char)ch;
+            n++; pos++; buf[n]=0;
+            redraw_input_line(h,origin,buf,n,pos,oldlen);
+            oldlen=n;
+        }
     }
 }
 #else
