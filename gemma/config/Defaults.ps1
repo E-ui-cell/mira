@@ -51,6 +51,7 @@ $MIRA_ENABLE_AGENTIC_WEB_SEARCH = $true       # Allow Gemini API models to call 
 $MIRA_DEFAULT_VERBOSE = $false                # Show provider thought summaries only when enabled with .verbose
 
 # OpenAI Chat Completions settings ($null leaves the model's default)
+$MIRA_OPENAI_DEFAULT_MODEL = 'gpt-6-luna'
 $MIRA_OPENAI_MAX_COMPLETION_TOKENS = $null
 $MIRA_OPENAI_TEMPERATURE = $null
 $MIRA_OPENAI_RESPONSE_FORMAT = $null
