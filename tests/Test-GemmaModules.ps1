@@ -93,6 +93,20 @@ if ($modelPickerSource -notmatch 'Get-AntigravityModels' -or
     $modelPickerSource -notmatch 'MIRA_OPENAI_DEFAULT_MODEL') {
     throw 'The model picker does not independently load and label all three provider catalogues.'
 }
+
+# Gemini's model list can still advertise 2.5 models even when generation access
+# is restricted to previously active projects. The picker must flag them clearly.
+$catalogProbe = New-Object 'System.Collections.Generic.List[object]'
+$catalogSeen = @{}
+Add-GemmaModelCatalogEntry -List $catalogProbe -Seen $catalogSeen -Provider 'gemini' -Item ([pscustomobject]@{ name = 'gemini-2.5-flash-lite' })
+Add-GemmaModelCatalogEntry -List $catalogProbe -Seen $catalogSeen -Provider 'gemini' -Item ([pscustomobject]@{ name = 'gemini-3.5-flash-lite' })
+Add-GemmaModelCatalogEntry -List $catalogProbe -Seen $catalogSeen -Provider 'antigravity' -Item ([pscustomobject]@{ name = 'gemini-2.5-flash-lite' })
+if (-not $catalogProbe[0].legacyAccessRestricted -or
+    $catalogProbe[1].legacyAccessRestricted -or
+    $catalogProbe[2].legacyAccessRestricted -or
+    $modelPickerSource -notmatch '\[legacy access\]') {
+    throw 'The model picker must flag only Google AI Studio Gemini 2.5 models with restricted project access.'
+}
 if ($lineEditorSource -notmatch "openai:gpt-6-luna" -or
     $lineEditorSource -notmatch "antigravity:" -or
     $lineEditorSource -notmatch "google-ai-studio:") {
@@ -152,6 +166,14 @@ if (($turnSource -notmatch '\$thoughtOnlyResponse -and \$attempt -eq 0') -or
     ($turnSource -notmatch '\$capacityExhausted -and \$attempt -gt 0') -or
     ($turnSource -notmatch '\$requestStats\.HttpStatus')) {
     throw 'Google streaming thought-only retry, nested HTTP response extraction, or capacity RetryInfo handling is missing.'
+}
+if ($turnSource -notmatch '\$streamState\.Response\s*=\s*\$streamResponse' -or
+    $turnSource -notmatch '\$response\s*=\s*\$streamState\.Response' -or
+    $turnSource -notmatch '\$streamGoogle -and \$streamTextThisRequest' -or
+    $turnSource -notmatch '\$requestStats\.ErrorMessage\s*=\s*\$diagnosticMessage' -or
+    $turnSource -notmatch "ErrorCode 'EMPTY_CANDIDATE_CONTENT'" -or
+    $turnSource -notmatch 'Google returned no candidates') {
+    throw 'Gemini streaming response handoff, streamed-text recovery, or structured API error diagnostics are missing.'
 }
 
 # Verify the line/delta/off streaming mode command changes runtime state.
