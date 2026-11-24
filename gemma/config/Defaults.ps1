@@ -177,6 +177,7 @@ $script:GoogleSearchGrounding = [bool]$MIRA_DEFAULT_GROUNDING
 $script:AgenticWebSearchEnabled = [bool]$MIRA_ENABLE_AGENTIC_WEB_SEARCH
 $script:VerboseOutput = [bool]$MIRA_DEFAULT_VERBOSE
 $script:Provider = $MIRA_DEFAULT_PROVIDER
+$script:GemmaLastGeminiProvider = if ($script:Provider -eq 'openai') { 'gemini' } else { $script:Provider }
 $script:Effort = $MIRA_DEFAULT_EFFORT
 $script:ExecutionPermission = $MIRA_DEFAULT_PERMISSION
 $script:InApprovedPowerShellTool = $false
