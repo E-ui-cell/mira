@@ -111,6 +111,7 @@ function Read-GemmaModelSelection {
     )
 
     $modelList = @($Models)
+    if ($null -eq $ProviderStatuses) { $ProviderStatuses = @{} }
     $providerDefinitions = @(
         [pscustomobject]@{ Id = 'openai'; Label = 'OpenAI' },
         [pscustomobject]@{ Id = 'antigravity'; Label = 'Antigravity' },
@@ -438,9 +439,10 @@ function Invoke-GemmaModelPicker {
         }
     } else {
         $catalog = Get-GemmaModelCatalog
-        $selectedIndex = Read-GemmaModelSelection -Models @($catalog.Models) -CurrentModel ([string]$script:MODEL) -CurrentProvider ([string]$script:Provider) -ProviderStatuses $catalog.ProviderStatuses
-        if ($selectedIndex -lt 0 -or $selectedIndex -ge @($catalog.Models).Count) { return }
-        $selected = @($catalog.Models)[$selectedIndex]
+        $modelItems = @($catalog.Models)
+        $selectedIndex = Read-GemmaModelSelection -Models $modelItems -CurrentModel ([string]$script:MODEL) -CurrentProvider ([string]$script:Provider) -ProviderStatuses $catalog.ProviderStatuses
+        if ($selectedIndex -lt 0 -or $selectedIndex -ge $modelItems.Count) { return }
+        $selected = $modelItems[$selectedIndex]
         [void](Set-GemmaActiveModel -Provider ([string]$selected.provider) -Model ([string]$selected.name))
         return
     }
