@@ -299,10 +299,19 @@ function Invoke-GemmaUsageCommand {
         $tokenRemaining = [string]$limits['x-ratelimit-remaining-tokens']
         $tokenReset = [string]$limits['x-ratelimit-reset-tokens']
         if ($tokenLimit -or $tokenRemaining -or $tokenReset) {
-            Write-Host ("  Tokens: limit {0} | remaining {1} | reset {2}" -f
+            Write-Host ("  Organization tokens: limit {0} | remaining {1} | reset {2}" -f
                 $(if ($tokenLimit) { $tokenLimit } else { '?' }),
                 $(if ($tokenRemaining) { $tokenRemaining } else { '?' }),
                 $(if ($tokenReset) { $tokenReset } else { '?' })) -ForegroundColor Gray
+        }
+        $projectTokenLimit = [string]$limits['x-ratelimit-limit-project-tokens']
+        $projectTokenRemaining = [string]$limits['x-ratelimit-remaining-project-tokens']
+        $projectTokenReset = [string]$limits['x-ratelimit-reset-project-tokens']
+        if ($projectTokenLimit -or $projectTokenRemaining -or $projectTokenReset) {
+            Write-Host ("  Project tokens: limit {0} | remaining {1} | reset {2}" -f
+                $(if ($projectTokenLimit) { $projectTokenLimit } else { '?' }),
+                $(if ($projectTokenRemaining) { $projectTokenRemaining } else { '?' }),
+                $(if ($projectTokenReset) { $projectTokenReset } else { '?' })) -ForegroundColor Gray
         }
         if ($limits['retry-after']) {
             Write-Host ("  Retry-After: {0}" -f $limits['retry-after']) -ForegroundColor Yellow
@@ -311,5 +320,5 @@ function Invoke-GemmaUsageCommand {
         Write-Host 'OpenAI rate-limit headers: not observed yet (no probe request is sent).' -ForegroundColor DarkGray
     }
 
-    Write-Host 'Totals are session-local and use provider-reported token counts; .usage sends no API request.' -ForegroundColor DarkGray
+    Write-Host 'Remaining values are rate-window capacity, not billing credits. Session totals use provider-reported tokens; .usage sends no API request.' -ForegroundColor DarkGray
 }
