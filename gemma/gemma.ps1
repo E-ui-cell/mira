@@ -28,6 +28,7 @@ $script:GemmaPromptDirectory = Join-Path $PSScriptRoot 'prompts'
 . (Join-Path $PSScriptRoot 'agent\Tts.ps1')
 
 $Contents = [System.Collections.ArrayList]::new()
+$script:NoSession = $false
 
 # Interactive input state
 $script:MiraInputHistory = [System.Collections.Generic.List[string]]::new()
