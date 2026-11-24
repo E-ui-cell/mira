@@ -15,7 +15,6 @@
     $turnStopwatch = [Diagnostics.Stopwatch]::StartNew()
     $turnPromptTokens = 0
     $turnCompletionTokens = 0
-    $turnStreamedText = $false
 
     try {
         # Native Search is conditional, not mandatory for ordinary conversation.
@@ -164,6 +163,7 @@
                     $emitGoogleText = {
                         param([string]$Value, [int]$CurrentAttempt)
                         if ([string]::IsNullOrEmpty($Value)) { return }
+                        $Value = $Value.Replace(([string][char]9),'    ')
                         if ($retryState.ReplayLimit -gt 0 -and $retryState.ReplayOffset -lt $retryState.ReplayLimit) {
                             $matched = 0
                             while ($matched -lt $Value.Length -and
@@ -223,6 +223,18 @@
                         if ($candidates.Count -eq 0) { return }
 
                         $candidate = $candidates[0]
+                        foreach ($candidateProperty in $candidate.PSObject.Properties) {
+                            if ($candidateProperty.Name -notin @('content','finishReason','finishMessage','groundingMetadata')) {
+                                $ParseState.Candidate[$candidateProperty.Name] = $candidateProperty.Value
+                            }
+                        }
+                        if ($null -ne $candidate.content) {
+                            foreach ($contentProperty in $candidate.content.PSObject.Properties) {
+                                if ($contentProperty.Name -notin @('role','parts')) {
+                                    $ParseState.Candidate.content[$contentProperty.Name] = $contentProperty.Value
+                                }
+                            }
+                        }
                         if ($null -ne $candidate.content -and -not [string]::IsNullOrWhiteSpace([string]$candidate.content.role)) {
                             $ParseState.Candidate.content.role = [string]$candidate.content.role
                         }
@@ -325,7 +337,7 @@
                                     Candidate = @{
                                         content = @{
                                             role = 'model'
-                                            parts = (New-Object System.Collections.ArrayList)
+                                            parts = [System.Collections.ArrayList]::new()
                                         }
                                         finishReason = ''
                                         finishMessage = ''
