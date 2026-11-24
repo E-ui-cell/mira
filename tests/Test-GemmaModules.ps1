@@ -132,15 +132,17 @@ try {
     $env:GEMINI_API_KEY = 'primary-test-key'
     $env:GEMINI_APIJ = 'secondary-test-key'
     . $defaultsPath
-    if ($script:GeminiApiKeys.Count -ne 2 -or
-        $script:GeminiApiKeys[0] -ne 'primary-test-key' -or
-        $script:GeminiApiKeys[1] -ne 'secondary-test-key') {
+    $geminiCandidates = @($script:GeminiApiKeys)
+    if ($geminiCandidates.Count -ne 2 -or
+        $geminiCandidates[0] -ne 'primary-test-key' -or
+        $geminiCandidates[1] -ne 'secondary-test-key') {
         throw 'Gemini API key candidates were not loaded in the configured order.'
     }
 
     $env:GEMINI_API_KEY = ''
     . $defaultsPath
-    if ($script:GeminiApiKeys.Count -ne 1 -or $script:GeminiApiKeys[0] -ne 'secondary-test-key') {
+    $geminiCandidates = @($script:GeminiApiKeys)
+    if ($geminiCandidates.Count -ne 1 -or $geminiCandidates[0] -ne 'secondary-test-key') {
         throw 'Gemini API key candidate filtering did not preserve the remaining key.'
     }
 } finally {
