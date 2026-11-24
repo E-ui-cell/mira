@@ -83,14 +83,14 @@ if ($mainSource -match "'\.provider'" -or
     throw 'The retired .provider command is still registered, dispatched, completed, or advertised.'
 }
 foreach ($requiredProvider in @('openai','antigravity','gemini')) {
-    if ($modelPickerSource -notmatch ("Provider = '" + $requiredProvider + "'")) {
+    if ($modelPickerSource -notmatch ("Id = '" + $requiredProvider + "'")) {
         throw "The unified model picker is missing the '$requiredProvider' provider group."
     }
 }
 if ($modelPickerSource -notmatch 'Get-AntigravityModels' -or
     $modelPickerSource -notmatch 'Get-GeminiModels' -or
     $modelPickerSource -notmatch 'Google AI Studio API' -or
-    $modelPickerSource -notmatch 'gpt-6-luna') {
+    $modelPickerSource -notmatch 'MIRA_OPENAI_DEFAULT_MODEL') {
     throw 'The model picker does not independently load and label all three provider catalogues.'
 }
 if ($lineEditorSource -notmatch "openai:gpt-6-luna" -or
