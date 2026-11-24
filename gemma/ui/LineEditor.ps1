@@ -872,8 +872,20 @@ function Read-GemLineConsole {
                     $candidateLabels += $(if ($item.PSIsContainer) { $item.Name + '\' } else { $item.Name })
                 }
             }
-            elseif ($b -match '^\.provider\s+(\S*)
-            elseif ($b -match '^\.oneshot\s+(\S*)
+            elseif ($b -match '^\.provider\s+(\S*)$') {
+                $providerPrefix = $matches[1]
+                $providerOptions = @('antigravity','gemini','openai')
+                foreach ($item in @($providerOptions | Where-Object { $_.StartsWith($providerPrefix,[StringComparison]::OrdinalIgnoreCase) })) {
+                    $candidateBuffers += ('.provider ' + $item); $candidateLabels += $item
+                }
+            }
+            elseif ($b -match '^\.oneshot\s+(\S*)$') {
+                $oneshotOptions = @('on','off')
+                foreach ($item in @($oneshotOptions | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })) {
+                    $candidateBuffers += ('.oneshot ' + $item); $candidateLabels += $item
+                }
+            }
+            elseif ($b -match '^\.(grounding|auth|effort)\s+(\S*)$') {
                 $head = '.' + $matches[1] + ' '
                 $options = if ($matches[1] -eq 'grounding') { @('on','off','status') } elseif ($matches[1] -eq 'effort') { @('low','medium','high') } else { @('login','status','logout') }
                 foreach ($item in @($options | Where-Object { $_.StartsWith($matches[2],[StringComparison]::OrdinalIgnoreCase) })) {
