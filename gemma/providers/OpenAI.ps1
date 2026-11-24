@@ -242,6 +242,7 @@ function Build-GemmaOpenAIResponsesPayload {
                 name = [string]$tool.function.name
                 description = [string]$tool.function.description
                 parameters = $tool.function.parameters
+                strict = $false
             })
         }
         $payload.tools = @($responsesTools.ToArray())
