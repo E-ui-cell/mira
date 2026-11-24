@@ -23,6 +23,7 @@ foreach ($functionName in @(
     'Test-GptPlanUsageEnabled',
     'Test-GptIdToken',
     'Resolve-GptModel',
+    'Get-GptObjectProperty',
     'ConvertTo-GptResponsesInput',
     'Get-GptToolDefinitions'
 )) {
@@ -146,6 +147,20 @@ if ($inputMessages.Count -ne 2 -or $inputMessages[0].role -ne 'user' -or
     throw 'GEMMA conversation history was not converted to Responses API user/assistant messages correctly.'
 }
 
+# The live chat loop stores turns and content parts as PowerShell hashtables.
+# Exercise that exact representation so normal text cannot disappear on conversion.
+$hashtableHistory = @(
+    @{
+        role = 'user'
+        parts = @(@{ text = 'hello from a hashtable' })
+    }
+)
+$hashtableInput = @(ConvertTo-GptResponsesInput -History $hashtableHistory)
+if ($hashtableInput.Count -ne 1 -or $hashtableInput[0].role -ne 'user' -or
+    $hashtableInput[0].content -ne 'hello from a hashtable') {
+    throw 'PowerShell hashtable conversation turns were not converted to Responses API input.'
+}
+
 $toolDefinitions = @(Get-GptToolDefinitions)
 $toolNames = @($toolDefinitions | ForEach-Object { [string]$_.name })
 foreach ($requiredTool in @('get_current_datetime','run_powershell','quick_web','get_skill')) {
@@ -225,7 +240,9 @@ foreach ($required in @(
     'reasoning = @{ effort = $script:Effort }',
     "$MIRA_DEFAULT_MODEL = ''",
     'Invoke-GptModelSwitcher',
-    'Invoke-GemmaWebSearchCommand'
+    'Invoke-GemmaWebSearchCommand',
+    'Get-GptObjectProperty',
+    'ChatGPT plan usage is not authorized for this account/workspace'
 )) {
     if (-not $sourceText.Contains($required)) { throw "Required official ChatGPT OAuth/Responses implementation marker is missing: $required" }
 }
