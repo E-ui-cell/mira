@@ -116,7 +116,7 @@ try {
         LastRequest = $null
         OpenAIRateLimits = @{}
     }
-    Add-GemmaUsageRecord -Provider 'openai' -Model 'gpt-6-luna' -Succeeded $true -InputTokens 123 -OutputTokens 45 -HttpAttempts 2 -KeyIndex 1 -KeyCount 3 -KeySlotsTried @(2,3) -RateLimitHeaders @{ 'x-ratelimit-limit-tokens' = '100000'; 'x-ratelimit-remaining-tokens' = '50000'; 'x-ratelimit-reset-tokens' = '1m' } -RequestId 'req_usage_test' -HttpStatus 200
+    Add-GemmaUsageRecord -Provider 'openai' -Model 'gpt-6-luna' -Succeeded $true -InputTokens 123 -OutputTokens 45 -HttpAttempts 2 -KeyIndex 1 -KeyCount 3 -KeySlotsTried @(2,3) -RateLimitHeaders @{ 'x-ratelimit-limit-tokens' = '100000'; 'x-ratelimit-remaining-tokens' = '50000'; 'x-ratelimit-reset-tokens' = '1m'; 'x-ratelimit-remaining-project-tokens' = '40000' } -RequestId 'req_usage_test' -HttpStatus 200
     if ($script:MiraUsageStats.Requests -ne 1 -or
         $script:MiraUsageStats.SuccessfulRequests -ne 1 -or
         $script:MiraUsageStats.InputTokens -ne 123 -or
@@ -126,7 +126,8 @@ try {
     }
     if ($script:MiraUsageStats.LastRequest.KeySlot -ne 2 -or
         $script:MiraUsageStats.LastRequest.KeyCount -ne 3 -or
-        $script:MiraUsageStats.OpenAIRateLimits['x-ratelimit-remaining-tokens'] -ne '50000') {
+        $script:MiraUsageStats.OpenAIRateLimits['x-ratelimit-remaining-tokens'] -ne '50000' -or
+        $script:MiraUsageStats.OpenAIRateLimits['x-ratelimit-remaining-project-tokens'] -ne '40000') {
         throw '.usage did not retain the used key slot or OpenAI rate-limit headers.'
     }
     Add-GemmaUsageRecord -Provider 'openai' -Model 'gpt-6-luna' -Succeeded $false -HttpAttempts 1 -KeyIndex 2 -KeyCount 3 -KeySlotsTried @(3) -HttpStatus 429 -ErrorMessage 'TPM limit'
