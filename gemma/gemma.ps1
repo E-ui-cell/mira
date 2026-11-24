@@ -307,7 +307,8 @@ function Test-GptIdToken {
     param(
         [Parameter(Mandatory = $true)][string]$IdToken,
         [Parameter(Mandatory = $true)][string]$ClientId,
-        [Parameter(Mandatory = $true)][string]$Nonce
+        [Parameter(Mandatory = $true)][string]$Nonce,
+        [object]$Jwks
     )
     $segments = $IdToken.Split('.')
     if ($segments.Count -ne 3) { throw 'OpenAI returned a malformed ID token.' }
@@ -317,11 +318,16 @@ function Test-GptIdToken {
     if ([string]$header.alg -ne 'RS256') { throw "Unsupported OpenAI ID-token signing algorithm: $($header.alg)" }
     if ([string]::IsNullOrWhiteSpace([string]$header.kid)) { throw 'OpenAI ID token has no signing-key ID.' }
 
-    $configuration = Get-GptOpenIdConfiguration
-    if ([string]::IsNullOrWhiteSpace([string]$configuration.jwks_uri)) { throw 'OpenID configuration does not contain a JWKS URI.' }
-    $jwks = Invoke-RestMethod -Uri ([string]$configuration.jwks_uri) -Method Get -ErrorAction Stop
+    $suppliedJwks = ($null -ne $Jwks)
+    if ($suppliedJwks) {
+        $jwks = $Jwks
+    } else {
+        $configuration = Get-GptOpenIdConfiguration
+        if ([string]::IsNullOrWhiteSpace([string]$configuration.jwks_uri)) { throw 'OpenID configuration does not contain a JWKS URI.' }
+        $jwks = Invoke-RestMethod -Uri ([string]$configuration.jwks_uri) -Method Get -ErrorAction Stop
+    }
     $jwk = @($jwks.keys | Where-Object { [string]$_.kid -eq [string]$header.kid -and [string]$_.kty -eq 'RSA' } | Select-Object -First 1)
-    if ($jwk.Count -eq 0) {
+    if ($jwk.Count -eq 0 -and -not $suppliedJwks) {
         $script:GptOpenIdConfiguration = $null
         $configuration = Get-GptOpenIdConfiguration
         $jwks = Invoke-RestMethod -Uri ([string]$configuration.jwks_uri) -Method Get -ErrorAction Stop
@@ -2114,7 +2120,7 @@ function Read-GemLineFallback {
             }
 
             if ($b -match '^\.auth\s+gpt\s+(\S*)$') {
-                $m = @('status','logout' | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })
+                $m = @('status','consent','logout' | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })
                 if ($m.Count -eq 1) { $old=$b; $b='.auth gpt '+$m[0]; $c=$b.Length; Redraw $old $b $c }
                 elseif ($m.Count -gt 1) { [Console]::Write("`r`n"+($m -join '  ')+ "`r`nYou: "); $row=[Console]::CursorTop; Redraw '' $b $c }
                 else { [Console]::Beep(700,60) }
