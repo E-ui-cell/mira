@@ -112,13 +112,6 @@ while ($true) {
         continue
     }
 
-    if ($trimmedInput -eq ".provider" -or $trimmedInput.StartsWith(".provider ", [StringComparison]::OrdinalIgnoreCase)) {
-        $providerArgument = ""
-        if ($trimmedInput.Length -gt 9) { $providerArgument = $trimmedInput.Substring(9).Trim() }
-        Invoke-GemmaProviderCommand -Argument $providerArgument
-        continue
-    }
-
     if ($trimmedInput -eq ".grounding" -or $trimmedInput.StartsWith(".grounding ", [StringComparison]::OrdinalIgnoreCase)) {
         $searchArgument = ""
         if ($trimmedInput.Length -gt ".grounding".Length) { $searchArgument = $trimmedInput.Substring(".grounding".Length).Trim() }
@@ -128,7 +121,7 @@ while ($true) {
     if ($trimmedInput -eq ".model" -or $trimmedInput.StartsWith(".model ", [StringComparison]::OrdinalIgnoreCase)) {
         $requestedModel = ""
         if ($trimmedInput.Length -gt 6) { $requestedModel = $trimmedInput.Substring(6).Trim() }
-        Invoke-GeminiModelSwitcher -RequestedModel $requestedModel
+        Invoke-GemmaModelPicker -RequestedModel $requestedModel
         continue
     }
 
