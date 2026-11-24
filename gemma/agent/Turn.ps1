@@ -222,13 +222,16 @@
                                         } elseif ($eventType -eq 'response.completed') {
                                             $completedResponse = $sseEvent.response
                                             break
-                                        } elseif ($eventType -eq 'response.failed' -or $eventType -eq 'error') {
+                                        } elseif ($eventType -eq 'response.failed' -or $eventType -eq 'response.incomplete' -or $eventType -eq 'error') {
                                             $streamError = ''
                                             if ($null -ne $sseEvent.response -and $null -ne $sseEvent.response.error) {
                                                 $streamError = [string]$sseEvent.response.error.message
                                             }
                                             if ([string]::IsNullOrWhiteSpace($streamError) -and $null -ne $sseEvent.error) {
                                                 $streamError = [string]$sseEvent.error.message
+                                            }
+                                            if ([string]::IsNullOrWhiteSpace($streamError) -and $null -ne $sseEvent.response.incomplete_details) {
+                                                $streamError = [string]$sseEvent.response.incomplete_details.reason
                                             }
                                             if ([string]::IsNullOrWhiteSpace($streamError)) { $streamError = $eventJson }
                                             throw "OpenAI Responses stream failed: $streamError"
@@ -381,7 +384,10 @@
                         }
                 }
             }
-            if ($streamTextThisRequest) { Write-Host "" }
+            if ($streamTextThisRequest) {
+                if ($script:CommandMode) { [Console]::Out.WriteLine() }
+                else { Write-Host "" }
+            }
             $sw.Stop()
 
             if ($cancelled) {
@@ -391,7 +397,6 @@
 
                 Rollback-MiraTurn -History $Contents -StartCount $turnStartCount
 
-                if ($streamTextThisRequest) { Write-Host "" }
                 Write-Host "`r" -NoNewline
                 Write-Host (" " * 60) -NoNewline
                 Write-Host "`r[Request cancelled]" -ForegroundColor Yellow
