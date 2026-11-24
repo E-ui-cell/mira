@@ -127,6 +127,104 @@ function Invoke-GemmaReplayLatest {
     Invoke-GemmaPlayTtsWave -Path $audioPath
 }
 
+function Get-GemmaTtsApiKeys {
+    # GEMINI_API_KEYS accepts a semicolon-, comma-, or newline-separated pool.
+    # The legacy single-key variables remain supported as fallback/primary.
+    $raw = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEYS)) {
+        $raw += ($env:GEMINI_API_KEYS -split '[;,\r\n]+')
+    }
+    foreach ($name in @('GEMINI_API','GEMINI_API_KEY','GEMINI_APIJ')) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($value)) { $raw += $value }
+    }
+    $seen = @{}
+    $keys = @(
+        foreach ($item in $raw) {
+            $key = ([string]$item).Trim().Trim('"').Trim("'")
+            if ($key -and -not $seen.ContainsKey($key)) {
+                $seen[$key] = $true
+                $key
+            }
+        }
+    )
+    return ,$keys
+}
+
+function Get-GemmaTtsHttpError {
+    param([Parameter(Mandatory = $true)]$ErrorRecord)
+    $status = 0
+    $body = ''
+    try {
+        $response = $ErrorRecord.Exception.Response
+        if ($null -ne $response) {
+            $status = [int]$response.StatusCode
+            $stream = $response.GetResponseStream()
+            if ($null -ne $stream) {
+                $reader = [IO.StreamReader]::new($stream)
+                try { $body = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            }
+        }
+    } catch {}
+    $message = [string]$ErrorRecord.Exception.Message
+    $reason = ''
+    if ($body) {
+        try {
+            $parsed = $body | ConvertFrom-Json -ErrorAction Stop
+            $message = [string]$parsed.error.message
+            $reason = [string]$parsed.error.details[0].reason
+            if (-not $reason) { $reason = [string]$parsed.error.status }
+        } catch {}
+    }
+    return [pscustomobject]@{ Status = $status; Message = $message; Reason = $reason }
+}
+
+function Invoke-GemmaTtsWithKeyRotation {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$Json
+    )
+    $keys = @(Get-GemmaTtsApiKeys)
+    if ($keys.Count -eq 0) { throw 'No Gemini API key configured. Set GEMINI_API or GEMINI_API_KEYS.' }
+
+    if ($null -eq $script:MiraTtsApiKeyIndex) { $script:MiraTtsApiKeyIndex = 0 }
+    $start = [int]($script:MiraTtsApiKeyIndex % $keys.Count)
+    $failures = New-Object 'System.Collections.Generic.List[string]'
+    for ($offset = 0; $offset -lt $keys.Count; $offset++) {
+        $index = ($start + $offset) % $keys.Count
+        $key = $keys[$index]
+        try {
+            $result = Invoke-RestMethod -Uri $Uri -Method Post -Headers @{ 'x-goog-api-key' = $key } -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($Json)) -TimeoutSec 120 -ErrorAction Stop
+            $script:MiraTtsApiKeyIndex = $index
+            return $result
+        }
+        catch {
+            $info = Get-GemmaTtsHttpError -ErrorRecord $_
+            $status = [int]$info.Status
+            $detail = if ($info.Reason) { $info.Reason } else { $info.Message }
+            [void]$failures.Add(("HTTP {0}: {1}" -f $status,$detail))
+
+            # Rotate on quota/rate limits, auth/key errors, transient HTTP errors,
+            # and transport failures. A generic 400 is not a key failure: only
+            # rotate it when Google's response explicitly identifies the key.
+            $keyInvalid400 = ($status -eq 400 -and (
+                $info.Reason -match 'API_KEY_INVALID|API_KEY_SERVICE_BLOCKED|INVALID_API_KEY' -or
+                $info.Message -match '(?i)api.?key.{0,30}(invalid|not valid|expired|blocked)'
+            ))
+            $rotate = ($status -in @(0,400,401,403,408,429,500,502,503,504))
+            if ($status -eq 400 -and -not $keyInvalid400) { $rotate = $false }
+            if (-not $rotate) {
+                throw ("Gemini TTS request failed; key rotation was not applicable. HTTP {0}: {1}" -f $status,$detail)
+            }
+            if ($offset -lt ($keys.Count - 1)) {
+                Write-Host ("[TTS] API key {0}/{1} failed (HTTP {2}); trying the next key..." -f ($offset + 1),$keys.Count,$status) -ForegroundColor DarkYellow
+            }
+        }
+    }
+    $script:MiraTtsApiKeyIndex = ($start + 1) % $keys.Count
+    throw ("Gemini TTS failed with every configured API key: " + ($failures -join ' | '))
+}
+
 function Invoke-GemmaSpeakLatest {
     param([System.Collections.IList]$Contents)
     $transcript = Get-GemmaLatestAssistantTranscript -Contents $Contents
@@ -166,7 +264,7 @@ function Invoke-GemmaSpeakLatest {
     $uri = "https://generativelanguage.googleapis.com/v1beta/models/$($script:MiraTtsModel):generateContent"
     Write-Host ("[TTS] Generating speech ({0}, {1})..." -f $script:MiraTtsModel,$script:MiraTtsVoice) -ForegroundColor DarkGray
     try {
-        $response = Invoke-RestMethod -Uri $uri -Method Post -Headers @{ 'x-goog-api-key' = $API_KEY } -ContentType 'application/json; charset=utf-8' -Body ([System.Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec 120 -ErrorAction Stop
+        $response = Invoke-GemmaTtsWithKeyRotation -Uri $uri -Json $json
         $audioPart = @($response.candidates[0].content.parts | Where-Object { $null -ne $_.inlineData -and -not [string]::IsNullOrWhiteSpace([string]$_.inlineData.data) }) | Select-Object -First 1
         if ($null -eq $audioPart -or [string]::IsNullOrWhiteSpace([string]$audioPart.inlineData.data)) {
             $finishReason = [string]$response.candidates[0].finishReason
