@@ -123,7 +123,7 @@
                                 }
                                 try { $parsedError = $bodyText | ConvertFrom-Json -ErrorAction Stop; $reason = [string]$parsedError.error.status } catch {}
                                 $lastFailure = "HTTP $status $reason $($failure.Exception.Message) $bodyText"
-                                if ($status -eq 401 -or ($status -eq 403 -and $errorCode -match '(?i)permission|access|api_key')) {
+                                if ($status -eq 401 -or ($status -eq 403 -and ($reason -match '(?i)PERMISSION_DENIED|API_KEY_INVALID|API_KEY_SERVICE_BLOCKED' -or $bodyText -match '(?i)api.?key|permission denied'))) {
                                     if ($keyOffset -lt ($keyPool.Count - 1)) { break }
                                     throw $lastFailure
                                 }
@@ -172,10 +172,11 @@
                                 try { $errorCode = [string](($errorBody | ConvertFrom-Json -ErrorAction Stop).error.code) } catch {}
                                 $lastFailure = "HTTP $status $errorCode $($failure.Exception.Message) $errorBody"
                                 if ($status -eq 429 -and $errorCode -match '(?i)insufficient_quota|credit_balance_exhausted|organization_usage_limit_exceeded') { throw $lastFailure }
-                                if ($status -in @(401,403)) {
+                                if ($status -eq 401 -or ($status -eq 403 -and ($errorCode -match '(?i)permission|access|api_key' -or $errorBody -match '(?i)api.?key|permission denied'))) {
                                     if ($keyOffset -lt ($keyPool.Count - 1)) { break }
                                     throw $lastFailure
                                 }
+                                if ($status -eq 403) { throw $lastFailure }
                                 $transient = ($status -in @(0,408,429,500,502,503,504)) -or ([string]$failure.Exception.Message -match '(?i)timeout|connection reset|connection closed|name resolution')
                                 if (-not $transient) { throw $lastFailure }
                                 if ($attempt -ge 2) {
