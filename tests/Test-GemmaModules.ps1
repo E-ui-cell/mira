@@ -46,7 +46,6 @@ $requiredFunctions = @(
     'Invoke-GemmaDirectCommand',
     'Invoke-GemmaEffortCommand',
     'Invoke-GemmaStreamingCommand',
-    'Invoke-GemmaProviderCommand',
     'Add-GemmaUsageRecord',
     'Invoke-GemmaUsageCommand',
     'Build-GeminiPayload',
@@ -56,8 +55,11 @@ $requiredFunctions = @(
     'Rollback-MiraTurn',
     'Save-GeminiCodeBlocks',
     'Normalize-MiraReply',
+    'Add-GemmaModelCatalogEntry',
+    'Get-GemmaModelCatalog',
     'Read-GemmaModelSelection',
-    'Invoke-GeminiModelSwitcher',
+    'Set-GemmaActiveModel',
+    'Invoke-GemmaModelPicker',
     'Read-GemLineConsole',
     'Read-GemLineFallback',
     'Add-GemUndoSnapshot',
@@ -66,6 +68,36 @@ $requiredFunctions = @(
     'Find-GemHistoryMatch',
     'Get-GemHistorySearchPrompt'
 )
+
+# The unified model picker must own provider switching; the old .provider command is gone.
+$mainSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\gemma.ps1') -Raw -Encoding UTF8
+$chatLoopSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\agent\ChatLoop.ps1') -Raw -Encoding UTF8
+$lineEditorSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\ui\LineEditor.ps1') -Raw -Encoding UTF8
+$outputSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\ui\Output.ps1') -Raw -Encoding UTF8
+$modelPickerSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\ui\ModelPicker.ps1') -Raw -Encoding UTF8
+if ($mainSource -match "'\.provider'" -or
+    $chatLoopSource -match 'Invoke-GemmaProviderCommand|\.provider' -or
+    $lineEditorSource -match '\.provider' -or
+    $outputSource -match '\.provider' -or
+    $null -ne (Get-Command Invoke-GemmaProviderCommand -ErrorAction SilentlyContinue)) {
+    throw 'The retired .provider command is still registered, dispatched, completed, or advertised.'
+}
+foreach ($requiredProvider in @('openai','antigravity','gemini')) {
+    if ($modelPickerSource -notmatch ("Provider = '" + $requiredProvider + "'")) {
+        throw "The unified model picker is missing the '$requiredProvider' provider group."
+    }
+}
+if ($modelPickerSource -notmatch 'Get-AntigravityModels' -or
+    $modelPickerSource -notmatch 'Get-GeminiModels' -or
+    $modelPickerSource -notmatch 'Google AI Studio API' -or
+    $modelPickerSource -notmatch 'gpt-6-luna') {
+    throw 'The model picker does not independently load and label all three provider catalogues.'
+}
+if ($lineEditorSource -notmatch "openai:gpt-6-luna" -or
+    $lineEditorSource -notmatch "antigravity:" -or
+    $lineEditorSource -notmatch "google-ai-studio:") {
+    throw 'The .model provider-qualified tab completions are incomplete.'
+}
 
 if ($MIRA_DEFAULT_PROVIDER -notin @('antigravity','gemini')) {
     throw 'Gemma defaults did not initialize a supported provider.'
@@ -76,6 +108,25 @@ if ([string]::IsNullOrWhiteSpace($MIRA_DEFAULT_MODEL)) {
 
 if ($script:StreamingMode -notin @('off','line','delta')) {
     throw 'Gemma defaults did not initialize a supported streaming mode.'
+}
+
+# Parse every changed command/UI module without executing the interactive loop.
+foreach ($relativePath in @(
+    'gemma\gemma.ps1',
+    'gemma\agent\ChatLoop.ps1',
+    'gemma\agent\Settings.ps1',
+    'gemma\ui\LineEditor.ps1',
+    'gemma\ui\ModelPicker.ps1',
+    'gemma\ui\Output.ps1'
+)) {
+    $changedPath = Join-Path $repoRoot $relativePath
+    $changedTokens = $null
+    $changedErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($changedPath, [ref]$changedTokens, [ref]$changedErrors) | Out-Null
+    if ($changedErrors.Count -gt 0) {
+        $firstError = $changedErrors[0]
+        throw ("PowerShell syntax error in {0} at line {1}, column {2}: {3}" -f $relativePath,$firstError.Extent.StartLineNumber,$firstError.Extent.StartColumnNumber,$firstError.Message)
+    }
 }
 
 # Parse Turn.ps1 without executing the interactive request loop.
