@@ -105,8 +105,9 @@ $script:OpenAIApiKeys = @(
 $script:MiraOpenAIApiKeyIndex = 0
 
 # Move to the next configured OpenAI key for these key/account-specific failures.
-# Rate limits and quota are shared by their organization/project, so rotation
-# only helps when another candidate belongs to a different organization/project.
+# Organization TPM/usage limits are shared across that organization's keys.
+# Project-scoped limits may differ by project; rotation only helps if the next
+# candidate has a separate applicable limit and available capacity.
 $script:OpenAIKeyRotationErrorCodes = @(
     'invalid_api_key'
     'incorrect_api_key'
