@@ -12,7 +12,7 @@ function Get-GemmaTtsDirectorStyle {
     # Only a prompt containing this heading can supply a director instruction.
     $director = ''
     $systemText = [string]$SystemInstruction.parts[0].text
-    $match = [regex]::Match($systemText,'(?ims)^##[ \t]+TTS voice direction[ \t]*\r?\n(?<body>.*?)(?=^##[ \t]+|\z)')
+    $match = [regex]::Match($systemText,'(?ims)^##[ \t]+TTS voice direction[ \t]*\r?\n(?<body>.*?)(?=^##[ \t]+|^COMMAND GENERATION MODE:|\z)')
     if ($match.Success) { $director = $match.Groups['body'].Value.Trim() }
 
     $context = ''

@@ -77,7 +77,7 @@ function Invoke-GemmaSystemPromptCommand {
             Write-Host ("System prompt '{0}' is empty; active prompt unchanged." -f $value) -ForegroundColor Yellow
             return
         }
-        $SystemInstruction.parts[0].text = Get-GemmaSystemPromptText -BasePrompt $promptText.Trim()
+        $SystemInstruction.parts[0].text = Get-GemmaSystemPromptText -BasePrompt ($promptText.Trim())
         $script:ActiveSystemPromptName = [System.IO.Path]::GetFileNameWithoutExtension($promptPath)
         Write-Host ("[System prompt switched to: {0}]" -f $script:ActiveSystemPromptName) -ForegroundColor Green
     } catch {
