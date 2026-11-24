@@ -78,37 +78,6 @@
                TELEMETRY_PATTERN.test(url);
     }
 
-    function collectPayloadFields(value) {
-        const fields = new Set([
-            "model",
-            "model_slug",
-            "default_model_slug",
-            "intended_default_model_slug",
-            "resolved_model_slug",
-            "thinking_effort",
-            "plan_type"
-        ]);
-
-        const found = {};
-
-        function walk(node, path = "", depth = 0) {
-            if (!node || typeof node !== "object" || depth > 8) return;
-
-            for (const [key, child] of Object.entries(node)) {
-                const current = path ? `${path}.${key}` : key;
-
-                if (fields.has(key)) found[current] = child;
-
-                if (child && typeof child === "object") {
-                    walk(child, current, depth + 1);
-                }
-            }
-        }
-
-        walk(value);
-        return found;
-    }
-
     function patchBody(body, transport) {
         if (typeof body !== "string") {
             console.warn(
@@ -143,19 +112,12 @@
         const previousModel = payload.model;
         const previousModelSlug = payload.model_slug;
         const previousEffort = payload.thinking_effort;
-        const payloadBefore = collectPayloadFields(payload);
 
         payload.model = TARGET_MODEL;
         payload.model_slug = TARGET_MODEL_SLUG;
         payload.thinking_effort = TARGET_THINKING_EFFORT;
 
-        console.groupCollapsed(`[ModelPin] Outgoing payload (${transport})`);
-        console.info("Before:", payloadBefore);
-        console.info("After:", collectPayloadFields(payload));
-        console.info("Top-level keys:", Object.keys(payload));
-        console.groupEnd();
-
-        if (
+        console.groupCollapsed(`[ModelPin] Outgoing payload (        if (
             previousModel === TARGET_MODEL &&
             previousModelSlug === TARGET_MODEL_SLUG &&
             previousEffort === TARGET_THINKING_EFFORT
