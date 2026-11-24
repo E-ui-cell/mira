@@ -15,6 +15,7 @@
     $turnStopwatch = [Diagnostics.Stopwatch]::StartNew()
     $turnPromptTokens = 0
     $turnCompletionTokens = 0
+    $turnStreamedText = $false
 
     try {
         # Native Search is conditional, not mandatory for ordinary conversation.
@@ -39,6 +40,10 @@
             $payloadObj = Build-GemmaOpenAIChatPayload -SystemInstruction $SystemInstruction -Contents $Contents
         } else {
             $payloadObj = Build-GeminiPayload -SystemInstruction $SystemInstruction -Contents $Contents
+        }
+        if ($usingOpenAIResponses) {
+            # Luna uses the Responses API SSE stream; other providers stay unchanged.
+            $payloadObj.stream = $true
         }
         $usingAntigravityOAuth = ($script:Provider -eq 'antigravity')
         $requestApiKeys = @()
@@ -90,6 +95,16 @@
             $i = 0
             $sw = [Diagnostics.Stopwatch]::StartNew()
 
+            $streamQueue = $null
+            $streamState = $null
+            if ($usingOpenAIResponses) {
+                $streamQueue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
+                $streamState = [hashtable]::Synchronized(@{
+                    TextStarted = $false
+                    Request = $null
+                })
+            }
+
             $canReadConsoleKeys = $false
             try {
                 $canReadConsoleKeys = -not [Console]::IsInputRedirected
@@ -107,7 +122,7 @@
             $powershell = [Management.Automation.PowerShell]::Create()
             $powershell.Runspace = $runspace
             [void]$powershell.AddScript({
-                param($u, $b, $h, $keyPool, $keyStart, $providerName)
+                param($u, $b, $h, $keyPool, $keyStart, $providerName, $streamResponses, $streamQueue, $streamState)
                 if ($providerName -eq 'gemini') {
                     $lastFailure = ''
                     for ($keyOffset = 0; $keyOffset -lt $keyPool.Count; $keyOffset++) {
@@ -155,27 +170,110 @@
                         $keyIndex = ($keyStart + $keyOffset) % $keyPool.Count
                         $authHeaders = @{ Authorization = ('Bearer ' + [string]$keyPool[$keyIndex]) }
                         for ($attempt = 0; $attempt -lt 3; $attempt++) {
+                            $httpResponse = $null
+                            $httpRequest = $null
+                            $sseReader = $null
                             try {
-                                $successResponse = Invoke-RestMethod -Uri $u -Method Post -Headers $authHeaders -ContentType 'application/json; charset=utf-8' -Body $b -TimeoutSec 180 -ErrorAction Stop
-                                return ($successResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru)
+                                if (-not $streamResponses) {
+                                    $successResponse = Invoke-RestMethod -Uri $u -Method Post -Headers $authHeaders -ContentType 'application/json; charset=utf-8' -Body $b -TimeoutSec 180 -ErrorAction Stop
+                                    return ($successResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru)
+                                }
+
+                                # PowerShell 5.1 has no native SSE client. Read the
+                                # Responses event stream directly from HttpWebRequest.
+                                $httpRequest = [System.Net.HttpWebRequest]::Create($u)
+                                $httpRequest.Method = 'POST'
+                                $httpRequest.ContentType = 'application/json; charset=utf-8'
+                                $httpRequest.Accept = 'text/event-stream'
+                                $httpRequest.Headers['Authorization'] = ('Bearer ' + [string]$keyPool[$keyIndex])
+                                $httpRequest.Timeout = 180000
+                                $httpRequest.ReadWriteTimeout = 180000
+                                $httpRequest.AllowReadStreamBuffering = $false
+                                $streamState.Request = $httpRequest
+
+                                $requestStream = $httpRequest.GetRequestStream()
+                                try { $requestStream.Write($b, 0, $b.Length) }
+                                finally { $requestStream.Dispose() }
+
+                                $httpResponse = $httpRequest.GetResponse()
+                                $responseStream = $httpResponse.GetResponseStream()
+                                $sseReader = New-Object System.IO.StreamReader($responseStream, [System.Text.Encoding]::UTF8, $true)
+                                $eventData = New-Object 'System.Collections.Generic.List[string]'
+                                $completedResponse = $null
+
+                                while (($sseLine = $sseReader.ReadLine()) -ne $null) {
+                                    if ($sseLine.Length -eq 0) {
+                                        if ($eventData.Count -eq 0) { continue }
+                                        $eventJson = [string]::Join("`n", $eventData.ToArray())
+                                        $eventData.Clear()
+                                        if ($eventJson -eq '[DONE]') { continue }
+
+                                        try { $sseEvent = $eventJson | ConvertFrom-Json -ErrorAction Stop }
+                                        catch { throw "OpenAI returned malformed Responses SSE data: $($_.Exception.Message)" }
+
+                                        $eventType = [string]$sseEvent.type
+                                        if ($eventType -eq 'response.output_text.delta' -or $eventType -eq 'response.refusal.delta') {
+                                            $deltaText = [string]$sseEvent.delta
+                                            if (-not [string]::IsNullOrEmpty($deltaText)) {
+                                                $streamState.TextStarted = $true
+                                                $streamQueue.Enqueue($deltaText)
+                                            }
+                                        } elseif ($eventType -eq 'response.completed') {
+                                            $completedResponse = $sseEvent.response
+                                            break
+                                        } elseif ($eventType -eq 'response.failed' -or $eventType -eq 'error') {
+                                            $streamError = ''
+                                            if ($null -ne $sseEvent.response -and $null -ne $sseEvent.response.error) {
+                                                $streamError = [string]$sseEvent.response.error.message
+                                            }
+                                            if ([string]::IsNullOrWhiteSpace($streamError) -and $null -ne $sseEvent.error) {
+                                                $streamError = [string]$sseEvent.error.message
+                                            }
+                                            if ([string]::IsNullOrWhiteSpace($streamError)) { $streamError = $eventJson }
+                                            throw "OpenAI Responses stream failed: $streamError"
+                                        }
+                                    } elseif ($sseLine.StartsWith('data:')) {
+                                        [void]$eventData.Add($sseLine.Substring(5).TrimStart())
+                                    }
+                                }
+
+                                if ($null -eq $completedResponse) {
+                                    throw 'OpenAI Responses stream ended before response.completed.'
+                                }
+                                if ([string]$completedResponse.status -ne 'completed') {
+                                    $incompleteReason = ''
+                                    if ($null -ne $completedResponse.incomplete_details) {
+                                        $incompleteReason = [string]$completedResponse.incomplete_details.reason
+                                    }
+                                    if ($null -ne $completedResponse.error -and $completedResponse.error.message) {
+                                        $incompleteReason = [string]$completedResponse.error.message
+                                    }
+                                    throw "OpenAI Responses stream finished with status '$($completedResponse.status)'. $incompleteReason"
+                                }
+
+                                return ($completedResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru)
                             } catch {
                                 $failure = $_
                                 $response = $failure.Exception.Response
+                                if ($null -eq $response -and $null -ne $httpResponse) { $response = $httpResponse }
                                 $status = 0; $retryAfter = 0; $errorCode = ''; $errorBody = ''
                                 if ($null -ne $response) {
                                     try { $status = [int]$response.StatusCode } catch {}
                                     try { [void][int]::TryParse([string]$response.Headers['Retry-After'],[ref]$retryAfter) } catch {}
                                     try {
-                                        $stream = $response.GetResponseStream()
-                                        if ($null -ne $stream) {
-                                            $reader = New-Object System.IO.StreamReader($stream)
-                                            $errorBody = $reader.ReadToEnd()
-                                            $reader.Dispose(); $stream.Dispose()
+                                        if ($null -ne $failure.Exception.Response) {
+                                            $errorStream = $response.GetResponseStream()
+                                            if ($null -ne $errorStream) {
+                                                $errorReader = New-Object System.IO.StreamReader($errorStream)
+                                                $errorBody = $errorReader.ReadToEnd()
+                                                $errorReader.Dispose(); $errorStream.Dispose()
+                                            }
                                         }
                                     } catch {}
                                 }
                                 try { $errorCode = [string](($errorBody | ConvertFrom-Json -ErrorAction Stop).error.code) } catch {}
                                 $lastFailure = "HTTP $status $errorCode $($failure.Exception.Message) $errorBody"
+                                if ($streamResponses -and $streamState.TextStarted) { throw $lastFailure }
                                 if ($status -eq 429 -and $errorCode -match '(?i)insufficient_quota|credit_balance_exhausted|organization_usage_limit_exceeded') { throw $lastFailure }
                                 if ($status -eq 401 -or ($status -eq 403 -and ($errorCode -match '(?i)permission|access|api_key' -or $errorBody -match '(?i)api.?key|permission denied'))) {
                                     if ($keyOffset -lt ($keyPool.Count - 1)) { break }
@@ -193,6 +291,11 @@
                                     $delay = $retryAfter
                                 } else { $delay = [Math]::Min(8,[Math]::Pow(2,$attempt)) }
                                 Start-Sleep -Seconds ([int]$delay)
+                            } finally {
+                                if ($null -ne $sseReader) { try { $sseReader.Dispose() } catch {} }
+                                if ($null -ne $httpResponse) { try { $httpResponse.Close() } catch {} }
+                                if ($null -ne $httpRequest) { try { $httpRequest.Abort() } catch {} }
+                                $streamState.Request = $null
                             }
                         }
                     }
@@ -213,26 +316,61 @@
                         Start-Sleep -Seconds ([int]$delay)
                     }
                 }
-            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders).AddArgument($requestApiKeys).AddArgument($requestKeyIndex).AddArgument($requestProviderName)
+            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders).AddArgument($requestApiKeys).AddArgument($requestKeyIndex).AddArgument($requestProviderName).AddArgument([bool]$usingOpenAIResponses).AddArgument($streamQueue).AddArgument($streamState)
             $asyncResult = $powershell.BeginInvoke()
 
             $cancelled = $false
+            $streamTextThisRequest = $false
+            $streamDelta = ''
             while (-not $asyncResult.IsCompleted) {
-                if ($canReadConsoleKeys -and [Console]::KeyAvailable) {
-                        $key = [Console]::ReadKey($true)
-                        if ($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
-                            $cancelled = $true
-                            Write-Host "`rStopping request...                                           " -NoNewline -ForegroundColor Yellow
-                            try { $powershell.Stop() } catch {}
-                            break
+                if ($usingOpenAIResponses -and $null -ne $streamQueue) {
+                    while ($streamQueue.TryDequeue([ref]$streamDelta)) {
+                        if (-not $streamTextThisRequest) {
+                            Write-Host (" " * 60) -NoNewline
+                            Write-Host "`r" -NoNewline
+                            $streamTextThisRequest = $true
+                            $turnStreamedText = $true
                         }
+                        Write-Host $streamDelta -NoNewline -ForegroundColor Cyan
                     }
-                $frame = $frames[$i % $frames.Length]
-                $elapsed = [int]$sw.ElapsedMilliseconds
-                Write-Host "`r$frame  $([math]::Round($elapsed/1000, 1))s " -NoNewline -ForegroundColor DarkGray
-                Start-Sleep -Milliseconds $MIRA_SPINNER_INTERVAL_MS
-                $i++
+                }
+
+                if ($canReadConsoleKeys -and [Console]::KeyAvailable) {
+                    $key = [Console]::ReadKey($true)
+                    if ($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
+                        $cancelled = $true
+                        if ($streamState -and $null -ne $streamState.Request) {
+                            try { $streamState.Request.Abort() } catch {}
+                        }
+                        Write-Host "`rStopping request...                                           " -NoNewline -ForegroundColor Yellow
+                        try { $powershell.Stop() } catch {}
+                        break
+                    }
+                }
+
+                if (-not $streamTextThisRequest) {
+                    $frame = $frames[$i % $frames.Length]
+                    $elapsed = [int]$sw.ElapsedMilliseconds
+                    Write-Host "`r$frame  $([math]::Round($elapsed/1000, 1))s " -NoNewline -ForegroundColor DarkGray
+                    $i++
+                }
+                if ($streamTextThisRequest) { Start-Sleep -Milliseconds 25 }
+                else { Start-Sleep -Milliseconds $MIRA_SPINNER_INTERVAL_MS }
             }
+
+            # Drain the last deltas queued just before the worker completed.
+            if ($usingOpenAIResponses -and $null -ne $streamQueue) {
+                while ($streamQueue.TryDequeue([ref]$streamDelta)) {
+                    if (-not $streamTextThisRequest) {
+                        Write-Host (" " * 60) -NoNewline
+                        Write-Host "`r" -NoNewline
+                        $streamTextThisRequest = $true
+                        $turnStreamedText = $true
+                    }
+                    Write-Host $streamDelta -NoNewline -ForegroundColor Cyan
+                }
+            }
+            if ($streamTextThisRequest) { Write-Host "" }
             $sw.Stop()
 
             if ($cancelled) {
@@ -242,6 +380,7 @@
 
                 Rollback-MiraTurn -History $Contents -StartCount $turnStartCount
 
+                if ($streamTextThisRequest) { Write-Host "" }
                 Write-Host "`r" -NoNewline
                 Write-Host (" " * 60) -NoNewline
                 Write-Host "`r[Request cancelled]" -ForegroundColor Yellow
@@ -250,8 +389,10 @@
                 break
             }
 
-            Write-Host (" " * 40) -NoNewline
-            Write-Host "`r" -NoNewline
+            if (-not $streamTextThisRequest) {
+                Write-Host (" " * 40) -NoNewline
+                Write-Host "`r" -NoNewline
+            }
 
             $response = $null
             $endInvokeFailure = $null
@@ -477,7 +618,12 @@
                         if ($_.thought) { "[Thought summary]`n$([string]$_.text)" } else { [string]$_.text }
                     }
             )
-            $reply = Normalize-MiraReply ($replyTextParts -join "`n")
+            if ($usingOpenAIResponses -and $turnStreamedText) {
+                # Keep the stored text identical to what the terminal streamed.
+                $reply = ($replyTextParts -join "`n").Trim()
+            } else {
+                $reply = Normalize-MiraReply ($replyTextParts -join "`n")
+            }
             if ($script:CommandMode) { $reply = [regex]::Replace($reply.Trim(),'(?s)^```[a-zA-Z0-9_-]*\s*|\s*```$','').Trim() }
             $script:LastAssistantReply = $reply
 
@@ -512,7 +658,13 @@
             $bottomIndent = [Math]::Max(0,[int](($width - $bottomRule.Length) / 2))
             $bottomBoxLine = (' ' * $bottomIndent) + $bottomRule
 
-            if ($script:CommandMode) { [Console]::Out.WriteLine($reply) }
+            if ($usingOpenAIResponses -and $turnStreamedText) {
+                # The response body has already been printed incrementally.
+                if (-not $script:CommandMode -and -not $script:OneShot) {
+                    Write-Host $topBoxLine -ForegroundColor DarkGray
+                    Write-Host $bottomBoxLine -ForegroundColor DarkGray
+                }
+            } elseif ($script:CommandMode) { [Console]::Out.WriteLine($reply) }
             elseif ($script:OneShot) { Write-Host $reply -ForegroundColor Cyan }
             else { Write-Host $topBoxLine -ForegroundColor DarkGray; Write-Host $reply -ForegroundColor Cyan; Write-Host $bottomBoxLine -ForegroundColor DarkGray }
             $modelTurn = @{ role = "model"; parts = @( @{ text = $reply } ) }
