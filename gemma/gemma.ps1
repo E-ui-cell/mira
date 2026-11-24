@@ -789,6 +789,7 @@ function Invoke-GptWebConversation {
     $request.ContentType = 'application/json; charset=utf-8'
     $request.Headers['Authorization'] = 'Bearer ' + $accessToken
     $request.UserAgent = 'GEMMA/1.0'
+    $request.AllowReadStreamBuffering = $false
     $request.Timeout = 300000
     $request.ReadWriteTimeout = 300000
     $request.ContentLength = $bytes.Length
