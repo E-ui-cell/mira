@@ -44,6 +44,7 @@ $requiredFunctions = @(
     'Confirm-GemmaDirectAction',
     'Invoke-GemmaDirectCommand',
     'Invoke-GemmaEffortCommand',
+    'Invoke-GemmaStreamingCommand',
     'Invoke-GemmaProviderCommand',
     'Build-GeminiPayload',
     'Rollback-MiraTurn',
@@ -65,6 +66,33 @@ if ($MIRA_DEFAULT_PROVIDER -notin @('antigravity','gemini')) {
 }
 if ([string]::IsNullOrWhiteSpace($MIRA_DEFAULT_MODEL)) {
     throw 'Gemma defaults did not initialize the selected model.'
+}
+
+if ($script:StreamingMode -notin @('off','line','delta')) {
+    throw 'Gemma defaults did not initialize a supported streaming mode.'
+}
+
+# Parse Turn.ps1 without executing the interactive request loop.
+$turnPath = Join-Path $repoRoot 'gemma\agent\Turn.ps1'
+$turnTokens = $null
+$turnErrors = $null
+[System.Management.Automation.Language.Parser]::ParseFile($turnPath, [ref]$turnTokens, [ref]$turnErrors) | Out-Null
+if ($turnErrors.Count -gt 0) {
+    $firstTurnError = $turnErrors[0]
+    throw ("Turn.ps1 syntax error at line {0}, column {1}: {2}" -f $firstTurnError.Extent.StartLineNumber, $firstTurnError.Extent.StartColumnNumber, $firstTurnError.Message)
+}
+
+# Verify the line/delta/off streaming mode command changes runtime state.
+$oldStreamingMode = $script:StreamingMode
+try {
+    Invoke-GemmaStreamingCommand -Argument 'delta'
+    if ($script:StreamingMode -ne 'delta') { throw '.streaming delta did not update the active mode.' }
+    Invoke-GemmaStreamingCommand -Argument 'line'
+    if ($script:StreamingMode -ne 'line') { throw '.streaming line did not update the active mode.' }
+    Invoke-GemmaStreamingCommand -Argument 'off'
+    if ($script:StreamingMode -ne 'off') { throw '.streaming off did not disable streaming.' }
+} finally {
+    $script:StreamingMode = $oldStreamingMode
 }
 
 foreach ($functionName in $requiredFunctions) {
