@@ -205,16 +205,18 @@
 
                         # Public Gemini sends candidates at the top level. Antigravity
                         # wraps the same GenerateContent response in { response: ... }.
-                        $chunkResponse = $eventObject
-                        if ($null -ne $eventObject.response) { $chunkResponse = $eventObject.response }
-                        if ($null -ne $chunkResponse.error) {
-                            $eventMessage = [string]$chunkResponse.error.message
+                        if ($null -ne $eventObject.response -and $null -ne $eventObject.response.error) {
+                            $eventMessage = [string]$eventObject.response.error.message
                             if ([string]::IsNullOrWhiteSpace($eventMessage)) { $eventMessage = $EventJson }
                             throw "Google streaming API error: $eventMessage"
                         }
 
-                        if ($null -ne $chunkResponse.usageMetadata) {
-                            $ParseState.Usage = $chunkResponse.usageMetadata
+                        $chunkResponse = $eventObject
+                        if ($null -ne $eventObject.response -and @($eventObject.response.candidates).Count -gt 0) {
+                            $chunkResponse = $eventObject.response
+                        }
+                        if ($null -ne $eventObject.response -and $null -ne $eventObject.response.usageMetadata) {
+                            $ParseState.Usage = $eventObject.response.usageMetadata
                         } elseif ($null -ne $eventObject.usageMetadata) {
                             $ParseState.Usage = $eventObject.usageMetadata
                         }
