@@ -81,7 +81,7 @@ if (-not $API_KEY -and $MIRA_DEFAULT_PROVIDER -eq 'antigravity' -and
 }
 
 #$MODEL   = "gemini-flash-lite-latest"
-$MODEL   = $MIRA_DEFAULT_MODEL
+$MODEL   = if ($MIRA_DEFAULT_PROVIDER -eq 'gpt') { 'auto' } else { $MIRA_DEFAULT_MODEL }
 #$MODEL   = "gemini-3.6-flash"
 #$MODEL   = "gemini-2.5-computer-use-preview-10-2025"
 #$MODEL   = "gemini-3-flash-preview"
@@ -518,9 +518,19 @@ function Get-GptBrowserModels {
     return Invoke-GptJsonRequest -Uri 'https://chatgpt.com/backend-api/models' -Method 'GET' -Session $Session
 }
 
+function Resolve-GptModel {
+    param([string]$Model)
+
+    # Use ChatGPT's automatic model routing; do not pin a specific model slug.
+    if ([string]::IsNullOrWhiteSpace($Model) -or $Model -ine 'auto') {
+        throw "The experimental GPT provider supports only the 'auto' model selection; received '$Model'."
+    }
+    return 'auto'
+}
+
 function Get-GptModels {
-    if ($null -eq $script:GptSession) { throw 'ChatGPT browser session is not loaded. Run .auth gpt and select the local HAR file.' }
-    return @([pscustomobject]@{ name = 'gpt-6-luna'; displayName = 'GPT-6 Luna (ChatGPT browser session)' })
+    if ($null -eq $script:GptSession) { throw 'ChatGPT browser session is not loaded. Run .auth gpt and select a local HAR file.' }
+    return @([pscustomobject]@{ name = 'auto'; displayName = 'Auto (ChatGPT chooses the model)' })
 }
 
 function ConvertTo-GptPromptText {
@@ -553,7 +563,7 @@ function Invoke-GptWebConversation {
     param([object]$Session, [string]$Prompt, [string]$Model)
 
     if ($null -eq $Session) { throw 'ChatGPT browser session is not loaded. Run .auth gpt and select the local HAR file.' }
-    if ($Model -ine 'gpt-6-luna') { throw "The experimental GPT provider is pinned to gpt-6-luna; refusing model '$Model'." }
+    $Model = Resolve-GptModel -Model $Model
     if ($Session.SentinelExpiresUtc -le [DateTime]::UtcNow) {
         $expiredLocal = $Session.SentinelExpiresUtc.ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss')
         throw "The captured ChatGPT Sentinel/Turnstile challenge expired at $expiredLocal local time. Import a fresh HAR after the browser prepares the next turn."
@@ -735,8 +745,8 @@ function Invoke-GeminiModelSwitcher {
     # fetch or print the catalogue for an explicit choice.
     if (-not [string]::IsNullOrWhiteSpace($RequestedModel)) {
         $selectedModel = $RequestedModel.Trim() -replace '^models/', ''
-        if ($script:Provider -eq 'gpt' -and $selectedModel -ine 'gpt-6-luna') {
-            Write-Host '[The experimental GPT provider is pinned to gpt-6-luna.]' -ForegroundColor Yellow
+        if ($script:Provider -eq 'gpt' -and $selectedModel -ine 'auto') {
+            Write-Host "[The experimental GPT provider supports only the 'auto' model selection.]" -ForegroundColor Yellow
             return
         }
         $script:MODEL = $selectedModel
@@ -1613,12 +1623,12 @@ function Invoke-GemmaProviderCommand {
     }
 
     $previousProvider = $script:Provider
-    if ($value -eq 'gpt') { $script:MODEL = 'gpt-6-luna' }
-    elseif ($previousProvider -eq 'gpt' -and $script:MODEL -eq 'gpt-6-luna') { $script:MODEL = $MIRA_DEFAULT_MODEL }
+    if ($value -eq 'gpt') { $script:MODEL = 'auto' }
+    elseif ($previousProvider -eq 'gpt' -and $script:MODEL -eq 'auto') { $script:MODEL = $MIRA_DEFAULT_MODEL }
     $script:Provider = $value
     Write-Host "[Provider switched to: $script:Provider]" -ForegroundColor Green
     if ($value -eq 'gpt') {
-        Write-Host '[Experimental ChatGPT browser-session transport. Requests append to the HAR conversation; text-only; local tools are unavailable; .effort is not applied.]' -ForegroundColor DarkGray
+        Write-Host '[Experimental ChatGPT browser-session transport using Auto model routing. Requests append to the HAR conversation; text-only; local tools are unavailable; .effort is not applied.]' -ForegroundColor DarkGray
     } else {
         Write-Host '[Model name retained; use .model to select from this provider catalogue.]' -ForegroundColor DarkGray
     }
