@@ -82,11 +82,13 @@ $API_KEY = if (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API)) {
     $env:GEMINI_API.Trim()
 } elseif (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)) {
     $env:GEMINI_API_KEY.Trim()
-} else {
+} elseif (-not [string]::IsNullOrWhiteSpace($env:GEMINI_APIJ)) {
     [string]$env:GEMINI_APIJ
-}
+} elseif (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEYS)) {
+    [string](($env:GEMINI_API_KEYS -split '[;,\r\n]+')[0]).Trim().Trim('"').Trim("'")
+} else { '' }
 
-if ([string]::IsNullOrWhiteSpace($API_KEY) -and
+if ([string]::IsNullOrWhiteSpace($API_KEY) -and [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEYS) -and
     -not (Test-Path -LiteralPath (Join-Path (Join-Path $HOME '.gemini\antigravity-cli') 'antigravity-oauth-token'))) {
     Write-Host "No Gemini API key or Antigravity OAuth token found. Run .auth login or set GEMINI_API." -ForegroundColor Yellow
 }
