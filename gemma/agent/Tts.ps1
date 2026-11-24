@@ -222,8 +222,8 @@ function Invoke-GemmaSpeakLatest {
         return
     }
 
-    if ([string]::IsNullOrWhiteSpace($API_KEY)) {
-        Write-Host '[TTS] Set GEMINI_API or GEMINI_API_KEY. Antigravity OAuth alone cannot authenticate Gemini API TTS.' -ForegroundColor Yellow
+    if (@(Get-GeminiApiKeys).Count -eq 0) {
+        Write-Host '[TTS] Set GEMINI_API or GEMINI_API_KEYS. Antigravity OAuth alone cannot authenticate Gemini API TTS.' -ForegroundColor Yellow
         return
     }
 
