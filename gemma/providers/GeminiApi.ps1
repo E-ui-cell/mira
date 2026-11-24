@@ -6,7 +6,7 @@ function Get-GeminiApiKeys {
 function Get-GeminiModels {
     if ($script:Provider -eq 'antigravity') { return Get-AntigravityModels }
     $keys = @(Get-GeminiApiKeys)
-    if ($keys.Count -eq 0) { throw 'No Gemini API key found. Set GEMINI_API or GEMINI_API_KEYS.' }
+    if ($keys.Count -eq 0) { throw 'No Gemini API keys are configured in the Gemini candidate list in Defaults.ps1.' }
     $keyIndex = 0
     $allModels = New-Object 'System.Collections.Generic.List[object]'
     $pageToken = $null
