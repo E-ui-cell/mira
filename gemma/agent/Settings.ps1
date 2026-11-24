@@ -137,7 +137,8 @@ function Add-GemmaUsageRecord {
         [int[]]$KeySlotsTried = @(),
         [hashtable]$RateLimitHeaders = $null,
         [string]$RequestId = '',
-        [int]$HttpStatus = 0
+        [int]$HttpStatus = 0,
+        [string]$ErrorMessage = ''
     )
 
     if ($null -eq $script:MiraUsageStats) {
@@ -205,6 +206,7 @@ function Add-GemmaUsageRecord {
         KeySlotsTried = @($KeySlotsTried)
         HttpStatus = $HttpStatus
         RequestId = $RequestId
+        ErrorMessage = $ErrorMessage
     }
 
     if ($providerName -eq 'openai' -and $null -ne $RateLimitHeaders -and $RateLimitHeaders.Count -gt 0) {
@@ -259,6 +261,12 @@ function Invoke-GemmaUsageCommand {
         if (-not [string]::IsNullOrWhiteSpace([string]$last.RequestId)) {
             Write-Host ("Request ID: {0}" -f $last.RequestId) -ForegroundColor DarkGray
         }
+        if ($last.Status -eq 'failed' -and -not [string]::IsNullOrWhiteSpace([string]$last.ErrorMessage)) {
+            $failureText = [string]$last.ErrorMessage
+            if ($failureText.Length -gt 240) { $failureText = $failureText.Substring(0,237) + '...' }
+            Write-Host ("Failure: {0}" -f $failureText) -ForegroundColor Yellow
+        }
+        Write-Host ("Last request tokens: {0:N0} input | {1:N0} output" -f $last.InputTokens,$last.OutputTokens) -ForegroundColor DarkGray
     } else {
         Write-Host 'No provider requests recorded in this session yet.' -ForegroundColor DarkGray
     }
