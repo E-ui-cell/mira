@@ -21,6 +21,7 @@ foreach ($functionName in @(
     'New-GptRandomToken',
     'Get-GptScopeList',
     'Test-GptPlanUsageEnabled',
+    'Test-GptIdToken',
     'Resolve-GptModel',
     'ConvertTo-GptResponsesInput'
 )) {
@@ -57,6 +58,52 @@ if (-not (Test-GptPlanUsageEnabled -Profile ([pscustomobject]@{ scopes = @('open
 }
 if (Test-GptPlanUsageEnabled -Profile ([pscustomobject]@{ scopes = @('openid','profile') })) {
     throw 'Identity-only OAuth must not be treated as ChatGPT plan-usage authorization.'
+}
+
+# Exercise the RS256/JWKS/issuer/audience/expiry/nonce validation path without
+# making a network request or using a real OpenAI token.
+$rsa = [System.Security.Cryptography.RSACryptoServiceProvider]::new(2048)
+try {
+    $publicKey = $rsa.ExportParameters($false)
+    $testJwks = [pscustomobject]@{
+        keys = @(
+            [pscustomobject]@{
+                kid = 'gemma-ci-key'
+                kty = 'RSA'
+                n = ConvertTo-GptBase64Url -Bytes $publicKey.Modulus
+                e = ConvertTo-GptBase64Url -Bytes $publicKey.Exponent
+            }
+        )
+    }
+    $epoch = [DateTime]::SpecifyKind([DateTime]'1970-01-01T00:00:00', [DateTimeKind]::Utc)
+    $nowSeconds = [long]([DateTime]::UtcNow - $epoch).TotalSeconds
+    $testHeader = ConvertTo-GptBase64Url -Bytes ([System.Text.Encoding]::UTF8.GetBytes('{"alg":"RS256","kid":"gemma-ci-key","typ":"JWT"}'))
+    $testClaims = @{
+        iss = 'https://auth.openai.com'
+        aud = 'gemma-ci-client'
+        sub = 'synthetic-subject'
+        email = 'gemma-ci@example.invalid'
+        nonce = 'synthetic-nonce'
+        iat = $nowSeconds
+        nbf = ($nowSeconds - 5)
+        exp = ($nowSeconds + 3600)
+    } | ConvertTo-Json -Compress
+    $testPayload = ConvertTo-GptBase64Url -Bytes ([System.Text.Encoding]::UTF8.GetBytes($testClaims))
+    $signingInput = $testHeader + '.' + $testPayload
+    $signature = $rsa.SignData([System.Text.Encoding]::UTF8.GetBytes($signingInput), 'SHA256')
+    $testJwt = $signingInput + '.' + (ConvertTo-GptBase64Url -Bytes $signature)
+    $verifiedClaims = Test-GptIdToken -IdToken $testJwt -ClientId 'gemma-ci-client' -Nonce 'synthetic-nonce' -Jwks $testJwks
+    if ($verifiedClaims.sub -ne 'synthetic-subject') { throw 'Synthetic ID-token validation returned the wrong subject.' }
+
+    $badNonceRejected = $false
+    try { [void](Test-GptIdToken -IdToken $testJwt -ClientId 'gemma-ci-client' -Nonce 'wrong-nonce' -Jwks $testJwks) } catch { $badNonceRejected = $true }
+    if (-not $badNonceRejected) { throw 'ID-token validator accepted an incorrect nonce.' }
+
+    $badAudienceRejected = $false
+    try { [void](Test-GptIdToken -IdToken $testJwt -ClientId 'another-client' -Nonce 'synthetic-nonce' -Jwks $testJwks) } catch { $badAudienceRejected = $true }
+    if (-not $badAudienceRejected) { throw 'ID-token validator accepted an incorrect audience.' }
+} finally {
+    $rsa.Dispose()
 }
 
 if ((Resolve-GptModel -Model 'gpt-model-from-catalog') -ne 'gpt-model-from-catalog') {
