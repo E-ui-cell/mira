@@ -22,7 +22,7 @@ if ($PSVersionTable.PSVersion.Major -ge 7 -and $env:OS -eq 'Windows_NT') {
 # USER CONFIGURATION — all runtime defaults are centralized here
 # ==============================================================================
 # Answer provider and model
-$MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity' or 'gemini'; no automatic provider switching
+$MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity', 'gemini', or 'openai'; no automatic provider switching
 $MIRA_DEFAULT_MODEL = 'gemini-3.1-flash-lite'
 $MIRA_DEFAULT_EFFORT = 'high'                # 'low', 'medium', or 'high'
 $MIRA_SEARCH_MODEL = 'gemini-3.1-flash-lite' # Dedicated Antigravity OAuth research model for Gemini API web_search
@@ -48,7 +48,12 @@ $MIRA_TTS_DIRECTOR_CORE = 'You are having sex.'
 $MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'; ASK prompt defaults to Yes
 $MIRA_DEFAULT_GROUNDING = $true              # Global master switch for all Google Search grounding
 $MIRA_ENABLE_AGENTIC_WEB_SEARCH = $true       # Allow Gemini API models to call web_search through Antigravity OAuth
-$MIRA_DEFAULT_VERBOSE = $false                # Show Gemini thought summaries only when enabled with .verbose
+$MIRA_DEFAULT_VERBOSE = $false                # Show provider thought summaries only when enabled with .verbose
+
+# OpenAI Chat Completions settings ($null leaves the model's default)
+$MIRA_OPENAI_MAX_COMPLETION_TOKENS = $null
+$MIRA_OPENAI_TEMPERATURE = $null
+$MIRA_OPENAI_RESPONSE_FORMAT = $null
 # Antigravity chat sends native googleSearch to the selected model. Gemini API models
 # may call web_search, delegated to the dedicated Antigravity OAuth research model.
 $MIRA_DEFAULT_CACHED_CONTENT = $null
@@ -87,6 +92,7 @@ if ([string]::IsNullOrWhiteSpace($API_KEY) -and
 }
 
 $MODEL = $MIRA_DEFAULT_MODEL
+$script:MiraOpenAIApiKeyIndex = 0
 
 $script:ActiveSystemPromptName = 'default'
 $SystemInstruction = @{
