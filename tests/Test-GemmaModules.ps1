@@ -217,6 +217,9 @@ try {
     if ($lunaPayload.tool_choice -ne 'auto') {
         throw 'Luna native web_search must use automatic tool selection.'
     }
+    if ($lunaPayload.instructions -notmatch '(?i)native web_search tool') {
+        throw 'Luna system instructions must direct current-information requests to native web_search.'
+    }
     $localToolNames = @($lunaPayload.tools | Where-Object { $_.type -eq 'function' } | ForEach-Object { $_.name })
     foreach ($localTool in @('get_current_datetime','run_powershell','quick_web','get_skill')) {
         if ($localToolNames -notcontains $localTool) {
