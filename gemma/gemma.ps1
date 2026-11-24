@@ -1685,7 +1685,18 @@ function Read-GemLineFallback {
                 else { [Console]::Beep(700,60) }
                 continue
             }
-            if ($b -match '^\.(?:websearch|auth|effort)\s+(\S*)
+            if ($b -match '^\.(?:websearch|auth|effort)\s+(\S*)$') {
+                $options = if ($b.StartsWith('.websearch')) { @('on','off','status') } elseif ($b.StartsWith('.effort')) { @('low','medium','high') } else { @('status','logout','gpt') }
+                $m = @($options | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })
+                if ($m.Count -eq 1) {
+                    $head = if ($b.StartsWith('.websearch')) { '.websearch ' } elseif ($b.StartsWith('.effort')) { '.effort ' } else { '.auth ' }
+                    $old=$b; $b=$head+$m[0]; $c=$b.Length; Redraw $old $b $c
+                } elseif ($m.Count -gt 1) {
+                    [Console]::Write([Environment]::NewLine + ($m -join '  ') + [Environment]::NewLine + 'You: ')
+                    $row=[Console]::CursorTop; Redraw '' $b $c
+                } else { [Console]::Beep(700,60) }
+                continue
+            }
 
             # .file <TAB> / .text <TAB> / session filename <TAB>
             if ($b -match '^(\.(?:file|text|exportsession|loadsession))(\s+)(.*)$') {
