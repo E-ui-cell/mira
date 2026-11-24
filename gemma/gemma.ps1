@@ -356,11 +356,26 @@ function New-GptWebRequest {
     if (-not [string]::IsNullOrWhiteSpace([string]$Session.Referer)) { $request.Referer = [string]$Session.Referer }
 
     $request.CookieContainer = New-Object System.Net.CookieContainer
-    try {
-        $request.CookieContainer.SetCookies([uri]'https://chatgpt.com/', [string]$Session.Cookie)
-    } catch {
-        throw 'The cookies in the HAR could not be loaded into the HTTP cookie container.'
+    $cookieMap = @{}
+    foreach ($cookiePair in ([string]$Session.Cookie -split ';')) {
+        $cookiePair = $cookiePair.Trim()
+        $separator = $cookiePair.IndexOf('=')
+        if ($separator -le 0) { continue }
+        $cookieName = $cookiePair.Substring(0, $separator).Trim()
+        $cookieValue = $cookiePair.Substring($separator + 1).Trim()
+        if ([string]::IsNullOrWhiteSpace($cookieName)) { continue }
+        $cookieMap[$cookieName] = $cookieValue
     }
+    foreach ($cookieName in $cookieMap.Keys) {
+        try {
+            $cookie = New-Object System.Net.Cookie([string]$cookieName, [string]$cookieMap[$cookieName], '/', 'chatgpt.com')
+            $cookie.Secure = $true
+            $request.CookieContainer.Add([uri]'https://chatgpt.com/', $cookie)
+        } catch {
+            throw "A ChatGPT browser cookie from the HAR could not be loaded: $cookieName"
+        }
+    }
+    if ($cookieMap.Count -eq 0) { throw 'The HAR Cookie header did not contain any parseable cookies.' }
 
     $request.Headers['Authorization'] = [string]$Session.Authorization
     foreach ($name in $Session.Headers.Keys) {
