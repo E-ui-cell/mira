@@ -270,6 +270,14 @@ function Build-GemmaOpenAIResponsesPayload {
         store = $false
         input = (ConvertTo-GemmaOpenAIResponsesInput -SystemInstruction $SystemInstruction -Contents $Contents)
     }
+    if (-not $script:CommandMode) {
+        $searchGuidance = 'For current or time-sensitive information, recent events, changing facts, prices or versions, and explicit requests to search online, use the native web_search tool. Cite the sources it returns. Do not claim that a web lookup occurred unless the tool was used. quick_web is only for its narrow utility actions, not general web search.'
+        if ([string]::IsNullOrWhiteSpace($instructions)) {
+            $instructions = $searchGuidance
+        } else {
+            $instructions = $instructions.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $searchGuidance
+        }
+    }
     if (-not [string]::IsNullOrWhiteSpace($instructions)) { $payload.instructions = $instructions }
 
     $tools = @(ConvertTo-GemmaOpenAITools -GeminiTools $GeminiTools)
