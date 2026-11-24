@@ -117,7 +117,7 @@
         payload.model_slug = TARGET_MODEL_SLUG;
         payload.thinking_effort = TARGET_THINKING_EFFORT;
 
-        console.groupCollapsed(`[ModelPin] Outgoing payload (        if (
+        if (
             previousModel === TARGET_MODEL &&
             previousModelSlug === TARGET_MODEL_SLUG &&
             previousEffort === TARGET_THINKING_EFFORT
