@@ -872,7 +872,14 @@ function Read-GemLineConsole {
                     $candidateLabels += $(if ($item.PSIsContainer) { $item.Name + '\' } else { $item.Name })
                 }
             }
-            elseif ($b -match '^\.model\s+(\S*)            elseif ($b -match '^\.oneshot\s+(\S*)$') {
+            elseif ($b -match '^\.model\s+(\S*)$') {
+                $modelPrefix = $matches[1]
+                $modelOptions = @('openai:gpt-6-luna','gpt-6-luna','antigravity:','google-ai-studio:')
+                foreach ($item in @($modelOptions | Where-Object { $_.StartsWith($modelPrefix,[StringComparison]::OrdinalIgnoreCase) -and ('.model ' + $_) -ne $b })) {
+                    $candidateBuffers += ('.model ' + $item); $candidateLabels += $item
+                }
+            }
+            elseif ($b -match '^\.oneshot\s+(\S*)$') {
                 $oneshotOptions = @('on','off')
                 foreach ($item in @($oneshotOptions | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })) {
                     $candidateBuffers += ('.oneshot ' + $item); $candidateLabels += $item
