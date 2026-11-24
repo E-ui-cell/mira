@@ -640,7 +640,7 @@
             } else {
                 $reply = Normalize-MiraReply ($replyTextParts -join "`n")
             }
-            if ($script:CommandMode) { $reply = [regex]::Replace($reply.Trim(),'(?s)^```[a-zA-Z0-9_-]*\s*|\s*```$','').Trim() }
+            if ($script:CommandMode -and -not ($usingOpenAIResponses -and $turnStreamedText)) { $reply = [regex]::Replace($reply.Trim(),'(?s)^```[a-zA-Z0-9_-]*\s*|\s*```$','').Trim() }
             $script:LastAssistantReply = $reply
 
             try {
