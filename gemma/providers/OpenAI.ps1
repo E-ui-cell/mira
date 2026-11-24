@@ -169,7 +169,7 @@ function Get-GemmaOpenAIModels {
         $index = ($start + $offset) % $keys.Count
         try {
             $response = Invoke-RestMethod -Uri 'https://api.openai.com/v1/models' -Method Get -Headers @{ Authorization=('Bearer ' + $keys[$index]) } -TimeoutSec 30 -ErrorAction Stop
-            $script:MiraOpenAIApiKeyIndex = $index
+            $script:MiraOpenAIApiKeyIndex = ($index + 1) % $keys.Count
             $models = @($response.data | Where-Object { $_.id } | ForEach-Object { [pscustomobject]@{ name=[string]$_.id; displayName=[string]$_.id } } | Sort-Object name)
             if ($models.Count -eq 0) { throw 'OpenAI returned an empty model catalogue.' }
             return $models
