@@ -98,6 +98,7 @@
             RateLimitHeaders = @{}
             RequestId = ''
             HttpStatus = 0
+            ErrorMessage = ''
         })
 
         $oldTreatControlCAsInput = $null
@@ -695,6 +696,7 @@
                                                 $streamError = [string]$sseEvent.response.incomplete_details.reason
                                             }
                                             if ([string]::IsNullOrWhiteSpace($streamError)) { $streamError = $eventJson }
+                                            $requestStats.ErrorMessage = $streamError
                                             throw "OpenAI Responses stream failed: $streamError"
                                         }
                                     } elseif ($sseLine.StartsWith('data:')) {
@@ -743,6 +745,7 @@
                                 }
                                 try { $errorCode = [string](($errorBody | ConvertFrom-Json -ErrorAction Stop).error.code) } catch {}
                                 $lastFailure = "HTTP $status $errorCode $($failure.Exception.Message) $errorBody"
+                                if ([string]::IsNullOrWhiteSpace([string]$requestStats.ErrorMessage)) { $requestStats.ErrorMessage = $lastFailure }
                                 if ($streamResponses -and $streamState.TextStarted) { throw $lastFailure }
                                 if ($status -eq 429 -and $errorCode -match '(?i)insufficient_quota|credit_balance_exhausted|organization_usage_limit_exceeded') { throw $lastFailure }
                                 if ($status -eq 401 -or ($status -eq 403 -and ($errorCode -match '(?i)permission|access|api_key' -or $errorBody -match '(?i)api.?key|permission denied'))) {
@@ -772,6 +775,7 @@
                     throw "OpenAI request failed with all configured API keys. $lastFailure"
                 }
                 for ($attempt = 0; $attempt -lt 4; $attempt++) {
+                    $requestStats.HttpAttempts = [int]$requestStats.HttpAttempts + 1
                     try { return Invoke-RestMethod -Uri $u -Method Post -Headers $h -ContentType 'application/json; charset=utf-8' -Body $b -TimeoutSec 180 -ErrorAction Stop }
                     catch {
                         $failure = $_; $response = $failure.Exception.Response; $status = 0; $retryAfter = 0
@@ -976,7 +980,7 @@
             $runspaceErrors = @($powershell.Streams.Error)
 
             if ($hasRunspaceError) {
-                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus)
+                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorMessage ([string]$requestStats.ErrorMessage)
                 if ($null -ne $endInvokeFailure) {
                     # EndInvoke may wrap the WebException in one or more
                     # MethodInvocationException/RuntimeException layers.
@@ -1098,7 +1102,7 @@
             }
 
             if ($null -eq $response) {
-                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus)
+                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorMessage ([string]$requestStats.ErrorMessage)
                 throw "The API returned a null or empty response object."
             }
 
@@ -1115,7 +1119,7 @@
                     $turnCompletionTokens += $roundCompletionTokens
                 }
             }
-            Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $true -InputTokens $roundPromptTokens -OutputTokens $roundCompletionTokens -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus)
+            Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $true -InputTokens $roundPromptTokens -OutputTokens $roundCompletionTokens -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorMessage ([string]$requestStats.ErrorMessage)
 
             if ($null -eq $response.candidates -or $response.candidates.Count -eq 0) {
                 if ($null -ne $response.error) {
