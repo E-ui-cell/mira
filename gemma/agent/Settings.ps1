@@ -11,7 +11,8 @@ function Invoke-GemmaEffortCommand {
         return
     }
     $script:Effort = $value
-    Write-Host "[Reasoning effort set to: $script:Effort]" -ForegroundColor Green
+    $effectiveEffort = Get-GemmaRequestEffort -Provider $script:Provider
+    Write-Host "[Shared effort set to: $script:Effort | active request effort: $effectiveEffort]" -ForegroundColor Green
 }
 
 function Invoke-GemmaProviderCommand {
@@ -27,7 +28,7 @@ function Invoke-GemmaProviderCommand {
     $script:Provider = $value
     Write-Host "[Provider switched to: $script:Provider]" -ForegroundColor Green
     Write-Host '[Model name retained; use .model to select from this provider catalogue.]' -ForegroundColor DarkGray
-    $effectiveEffort = Get-GemmaEffectiveEffort -Provider $value
+    $effectiveEffort = Get-GemmaRequestEffort -Provider $value
     Write-Host "[Reasoning effort: $effectiveEffort (provider override or shared .effort setting).]" -ForegroundColor DarkGray
 }
 
