@@ -14,6 +14,7 @@ $Prompt = Initialize-GemmaCliMode -Prompt $Prompt -ExplainCommand $ExplainComman
 $script:GemmaPromptDirectory = Join-Path $PSScriptRoot 'prompts'
 
 . (Join-Path $PSScriptRoot 'providers\GeminiApi.ps1')
+. (Join-Path $PSScriptRoot 'providers\OpenAI.ps1')
 . (Join-Path $PSScriptRoot 'providers\Antigravity.ps1')
 . (Join-Path $PSScriptRoot 'ui\ModelPicker.ps1')
 . (Join-Path $PSScriptRoot 'agent\Execution.ps1')
