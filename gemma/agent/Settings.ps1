@@ -138,6 +138,7 @@ function Add-GemmaUsageRecord {
         [hashtable]$RateLimitHeaders = $null,
         [string]$RequestId = '',
         [int]$HttpStatus = 0,
+        [string]$ErrorCode = '',
         [string]$ErrorMessage = ''
     )
 
@@ -206,6 +207,7 @@ function Add-GemmaUsageRecord {
         KeySlotsTried = @($KeySlotsTried)
         HttpStatus = $HttpStatus
         RequestId = $RequestId
+        ErrorCode = $ErrorCode
         ErrorMessage = $ErrorMessage
     }
 
@@ -261,10 +263,14 @@ function Invoke-GemmaUsageCommand {
         if (-not [string]::IsNullOrWhiteSpace([string]$last.RequestId)) {
             Write-Host ("Request ID: {0}" -f $last.RequestId) -ForegroundColor DarkGray
         }
-        if ($last.Status -eq 'failed' -and -not [string]::IsNullOrWhiteSpace([string]$last.ErrorMessage)) {
+        if ($last.Status -eq 'failed' -and (-not [string]::IsNullOrWhiteSpace([string]$last.ErrorCode) -or -not [string]::IsNullOrWhiteSpace([string]$last.ErrorMessage))) {
             $failureText = [string]$last.ErrorMessage
             if ($failureText.Length -gt 240) { $failureText = $failureText.Substring(0,237) + '...' }
-            Write-Host ("Failure: {0}" -f $failureText) -ForegroundColor Yellow
+            if (-not [string]::IsNullOrWhiteSpace([string]$last.ErrorCode)) {
+                Write-Host ("Failure [{0}]: {1}" -f $last.ErrorCode,$failureText) -ForegroundColor Yellow
+            } else {
+                Write-Host ("Failure: {0}" -f $failureText) -ForegroundColor Yellow
+            }
         }
         Write-Host ("Last request tokens: {0:N0} input | {1:N0} output" -f $last.InputTokens,$last.OutputTokens) -ForegroundColor DarkGray
     } else {
