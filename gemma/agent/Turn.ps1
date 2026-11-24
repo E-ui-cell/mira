@@ -256,50 +256,72 @@
                             $incomingPart = $incomingParts[$partIndex]
                             if ($null -eq $incomingPart) { continue }
 
-                            if (-not $ParseState.PartMap.ContainsKey($partIndex)) {
+                            $incomingCallMap = $null
+                            if ($null -ne $incomingPart.functionCall) {
+                                $incomingCallMap = & $ConvertCall $incomingPart.functionCall
+                            }
+
+                            if ($null -ne $incomingCallMap) {
+                                $existingPartIndex = -1
+                                $incomingCallId = [string]$incomingCallMap.id
+                                if (-not [string]::IsNullOrWhiteSpace($incomingCallId)) {
+                                    for ($existingIndex = 0; $existingIndex -lt $ParseState.Candidate.content.parts.Count; $existingIndex++) {
+                                        $existingPart = $ParseState.Candidate.content.parts[$existingIndex]
+                                        if ($null -ne $existingPart.functionCall -and [string]$existingPart.functionCall.id -eq $incomingCallId) {
+                                            $existingPartIndex = $existingIndex
+                                            break
+                                        }
+                                    }
+                                } elseif ($ParseState.AnonymousCalls.ContainsKey($partIndex)) {
+                                    $existingPartIndex = [int]$ParseState.AnonymousCalls[$partIndex]
+                                }
+
+                                if ($existingPartIndex -ge 0) {
+                                    $existingPart = $ParseState.Candidate.content.parts[$existingPartIndex]
+                                    $existingCall = $existingPart.functionCall
+                                    if ($existingCall -isnot [System.Collections.IDictionary]) {
+                                        $existingCall = & $ConvertCall $existingCall
+                                    }
+                                    foreach ($callField in @('id','name')) {
+                                        if (-not [string]::IsNullOrWhiteSpace([string]$incomingCallMap[$callField])) {
+                                            $existingCall[$callField] = $incomingCallMap[$callField]
+                                        }
+                                    }
+                                    if ($existingCall.args -isnot [System.Collections.IDictionary]) {
+                                        $existingCall.args = @{}
+                                    }
+                                    foreach ($argKey in $incomingCallMap.args.Keys) {
+                                        $existingCall.args[[string]$argKey] = $incomingCallMap.args[$argKey]
+                                    }
+                                    $existingPart.functionCall = $existingCall
+                                    if (-not [string]::IsNullOrWhiteSpace([string]$incomingPart.thoughtSignature)) {
+                                        $existingPart.thoughtSignature = [string]$incomingPart.thoughtSignature
+                                    }
+                                } else {
+                                    $partCopy = @{}
+                                    if ($incomingPart -is [System.Collections.IDictionary]) {
+                                        foreach ($partKey in $incomingPart.Keys) { $partCopy[[string]$partKey] = $incomingPart[$partKey] }
+                                    } else {
+                                        foreach ($partProperty in $incomingPart.PSObject.Properties) { $partCopy[$partProperty.Name] = $partProperty.Value }
+                                    }
+                                    $partCopy.functionCall = $incomingCallMap
+                                    if ([string]::IsNullOrWhiteSpace($incomingCallId)) {
+                                        $ParseState.AnonymousCalls[$partIndex] = $ParseState.Candidate.content.parts.Count
+                                    }
+                                    [void]$ParseState.Candidate.content.parts.Add($partCopy)
+                                }
+                                $ParseState.HasToolCall = $true
+                            } else {
+                                # Text fragments remain separate response parts, as
+                                # Gemini streams them. Only function-call fragments
+                                # are coalesced for tool execution/history.
                                 $partCopy = @{}
                                 if ($incomingPart -is [System.Collections.IDictionary]) {
                                     foreach ($partKey in $incomingPart.Keys) { $partCopy[[string]$partKey] = $incomingPart[$partKey] }
                                 } else {
                                     foreach ($partProperty in $incomingPart.PSObject.Properties) { $partCopy[$partProperty.Name] = $partProperty.Value }
                                 }
-                                if ($null -ne $incomingPart.functionCall) {
-                                    $partCopy.functionCall = & $ConvertCall $incomingPart.functionCall
-                                    $ParseState.HasToolCall = $true
-                                }
-                                $ParseState.PartMap[$partIndex] = $partCopy
                                 [void]$ParseState.Candidate.content.parts.Add($partCopy)
-                            } else {
-                                $partCopy = $ParseState.PartMap[$partIndex]
-                                if (-not [string]::IsNullOrEmpty([string]$incomingPart.text)) {
-                                    $partCopy.text = [string]$partCopy.text + [string]$incomingPart.text
-                                }
-                                if ([bool]$incomingPart.thought) { $partCopy.thought = $true }
-                                if (-not [string]::IsNullOrWhiteSpace([string]$incomingPart.thoughtSignature)) {
-                                    $partCopy.thoughtSignature = [string]$incomingPart.thoughtSignature
-                                }
-                                if ($null -ne $incomingPart.functionCall) {
-                                    $incomingCallMap = & $ConvertCall $incomingPart.functionCall
-                                    if ($null -eq $partCopy.functionCall) {
-                                        $partCopy.functionCall = $incomingCallMap
-                                    } else {
-                                        if ($partCopy.functionCall -isnot [System.Collections.IDictionary]) {
-                                            $partCopy.functionCall = & $ConvertCall $partCopy.functionCall
-                                        }
-                                        foreach ($callField in @('id','name')) {
-                                            if (-not [string]::IsNullOrWhiteSpace([string]$incomingCallMap[$callField])) {
-                                                $partCopy.functionCall[$callField] = $incomingCallMap[$callField]
-                                            }
-                                        }
-                                        if ($partCopy.functionCall.args -isnot [System.Collections.IDictionary]) {
-                                            $partCopy.functionCall.args = @{}
-                                        }
-                                        foreach ($argKey in $incomingCallMap.args.Keys) {
-                                            $partCopy.functionCall.args[[string]$argKey] = $incomingCallMap.args[$argKey]
-                                        }
-                                    }
-                                    $ParseState.HasToolCall = $true
-                                }
                             }
 
                             $isThought = [bool]$incomingPart.thought
@@ -309,18 +331,13 @@
                             }
 
                             if (-not [string]::IsNullOrEmpty([string]$incomingPart.text) -and (-not $isThought -or $IncludeThoughts)) {
-                                if ($ParseState.HasDisplayedPart -and [int]$ParseState.LastDisplayedPartIndex -ne $partIndex) {
-                                    & $EmitText ([string][char]10) $CurrentAttempt
-                                }
-                                if ($isThought -and -not $ParseState.ThoughtLabelSent) {
+                                if ($isThought -and -not $ParseState.LastPartWasThought) {
                                     & $EmitText '[Thought summary]' $CurrentAttempt
                                     & $EmitText ([string][char]10) $CurrentAttempt
-                                    $ParseState.ThoughtLabelSent = $true
                                 }
                                 & $EmitText ([string]$incomingPart.text) $CurrentAttempt
-                                $ParseState.LastDisplayedPartIndex = $partIndex
-                                $ParseState.HasDisplayedPart = $true
                             }
+                            $ParseState.LastPartWasThought = $isThought
                         }
                     }
 
@@ -343,14 +360,12 @@
                                         finishMessage = ''
                                         groundingMetadata = $null
                                     }
-                                    PartMap = @{}
+                                    AnonymousCalls = @{}
                                     Usage = $null
                                     HasToolCall = $false
                                     HasThoughts = $false
                                     HasResponseText = $false
-                                    HasDisplayedPart = $false
-                                    LastDisplayedPartIndex = -1
-                                    ThoughtLabelSent = $false
+                                    LastPartWasThought = $false
                                 }
 
                                 $httpRequest = [System.Net.HttpWebRequest]::Create($u)
