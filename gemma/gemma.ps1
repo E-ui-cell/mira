@@ -1,3 +1,4 @@
+﻿#requires -Version 5.1
 [CmdletBinding()]
 param(
     [Alias('p')][string]$Prompt,
@@ -68,13 +69,15 @@ try { $Host.UI.RawUI.WindowTitle = $MIRA_CONSOLE_TITLE } catch {}
 
 $API_KEY = $env:GEMINI_APIJ
 
-if (-not $API_KEY) {
-    Write-Error "GEMINI_API environment variable is not set!"
-    
+# Missing Gemini credentials must not abort startup: the user may authenticate
+# with Antigravity or the experimental ChatGPT browser-session provider instead.
+if (-not $API_KEY -and $MIRA_DEFAULT_PROVIDER -eq 'gemini') {
+    Write-Host "Gemini API key is not set. Set GEMINI_APIJ before using the Gemini provider." -ForegroundColor Yellow
 }
 
-if (-not $API_KEY -and -not (Test-Path -LiteralPath (Join-Path (Join-Path $HOME '.gemini\antigravity-cli') 'antigravity-oauth-token'))) {
-    Write-Host "No Gemini API key or Antigravity OAuth token found. Run .auth login or set GEMINI_API." -ForegroundColor Yellow
+if (-not $API_KEY -and $MIRA_DEFAULT_PROVIDER -eq 'antigravity' -and
+    -not (Test-Path -LiteralPath (Join-Path (Join-Path $HOME '.gemini\antigravity-cli') 'antigravity-oauth-token'))) {
+    Write-Host "No Gemini API key or Antigravity OAuth token found. Run .auth login, set GEMINI_APIJ, or use .auth gpt." -ForegroundColor Yellow
 }
 
 #$MODEL   = "gemini-flash-lite-latest"
@@ -202,6 +205,39 @@ function Get-GptHeaderValue {
     return ''
 }
 
+function Get-GptHarCookieHeader {
+    param([object[]]$Entries)
+
+    # Prefer the actual Cookie request header. Newer/alternate HAR exporters may
+    # store the same data only in request.cookies, so support that representation
+    # as a fallback.
+    foreach ($entry in $Entries) {
+        if ($null -eq $entry) { continue }
+        $headerMap = Get-GptHarHeaderMap -Entry $entry
+        $headerCookie = Get-GptHeaderValue -Maps @($headerMap) -Name 'cookie'
+        if (-not [string]::IsNullOrWhiteSpace($headerCookie)) { return $headerCookie }
+    }
+
+    $cookieMap = @{}
+    foreach ($entry in $Entries) {
+        if ($null -eq $entry) { continue }
+        foreach ($cookie in @($entry.request.cookies)) {
+            if ($null -eq $cookie) { continue }
+            $name = [string]$cookie.name
+            if ([string]::IsNullOrWhiteSpace($name) -or $null -eq $cookie.value) { continue }
+            if (-not $cookieMap.ContainsKey($name)) {
+                $cookieMap[$name] = [string]$cookie.value
+            }
+        }
+    }
+
+    $pairs = New-Object System.Collections.Generic.List[string]
+    foreach ($name in $cookieMap.Keys) {
+        [void]$pairs.Add($name + '=' + [string]$cookieMap[$name])
+    }
+    return [string]::Join('; ', $pairs.ToArray())
+}
+
 function ConvertFrom-GptHarRequestBody {
     param([object]$Entry, [string]$Description)
     $raw = [string]$Entry.request.postData.text
@@ -265,10 +301,12 @@ function Import-GptHarSession {
     $authHeaders = Get-GptHarHeaderMap -Entry $modelsEntry
     $conversationHeaders = Get-GptHarHeaderMap -Entry $conversationEntry
     $prepareHeaders = Get-GptHarHeaderMap -Entry $prepareEntry
-    $headerMaps = @($authHeaders, $prepareHeaders, $conversationHeaders)
+    # Prefer the latest conversation/prepare headers; the models request may
+    # have been captured earlier and can contain stale browser cookies.
+    $headerMaps = @($conversationHeaders, $prepareHeaders, $authHeaders)
 
     $authorization = Get-GptHeaderValue -Maps $headerMaps -Name 'authorization'
-    $cookie = Get-GptHeaderValue -Maps $headerMaps -Name 'cookie'
+    $cookie = Get-GptHarCookieHeader -Entries @($conversationEntry, $prepareEntry, $modelsEntry)
     if ([string]::IsNullOrWhiteSpace($authorization) -or -not $authorization.StartsWith('Bearer ', [StringComparison]::OrdinalIgnoreCase)) {
         throw 'The HAR does not contain a ChatGPT Bearer authorization header.'
     }
@@ -364,7 +402,9 @@ function New-GptWebRequest {
     if ($Session.UserAgent) { $request.UserAgent = [string]$Session.UserAgent } else { $request.UserAgent = 'Mozilla/5.0' }
     if (-not [string]::IsNullOrWhiteSpace([string]$Session.Referer)) { $request.Referer = [string]$Session.Referer }
 
-    $request.CookieContainer = New-Object System.Net.CookieContainer
+    # The HAR may contain more than CookieContainer's default 20 cookies per
+    # domain. Raise the limits so session-cookie retention is deterministic.
+    $request.CookieContainer = New-Object System.Net.CookieContainer -ArgumentList @(4096, 100, 4096)
     $cookieMap = @{}
     foreach ($cookiePair in ([string]$Session.Cookie -split ';')) {
         $cookiePair = $cookiePair.Trim()
@@ -375,16 +415,21 @@ function New-GptWebRequest {
         if ([string]::IsNullOrWhiteSpace($cookieName)) { continue }
         $cookieMap[$cookieName] = $cookieValue
     }
+    $loadedCookieCount = 0
     foreach ($cookieName in $cookieMap.Keys) {
+        # Google sign-in state is unrelated to the ChatGPT session and its JSON
+        # value is not a legal .NET Cookie value. Do not let it abort the import.
+        if ($cookieName -ieq 'g_state') { continue }
         try {
             $cookie = New-Object -TypeName System.Net.Cookie -ArgumentList @([string]$cookieName, [string]$cookieMap[$cookieName], '/', 'chatgpt.com')
             $cookie.Secure = $true
             $request.CookieContainer.Add([uri]'https://chatgpt.com/', $cookie)
+            $loadedCookieCount++
         } catch {
             throw "A ChatGPT browser cookie from the HAR could not be loaded: $cookieName"
         }
     }
-    if ($cookieMap.Count -eq 0) { throw 'The HAR Cookie header did not contain any parseable cookies.' }
+    if ($loadedCookieCount -eq 0) { throw 'The HAR did not contain any usable ChatGPT browser cookies.' }
 
     $request.Headers['Authorization'] = [string]$Session.Authorization
     foreach ($name in $Session.Headers.Keys) {
