@@ -17,11 +17,13 @@ function Invoke-GemmaEffortCommand {
 function Invoke-GemmaProviderCommand {
     param([string]$Argument = '')
     $value = $Argument.Trim().ToLowerInvariant()
-    if (-not $value) { Write-Host "[Provider: $script:Provider | Model: $script:MODEL]" -ForegroundColor Cyan; Write-Host 'Usage: .provider antigravity | .provider gemini' -ForegroundColor DarkGray; return }
+    if (-not $value) { Write-Host "[Provider: $script:Provider | Model: $script:MODEL]" -ForegroundColor Cyan; Write-Host 'Usage: .provider antigravity | .provider gemini | .provider openai' -ForegroundColor DarkGray; return }
     if ($value -notin @('antigravity','gemini','openai')) { Write-Host 'Usage: .provider antigravity | .provider gemini | .provider openai' -ForegroundColor Yellow; return }
     if ($value -eq 'antigravity' -and -not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) { Write-Host '[Antigravity is not authenticated. Run .auth login first.]' -ForegroundColor Yellow; return }
     if ($value -eq 'gemini' -and @(Get-GeminiApiKeys).Count -eq 0) { Write-Host '[Gemini API key is not set. Set GEMINI_API or GEMINI_API_KEYS before switching.]' -ForegroundColor Yellow; return }
     if ($value -eq 'openai' -and @(Get-GemmaOpenAIApiKeys).Count -eq 0) { Write-Host '[OpenAI API key is not set. Set OPENAI_API_KEY or OPENAI_API_KEYS before switching.]' -ForegroundColor Yellow; return }
+    if ($value -eq 'openai' -and $script:MODEL -match '(?i)^gemini[-.]') { $script:MODEL = $MIRA_OPENAI_DEFAULT_MODEL }
+    if ($value -ne 'openai' -and $script:MODEL -match '(?i)^gpt[-.]') { $script:MODEL = $MIRA_DEFAULT_MODEL }
     $script:Provider = $value
     Write-Host "[Provider switched to: $script:Provider]" -ForegroundColor Green
     Write-Host '[Model name retained; use .model to select from this provider catalogue.]' -ForegroundColor DarkGray
