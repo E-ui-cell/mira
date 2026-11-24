@@ -145,9 +145,13 @@ if ($maxTokensCheck -lt 0 -or $thoughtOnlyCheck -lt 0 -or $maxTokensCheck -gt $t
     throw 'Google streaming parser must report MAX_TOKENS before classifying thought-only output.'
 }
 if (($turnSource -notmatch '\$thoughtOnlyResponse -and \$attempt -eq 0') -or
-    ($turnSource -notmatch 'GetBaseException\(\)\.Message') -or
+    ($turnSource -notmatch 'GetBaseException\(\)') -or
+    ($turnSource -notmatch '\$exceptionCursor\.InnerException') -or
+    ($turnSource -notmatch 'google\\\.rpc\\\.RetryInfo') -or
+    ($turnSource -notmatch 'MODEL_CAPACITY_EXHAUSTED') -or
+    ($turnSource -notmatch '\$capacityExhausted -and \$attempt -gt 0') -or
     ($turnSource -notmatch '\$requestStats\.HttpStatus')) {
-    throw 'Google streaming thought-only retry or provider-aware error diagnostics are missing.'
+    throw 'Google streaming thought-only retry, nested HTTP response extraction, or capacity RetryInfo handling is missing.'
 }
 
 # Verify the line/delta/off streaming mode command changes runtime state.
