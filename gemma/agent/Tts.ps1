@@ -127,29 +127,7 @@ function Invoke-GemmaReplayLatest {
     Invoke-GemmaPlayTtsWave -Path $audioPath
 }
 
-function Get-GemmaTtsApiKeys {
-    # GEMINI_API_KEYS accepts a semicolon-, comma-, or newline-separated pool.
-    # The legacy single-key variables remain supported as fallback/primary.
-    $raw = @()
-    if (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEYS)) {
-        $raw += ($env:GEMINI_API_KEYS -split '[;,\r\n]+')
-    }
-    foreach ($name in @('GEMINI_API','GEMINI_API_KEY','GEMINI_APIJ')) {
-        $value = [Environment]::GetEnvironmentVariable($name)
-        if (-not [string]::IsNullOrWhiteSpace($value)) { $raw += $value }
-    }
-    $seen = @{}
-    $keys = @(
-        foreach ($item in $raw) {
-            $key = ([string]$item).Trim().Trim('"').Trim("'")
-            if ($key -and -not $seen.ContainsKey($key)) {
-                $seen[$key] = $true
-                $key
-            }
-        }
-    )
-    return ,$keys
-}
+function Get-GemmaTtsApiKeys { return Get-GeminiApiKeys }
 
 function Get-GemmaTtsHttpError {
     param([Parameter(Mandatory = $true)]$ErrorRecord)
