@@ -179,6 +179,462 @@ $script:AntigravityCapabilityProbeAttempted = $false
 $script:GptSession = $null
 $script:GptHarPath = $null
 
+
+function Get-GptHarHeaderMap {
+    param([object]$Entry)
+    $map = @{}
+    foreach ($header in @($Entry.request.headers)) {
+        if ($null -ne $header.name) {
+            $map[[string]$header.name.ToLowerInvariant()] = [string]$header.value
+        }
+    }
+    return $map
+}
+
+function Get-GptHeaderValue {
+    param([object[]]$Maps, [string]$Name)
+    $key = $Name.ToLowerInvariant()
+    foreach ($map in $Maps) {
+        if ($null -ne $map -and $map.ContainsKey($key) -and -not [string]::IsNullOrWhiteSpace([string]$map[$key])) {
+            return [string]$map[$key]
+        }
+    }
+    return ''
+}
+
+function ConvertFrom-GptHarRequestBody {
+    param([object]$Entry, [string]$Description)
+    $raw = [string]$Entry.request.postData.text
+    if ([string]::IsNullOrWhiteSpace($raw)) { throw "The HAR is missing the $Description request body." }
+    try {
+        return ($raw | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        throw "The HAR contains an unreadable $Description request body."
+    }
+}
+
+function Import-GptHarSession {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { throw 'A local chatgpt.com.har path is required.' }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "HAR file not found: $Path" }
+
+    try {
+        $har = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw 'Could not parse the HAR file as JSON.'
+    }
+    $entries = @($har.log.entries)
+    if ($entries.Count -eq 0) { throw 'The HAR file contains no network entries.' }
+
+    $modelsEntry = $entries |
+        Where-Object { $_.request.method -eq 'GET' -and ([uri]$_.request.url).AbsolutePath -eq '/backend-api/models' } |
+        Sort-Object { [DateTime]::Parse([string]$_.startedDateTime).ToUniversalTime() } -Descending |
+        Select-Object -First 1
+
+    $conversationEntry = $entries |
+        Where-Object { $_.request.method -eq 'POST' -and ([uri]$_.request.url).AbsolutePath -eq '/backend-api/f/conversation' } |
+        Sort-Object { [DateTime]::Parse([string]$_.startedDateTime).ToUniversalTime() } -Descending |
+        Select-Object -First 1
+
+    $prepareEntry = $entries |
+        Where-Object { $_.request.method -eq 'POST' -and ([uri]$_.request.url).AbsolutePath -eq '/backend-api/f/conversation/prepare' } |
+        Sort-Object { [DateTime]::Parse([string]$_.startedDateTime).ToUniversalTime() } -Descending |
+        Select-Object -First 1
+
+    $finalizeEntry = $entries |
+        Where-Object { $_.request.method -eq 'POST' -and ([uri]$_.request.url).AbsolutePath -eq '/backend-api/sentinel/chat-requirements/finalize' } |
+        Sort-Object { [DateTime]::Parse([string]$_.startedDateTime).ToUniversalTime() } -Descending |
+        Select-Object -First 1
+
+    if ($null -eq $conversationEntry) { throw 'The HAR has no POST /backend-api/f/conversation request.' }
+    if ($null -eq $prepareEntry) { throw 'The HAR has no POST /backend-api/f/conversation/prepare request.' }
+    if ($null -eq $finalizeEntry) { throw 'The HAR has no Sentinel finalize exchange. Capture a fresh HAR from the logged-in ChatGPT tab.' }
+    if ($null -eq $modelsEntry) { $modelsEntry = $conversationEntry }
+
+    $conversationTime = [DateTime]::Parse([string]$conversationEntry.startedDateTime).ToUniversalTime()
+    $finalizeTime = [DateTime]::Parse([string]$finalizeEntry.startedDateTime).ToUniversalTime()
+    if ($finalizeTime -le $conversationTime) {
+        throw 'The latest Sentinel challenge was already used by the latest conversation request. Capture a fresh HAR after ChatGPT prepares the next turn.'
+    }
+
+    $authHeaders = Get-GptHarHeaderMap -Entry $modelsEntry
+    $conversationHeaders = Get-GptHarHeaderMap -Entry $conversationEntry
+    $prepareHeaders = Get-GptHarHeaderMap -Entry $prepareEntry
+    $headerMaps = @($authHeaders, $prepareHeaders, $conversationHeaders)
+
+    $authorization = Get-GptHeaderValue -Maps $headerMaps -Name 'authorization'
+    $cookie = Get-GptHeaderValue -Maps $headerMaps -Name 'cookie'
+    if ([string]::IsNullOrWhiteSpace($authorization) -or -not $authorization.StartsWith('Bearer ', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The HAR does not contain a ChatGPT Bearer authorization header.'
+    }
+    if ([string]::IsNullOrWhiteSpace($cookie)) {
+        throw 'The HAR does not contain the ChatGPT browser cookies.'
+    }
+
+    $conversationBody = ConvertFrom-GptHarRequestBody -Entry $conversationEntry -Description 'conversation'
+    $prepareBody = ConvertFrom-GptHarRequestBody -Entry $prepareEntry -Description 'conversation prepare'
+    $finalizeBody = ConvertFrom-GptHarRequestBody -Entry $finalizeEntry -Description 'Sentinel finalize'
+
+    $finalizeResponseText = [string]$finalizeEntry.response.content.text
+    if ([string]::IsNullOrWhiteSpace($finalizeResponseText)) { throw 'The HAR Sentinel finalize response body is missing.' }
+    try {
+        $finalizeResponse = $finalizeResponseText | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw 'The HAR Sentinel finalize response is not valid JSON.'
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string]$finalizeResponse.token) -or
+        [string]::IsNullOrWhiteSpace([string]$finalizeBody.proofofwork) -or
+        [string]::IsNullOrWhiteSpace([string]$finalizeBody.turnstile)) {
+        throw 'The HAR does not contain all three browser-generated Sentinel tokens.'
+    }
+    if ($null -eq $finalizeResponse.expire_at) { throw 'The HAR Sentinel response has no expiry timestamp.' }
+    if ($null -eq $conversationBody.messages -or @($conversationBody.messages).Count -eq 0) {
+        throw 'The HAR conversation request has no user-message template.'
+    }
+
+    $conversationId = [string]$prepareBody.conversation_id
+    if ([string]::IsNullOrWhiteSpace($conversationId)) { $conversationId = [string]$conversationBody.conversation_id }
+    $parentMessageId = [string]$prepareBody.parent_message_id
+    if ([string]::IsNullOrWhiteSpace($parentMessageId)) { $parentMessageId = [string]$conversationBody.parent_message_id }
+    if ([string]::IsNullOrWhiteSpace($conversationId) -or [string]::IsNullOrWhiteSpace($parentMessageId)) {
+        throw 'The HAR does not contain a usable conversation ID and parent message ID.'
+    }
+
+    $epoch = [DateTime]::SpecifyKind([DateTime]'1970-01-01T00:00:00', [DateTimeKind]::Utc)
+    $sentinelExpiresUtc = $epoch.AddSeconds([double]$finalizeResponse.expire_at)
+
+    $baseHeaders = @{}
+    foreach ($name in @(
+        'chatgpt-account-id','oai-device-id','oai-did','oai-language','originator',
+        'x-oai-mcp-form-version','x-openai-web-frontend','x-openai-codex-window-type',
+        'x-openai-rate-limit-join-workspace','x-openai-rejoin-pro-cta',
+        'x-openai-beacon-google-auth','x-openai-beacon-workspace-discovery-plugin-usage'
+    )) {
+        $value = Get-GptHeaderValue -Maps $headerMaps -Name $name
+        if (-not [string]::IsNullOrWhiteSpace($value)) { $baseHeaders[$name] = $value }
+    }
+
+    return [pscustomobject]@{
+        Path = [IO.Path]::GetFullPath($Path)
+        Authorization = $authorization
+        Cookie = $cookie
+        Headers = $baseHeaders
+        UserAgent = (Get-GptHeaderValue -Maps $headerMaps -Name 'user-agent')
+        Referer = (Get-GptHeaderValue -Maps $headerMaps -Name 'referer')
+        Origin = (Get-GptHeaderValue -Maps $headerMaps -Name 'origin')
+        ConversationId = $conversationId
+        ParentMessageId = $parentMessageId
+        ConversationTemplate = $conversationBody
+        PrepareTemplate = $prepareBody
+        MessageTemplate = $conversationBody.messages[0]
+        ChatRequirementsToken = [string]$finalizeResponse.token
+        ProofToken = [string]$finalizeBody.proofofwork
+        TurnstileToken = [string]$finalizeBody.turnstile
+        SentinelExpiresUtc = $sentinelExpiresUtc
+    }
+}
+
+function New-GptWebRequest {
+    param(
+        [string]$Uri,
+        [string]$Method,
+        [object]$Session,
+        [string]$Accept = 'application/json',
+        [hashtable]$ExtraHeaders = @{}
+    )
+
+    $request = [System.Net.HttpWebRequest]::Create($Uri)
+    $request.Method = $Method
+    $request.Accept = $Accept
+    $request.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+    $request.Timeout = 90000
+    $request.ReadWriteTimeout = 300000
+    $request.KeepAlive = $true
+    if ($Session.UserAgent) { $request.UserAgent = [string]$Session.UserAgent } else { $request.UserAgent = 'Mozilla/5.0' }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Session.Referer)) { $request.Referer = [string]$Session.Referer }
+
+    $request.CookieContainer = New-Object System.Net.CookieContainer
+    try {
+        $request.CookieContainer.SetCookies([uri]'https://chatgpt.com/', [string]$Session.Cookie)
+    } catch {
+        throw 'The cookies in the HAR could not be loaded into the HTTP cookie container.'
+    }
+
+    $request.Headers['Authorization'] = [string]$Session.Authorization
+    foreach ($name in $Session.Headers.Keys) {
+        $request.Headers[[string]$name] = [string]$Session.Headers[$name]
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$Session.Origin)) {
+        try { $request.Headers['Origin'] = [string]$Session.Origin } catch {}
+    }
+    foreach ($name in $ExtraHeaders.Keys) {
+        $request.Headers[[string]$name] = [string]$ExtraHeaders[$name]
+    }
+    return $request
+}
+
+function Read-GptHttpResponseText {
+    param([System.Net.WebResponse]$Response)
+    if ($null -eq $Response) { return '' }
+    $stream = $null
+    $reader = $null
+    try {
+        $stream = $Response.GetResponseStream()
+        if ($null -eq $stream) { return '' }
+        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+        return $reader.ReadToEnd()
+    } finally {
+        if ($null -ne $reader) { $reader.Dispose() }
+        elseif ($null -ne $stream) { $stream.Dispose() }
+    }
+}
+
+function Invoke-GptJsonRequest {
+    param(
+        [string]$Uri,
+        [string]$Method,
+        [object]$Session,
+        [object]$Body = $null
+    )
+
+    $request = New-GptWebRequest -Uri $Uri -Method $Method -Session $Session -Accept 'application/json'
+    if ($null -ne $Body) {
+        $request.ContentType = 'application/json; charset=utf-8'
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 40 -Compress))
+        $request.ContentLength = $bytes.Length
+        $requestStream = $request.GetRequestStream()
+        try { $requestStream.Write($bytes, 0, $bytes.Length) } finally { $requestStream.Dispose() }
+    }
+
+    $response = $null
+    try {
+        $response = $request.GetResponse()
+    } catch [System.Net.WebException] {
+        $webResponse = $_.Exception.Response
+        if ($null -ne $webResponse) {
+            $status = [int]$webResponse.StatusCode
+            $bodyText = Read-GptHttpResponseText -Response $webResponse
+            $webResponse.Close()
+            if ($status -eq 401) { throw 'ChatGPT rejected the browser session (HTTP 401). Sign in again and import a fresh HAR.' }
+            if ($status -eq 403) { throw 'ChatGPT rejected the browser-session request (HTTP 403). Re-export the HAR from the logged-in browser.' }
+            if ($status -eq 429) { throw 'ChatGPT rate-limited the browser session (HTTP 429).' }
+            $detail = $bodyText
+            try {
+                $errorObject = $bodyText | ConvertFrom-Json -ErrorAction Stop
+                if ($errorObject.error.message) { $detail = [string]$errorObject.error.message }
+            } catch {}
+            if ($detail.Length -gt 400) { $detail = $detail.Substring(0, 400) }
+            throw "ChatGPT browser endpoint returned HTTP $status. $detail"
+        }
+        throw "ChatGPT browser request failed: $($_.Exception.Message)"
+    }
+
+    try {
+        $responseText = Read-GptHttpResponseText -Response $response
+    } finally {
+        $response.Close()
+    }
+    if ([string]::IsNullOrWhiteSpace($responseText)) { throw 'ChatGPT returned an empty JSON response.' }
+    try {
+        return ($responseText | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        throw 'ChatGPT returned a response that was not valid JSON.'
+    }
+}
+
+function Get-GptBrowserModels {
+    param([object]$Session)
+    return Invoke-GptJsonRequest -Uri 'https://chatgpt.com/backend-api/models' -Method 'GET' -Session $Session
+}
+
+function Get-GptModels {
+    if ($null -eq $script:GptSession) { throw 'ChatGPT browser session is not loaded. Run .auth gpt and select the local HAR file.' }
+    return @([pscustomobject]@{ name = 'gpt-6-luna'; displayName = 'GPT-6 Luna (ChatGPT browser session)' })
+}
+
+function ConvertTo-GptPromptText {
+    param([object[]]$Parts, [object]$SystemInstruction)
+    $textParts = New-Object System.Collections.Generic.List[string]
+    foreach ($part in $Parts) {
+        if ($null -ne $part.text) {
+            [void]$textParts.Add([string]$part.text)
+        } else {
+            throw 'The experimental GPT browser provider currently supports text input only; image/inline-data attachments are not supported.'
+        }
+    }
+    $userText = [string]::Join([Environment]::NewLine, $textParts.ToArray())
+    if ([string]::IsNullOrWhiteSpace($userText)) { throw 'The GPT browser provider received no text prompt.' }
+
+    $systemText = ''
+    if ($null -ne $SystemInstruction -and $null -ne $SystemInstruction.parts -and $SystemInstruction.parts.Count -gt 0) {
+        $systemText = [string]$SystemInstruction.parts[0].text
+    }
+    if ([string]::IsNullOrWhiteSpace($systemText)) { return $userText }
+
+    return "MIRA/GEMMA session instructions (user-level context):" + [Environment]::NewLine +
+        $systemText + [Environment]::NewLine + [Environment]::NewLine +
+        "This experimental provider cannot invoke local PowerShell tools. Do not claim to inspect or execute actions on this PC." +
+        [Environment]::NewLine + [Environment]::NewLine +
+        "User request:" + [Environment]::NewLine + $userText
+}
+
+function Invoke-GptWebConversation {
+    param([object]$Session, [string]$Prompt, [string]$Model)
+
+    if ($null -eq $Session) { throw 'ChatGPT browser session is not loaded. Run .auth gpt and select the local HAR file.' }
+    if ($Model -ine 'gpt-6-luna') { throw "The experimental GPT provider is pinned to gpt-6-luna; refusing model '$Model'." }
+    if ($Session.SentinelExpiresUtc -le [DateTime]::UtcNow) {
+        $expiredLocal = $Session.SentinelExpiresUtc.ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss')
+        throw "The captured ChatGPT Sentinel/Turnstile challenge expired at $expiredLocal local time. Import a fresh HAR after the browser prepares the next turn."
+    }
+
+    $prepareBody = $Session.PrepareTemplate | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $prepareBody.model = $Model
+    $prepareBody.conversation_id = $Session.ConversationId
+    $prepareBody.parent_message_id = $Session.ParentMessageId
+    $prepareBody.client_prepare_state = 'sent'
+    $prepareResponse = Invoke-GptJsonRequest -Uri 'https://chatgpt.com/backend-api/f/conversation/prepare' -Method 'POST' -Session $Session -Body $prepareBody
+    if ([string]::IsNullOrWhiteSpace([string]$prepareResponse.conduit_token)) {
+        throw 'ChatGPT conversation/prepare did not return a conduit token.'
+    }
+
+    $payload = $Session.ConversationTemplate | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $message = $Session.MessageTemplate | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    $message.id = [guid]::NewGuid().ToString()
+    $message.author.role = 'user'
+    $message.author.name = $null
+    $message.author.metadata = @{}
+    $message.channel = $null
+    $message.content.content_type = 'text'
+    $message.content.parts = @($Prompt)
+    $message.create_time = ([DateTime]::UtcNow - [DateTime]'1970-01-01T00:00:00Z').TotalSeconds
+    $message.update_time = $null
+    $message.metadata = @{}
+    $message.recipient = 'all'
+    $message.status = 'finished_successfully'
+    $message.end_turn = $null
+    $message.weight = 1
+
+    $payload.model = $Model
+    $payload.conversation_id = $Session.ConversationId
+    $payload.parent_message_id = $Session.ParentMessageId
+    $payload.messages = @($message)
+    $payload.local_function_names = @()
+    $payload.client_prepare_state = 'success'
+
+    $extraHeaders = @{
+        'x-conduit-token' = [string]$prepareResponse.conduit_token
+        'openai-sentinel-chat-requirements-token' = [string]$Session.ChatRequirementsToken
+        'openai-sentinel-proof-token' = [string]$Session.ProofToken
+        'openai-sentinel-turnstile-token' = [string]$Session.TurnstileToken
+        'x-openai-web-sse-compression' = 'gzip'
+        'x-oai-turn-trace-id' = [guid]::NewGuid().ToString()
+    }
+
+    $request = New-GptWebRequest -Uri 'https://chatgpt.com/backend-api/f/conversation' -Method 'POST' -Session $Session -Accept 'text/event-stream' -ExtraHeaders $extraHeaders
+    $request.ContentType = 'application/json; charset=utf-8'
+    $request.Timeout = 300000
+    $request.ReadWriteTimeout = 300000
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Depth 40 -Compress))
+    $request.ContentLength = $bytes.Length
+    $requestStream = $request.GetRequestStream()
+    try { $requestStream.Write($bytes, 0, $bytes.Length) } finally { $requestStream.Dispose() }
+
+    $response = $null
+    try {
+        $response = $request.GetResponse()
+    } catch [System.Net.WebException] {
+        $webResponse = $_.Exception.Response
+        if ($null -ne $webResponse) {
+            $status = [int]$webResponse.StatusCode
+            $bodyText = Read-GptHttpResponseText -Response $webResponse
+            $webResponse.Close()
+            if ($status -eq 401) { throw 'ChatGPT rejected the browser session (HTTP 401). Sign in again and import a fresh HAR.' }
+            if ($status -eq 403) { throw 'ChatGPT rejected the browser-generated Sentinel/Turnstile challenge (HTTP 403). It may have expired or already been consumed; export a fresh HAR after the browser prepares another turn.' }
+            if ($status -eq 429) { throw 'ChatGPT rate-limited this browser session (HTTP 429).' }
+            $detail = $bodyText
+            try {
+                $errorObject = $bodyText | ConvertFrom-Json -ErrorAction Stop
+                if ($errorObject.error.message) { $detail = [string]$errorObject.error.message }
+            } catch {}
+            if ($detail.Length -gt 400) { $detail = $detail.Substring(0, 400) }
+            throw "ChatGPT conversation endpoint returned HTTP $status. $detail"
+        }
+        throw "ChatGPT streaming request failed: $($_.Exception.Message)"
+    }
+
+    $assistantText = ''
+    $assistantMessageId = ''
+    $responseConversationId = [string]$Session.ConversationId
+    $reader = $null
+    try {
+        $stream = $response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)
+        while ($null -ne ($line = $reader.ReadLine())) {
+            if (-not $line.StartsWith('data:', [StringComparison]::OrdinalIgnoreCase)) { continue }
+            $data = $line.Substring(5).Trim()
+            if ($data -eq '[DONE]') { break }
+            if ([string]::IsNullOrWhiteSpace($data)) { continue }
+            try {
+                $eventData = $data | ConvertFrom-Json -ErrorAction Stop
+            } catch {
+                continue
+            }
+            if ($eventData.error) {
+                $errorMessage = if ($eventData.error.message) { [string]$eventData.error.message } else { 'The ChatGPT stream reported an error.' }
+                throw $errorMessage
+            }
+            if ($eventData.conversation_id) { $responseConversationId = [string]$eventData.conversation_id }
+            $streamMessage = $eventData.message
+            if ($null -ne $streamMessage -and $null -ne $streamMessage.author -and $streamMessage.author.role -eq 'assistant') {
+                if ($streamMessage.id) { $assistantMessageId = [string]$streamMessage.id }
+                $partText = New-Object System.Collections.Generic.List[string]
+                foreach ($part in @($streamMessage.content.parts)) {
+                    if ($part -is [string]) {
+                        [void]$partText.Add([string]$part)
+                    } elseif ($null -ne $part -and $part.PSObject.Properties['text']) {
+                        [void]$partText.Add([string]$part.text)
+                    }
+                }
+                $currentText = [string]::Join('', $partText.ToArray())
+                if (-not [string]::IsNullOrEmpty($currentText)) {
+                    if ($currentText.StartsWith($assistantText, [StringComparison]::Ordinal)) {
+                        $assistantText = $currentText
+                    } elseif (-not $assistantText.StartsWith($currentText, [StringComparison]::Ordinal)) {
+                        $assistantText += $currentText
+                    }
+                }
+            } elseif ($eventData.delta -is [string]) {
+                $assistantText += [string]$eventData.delta
+            }
+        }
+    } finally {
+        if ($null -ne $reader) { $reader.Dispose() }
+        $response.Close()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($assistantText)) { throw 'The ChatGPT SSE stream ended without assistant text; the internal response format may have changed.' }
+    if ([string]::IsNullOrWhiteSpace($assistantMessageId)) { throw 'The ChatGPT SSE stream did not provide an assistant message ID; refusing to continue with a stale conversation parent.' }
+
+    $Session.ConversationId = $responseConversationId
+    $Session.ParentMessageId = $assistantMessageId
+    $script:GptSession = $Session
+
+    return [pscustomobject]@{
+        candidates = @(
+            [pscustomobject]@{
+                content = [pscustomobject]@{
+                    parts = @([pscustomobject]@{ text = $assistantText })
+                }
+                finishReason = $null
+            }
+        )
+    }
+}
+
+
 function Get-GeminiModels {
     if ($script:Provider -eq 'gpt') { return Get-GptModels }
     if ($script:Provider -eq 'antigravity') { return Get-AntigravityModels }
