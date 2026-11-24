@@ -418,7 +418,7 @@ function Read-GptOAuthCallback {
             $callbackUri = New-Object System.Uri("http://127.0.0.1:$Port$target")
             $isCallback = ($callbackUri.AbsolutePath -eq '/auth/callback')
             $html = if ($isCallback) {
-                '<!doctype html><html><head><meta charset="utf-8"><title>GEMMA connected</title></head><body><h2>GEMMA</h2><p>ChatGPT sign-in response received. You can close this tab and return to GEMMA.</p></body></html>'
+                '<!doctype html><html><head><meta charset="utf-8"><title>GEMMA sign-in response</title></head><body><h2>GEMMA</h2><p>ChatGPT sign-in response received. You can close this tab and return to GEMMA.</p></body></html>'
             } else {
                 '<!doctype html><html><body>Not found.</body></html>'
             }
@@ -1813,7 +1813,7 @@ function Invoke-GemmaProviderCommand {
     $previousProvider = $script:Provider
     if ($value -eq 'gpt') {
         $currentAvailable = @($gptModels | Where-Object { [string]$_.name -eq [string]$script:MODEL })
-        if ($currentAvailable.Count -eq 0) { $script:MODEL = [string]$gptModels[0].name }
+        if ($currentAvailable.Count -eq 0) { $script:MODEL = '' }
     } elseif ($previousProvider -eq 'gpt') {
         $script:MODEL = $MIRA_DEFAULT_MODEL
     }
@@ -1821,7 +1821,11 @@ function Invoke-GemmaProviderCommand {
     Write-Host "[Provider switched to: $script:Provider]" -ForegroundColor Green
     if ($value -eq 'gpt') {
         Write-Host '[Official Sign in with ChatGPT OAuth; public Responses API; streaming; no HAR, browser cookies, or private ChatGPT endpoints. Local tools are unavailable.]' -ForegroundColor DarkGray
-        Write-Host "[ChatGPT model: $script:MODEL]" -ForegroundColor DarkGray
+        if ($script:MODEL) {
+            Write-Host "[ChatGPT model: $script:MODEL]" -ForegroundColor DarkGray
+        } else {
+            Write-Host '[No ChatGPT model selected automatically. Use .model to choose from this account’s available models.]' -ForegroundColor Yellow
+        }
     } else {
         Write-Host '[Model name retained; use .model to select from this provider catalogue.]' -ForegroundColor DarkGray
     }
