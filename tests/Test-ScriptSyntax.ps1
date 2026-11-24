@@ -7,6 +7,13 @@ param(
 
 $resolved = (Resolve-Path -LiteralPath $ScriptPath -ErrorAction Stop).Path
 
+if ([IO.Path]::GetFileName($resolved) -ieq 'gemma.ps1') {
+    $scriptBytes = [IO.File]::ReadAllBytes($resolved)
+    if ($scriptBytes.Length -lt 3 -or $scriptBytes[0] -ne 0xEF -or $scriptBytes[1] -ne 0xBB -or $scriptBytes[2] -ne 0xBF) {
+        throw 'gemma.ps1 must be saved as UTF-8 with BOM for Windows PowerShell 5.1.'
+    }
+}
+
 if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
     throw "This test requires Windows PowerShell 5.1. Detected: $($PSVersionTable.PSVersion)"
 }
