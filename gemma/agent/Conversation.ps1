@@ -1,3 +1,21 @@
+function Get-GemmaEffectiveEffort {
+    param([ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider)
+
+    $override = switch ($Provider) {
+        'openai' { $MIRA_OPENAI_EFFORT }
+        'gemini' { $MIRA_GEMINI_EFFORT }
+        'antigravity' { $MIRA_ANTIGRAVITY_EFFORT }
+    }
+    $value = if ([string]::IsNullOrWhiteSpace([string]$override)) { [string]$script:Effort } else { [string]$override }
+    $value = $value.Trim().ToLowerInvariant()
+
+    $allowed = if ($Provider -eq 'openai') { @('none','minimal','low','medium','high','xhigh','max') } else { @('low','medium','high') }
+    if ($value -notin $allowed) {
+        throw "Invalid $Provider reasoning effort '$value'. Allowed values: $($allowed -join ', ')."
+    }
+    return $value
+}
+
 function Build-GeminiPayload {
     param(
         [object]$SystemInstruction,
@@ -25,14 +43,16 @@ function Build-GeminiPayload {
         $payload.generationConfig = $GeminiGenerationConfig
     }
 
-    # Gemini 3 uses thinkingLevel; Gemini 2.5 uses thinkingBudget.
+    # Resolve the provider override first, then the live .effort setting.
     # This payload is shared by Gemini Developer API and Antigravity OAuth.
+    $effortProvider = if ($script:Provider -eq 'antigravity') { 'antigravity' } else { 'gemini' }
+    $effectiveEffort = Get-GemmaEffectiveEffort -Provider $effortProvider
     if ($script:MODEL -match '(?i)gemini[-.]?3') {
         if ($null -eq $payload.generationConfig) { $payload.generationConfig = @{} }
-        $payload.generationConfig.thinkingConfig = @{ thinkingLevel = $script:Effort.ToUpperInvariant(); includeThoughts = [bool]$script:VerboseOutput }
+        $payload.generationConfig.thinkingConfig = @{ thinkingLevel = $effectiveEffort.ToUpperInvariant(); includeThoughts = [bool]$script:VerboseOutput }
     } elseif ($script:MODEL -match '(?i)gemini[-.]?2.5') {
         if ($null -eq $payload.generationConfig) { $payload.generationConfig = @{} }
-        $thinkingBudget = switch ($script:Effort) {
+        $thinkingBudget = switch ($effectiveEffort) {
             'low' { 1024 }
             'medium' { 8192 }
             'high' { 24576 }
