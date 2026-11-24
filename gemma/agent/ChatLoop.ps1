@@ -48,6 +48,11 @@ while ($true) {
         continue
     }
 
+    if ($trimmedInput -ieq '.usage') {
+        Invoke-GemmaUsageCommand
+        continue
+    }
+
     if ($trimmedInput -ieq '.replay') {
         Invoke-GemmaReplayLatest -Contents $Contents
         continue
