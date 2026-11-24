@@ -1,5 +1,5 @@
 # WINDOWS POWERSHELL 5.1
-# OpenAI Chat Completions provider. No SDK or external runtime dependency.
+# OpenAI provider: Responses API for gpt-6-luna; Chat Completions for other models. No SDK dependency.
 
 function Get-GemmaOpenAIApiKeys {
     # Return only the explicit candidates configured in Defaults.ps1.
