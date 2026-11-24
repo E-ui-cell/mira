@@ -47,6 +47,8 @@ $requiredFunctions = @(
     'Invoke-GemmaEffortCommand',
     'Invoke-GemmaStreamingCommand',
     'Invoke-GemmaProviderCommand',
+    'Add-GemmaUsageRecord',
+    'Invoke-GemmaUsageCommand',
     'Build-GeminiPayload',
     'Build-GemmaOpenAIResponsesPayload',
     'ConvertFrom-GemmaOpenAIResponsesResponse',
@@ -97,6 +99,44 @@ try {
     if ($script:StreamingMode -ne 'off') { throw '.streaming off did not disable streaming.' }
 } finally {
     $script:StreamingMode = $oldStreamingMode
+}
+
+# Verify .usage accumulates provider-reported tokens and never needs a probe request.
+$oldUsageStats = $script:MiraUsageStats
+try {
+    $script:MiraUsageStats = @{
+        StartedAt = Get-Date
+        Requests = 0
+        SuccessfulRequests = 0
+        FailedRequests = 0
+        HttpAttempts = 0
+        InputTokens = 0
+        OutputTokens = 0
+        ByProvider = @{}
+        LastRequest = $null
+        OpenAIRateLimits = @{}
+    }
+    Add-GemmaUsageRecord -Provider 'openai' -Model 'gpt-6-luna' -Succeeded $true -InputTokens 123 -OutputTokens 45 -HttpAttempts 2 -KeyIndex 1 -KeyCount 3 -KeySlotsTried @(2,3) -RateLimitHeaders @{ 'x-ratelimit-limit-tokens' = '100000'; 'x-ratelimit-remaining-tokens' = '50000'; 'x-ratelimit-reset-tokens' = '1m' } -RequestId 'req_usage_test' -HttpStatus 200
+    if ($script:MiraUsageStats.Requests -ne 1 -or
+        $script:MiraUsageStats.SuccessfulRequests -ne 1 -or
+        $script:MiraUsageStats.InputTokens -ne 123 -or
+        $script:MiraUsageStats.OutputTokens -ne 45 -or
+        $script:MiraUsageStats.HttpAttempts -ne 2) {
+        throw '.usage did not accumulate successful request and token totals.'
+    }
+    if ($script:MiraUsageStats.LastRequest.KeySlot -ne 2 -or
+        $script:MiraUsageStats.LastRequest.KeyCount -ne 3 -or
+        $script:MiraUsageStats.OpenAIRateLimits['x-ratelimit-remaining-tokens'] -ne '50000') {
+        throw '.usage did not retain the used key slot or OpenAI rate-limit headers.'
+    }
+    Add-GemmaUsageRecord -Provider 'openai' -Model 'gpt-6-luna' -Succeeded $false -HttpAttempts 1 -KeyIndex 2 -KeyCount 3 -KeySlotsTried @(3) -HttpStatus 429
+    if ($script:MiraUsageStats.Requests -ne 2 -or
+        $script:MiraUsageStats.FailedRequests -ne 1 -or
+        $script:MiraUsageStats.ByProvider['openai'].FailedRequests -ne 1) {
+        throw '.usage did not record a failed request.'
+    }
+} finally {
+    $script:MiraUsageStats = $oldUsageStats
 }
 
 foreach ($functionName in $requiredFunctions) {
