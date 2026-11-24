@@ -10,7 +10,7 @@ function Get-GeminiApiKeys {
         $key = ([string]$item).Trim().Trim('"').Trim("'")
         if ($key -and -not $seen.ContainsKey($key)) { $seen[$key] = $true; $key }
     })
-    return ,$keys
+    return $keys
 }
 
 function Get-GeminiModels {
