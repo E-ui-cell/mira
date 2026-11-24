@@ -188,6 +188,7 @@
                                 $httpRequest.Headers['Authorization'] = ('Bearer ' + [string]$keyPool[$keyIndex])
                                 $httpRequest.Timeout = 180000
                                 $httpRequest.ReadWriteTimeout = 180000
+                                $httpRequest.ContentLength = [long]$b.Length
                                 $httpRequest.AllowReadStreamBuffering = $false
                                 $streamState.Request = $httpRequest
 
@@ -295,7 +296,7 @@
                                 if ($null -ne $sseReader) { try { $sseReader.Dispose() } catch {} }
                                 if ($null -ne $httpResponse) { try { $httpResponse.Close() } catch {} }
                                 if ($null -ne $httpRequest) { try { $httpRequest.Abort() } catch {} }
-                                $streamState.Request = $null
+                                if ($null -ne $streamState) { $streamState.Request = $null }
                             }
                         }
                     }
@@ -331,7 +332,12 @@
                             $streamTextThisRequest = $true
                             $turnStreamedText = $true
                         }
-                        Write-Host $streamDelta -NoNewline -ForegroundColor Cyan
+                        if ($script:CommandMode) {
+                            [Console]::Out.Write($streamDelta)
+                            [Console]::Out.Flush()
+                        } else {
+                            Write-Host $streamDelta -NoNewline -ForegroundColor Cyan
+                        }
                     }
                 }
 
@@ -367,7 +373,12 @@
                         $streamTextThisRequest = $true
                         $turnStreamedText = $true
                     }
-                    Write-Host $streamDelta -NoNewline -ForegroundColor Cyan
+                    if ($script:CommandMode) {
+                            [Console]::Out.Write($streamDelta)
+                            [Console]::Out.Flush()
+                        } else {
+                            Write-Host $streamDelta -NoNewline -ForegroundColor Cyan
+                        }
                 }
             }
             if ($streamTextThisRequest) { Write-Host "" }
