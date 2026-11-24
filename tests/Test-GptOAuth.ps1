@@ -70,8 +70,8 @@ try {
             [pscustomobject]@{
                 kid = 'gemma-ci-key'
                 kty = 'RSA'
-                n = ConvertTo-GptBase64Url -Bytes $publicKey.Modulus
-                e = ConvertTo-GptBase64Url -Bytes $publicKey.Exponent
+                n = (ConvertTo-GptBase64Url -Bytes $publicKey.Modulus)
+                e = (ConvertTo-GptBase64Url -Bytes $publicKey.Exponent)
             }
         )
     }
