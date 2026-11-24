@@ -152,6 +152,10 @@ while ($true) {
     }
 
     if ($trimmedInput.StartsWith(".loadsession")) {
+        if ($script:NoSession) {
+            Write-Host "[Session loading is disabled while .oneshot is ON.]" -ForegroundColor Yellow
+            continue
+        }
         $sessionName = $trimmedInput.Substring(12).Trim()
         if (-not $sessionName) {
             Write-Host "`n[Error: Specify a session file name]" -ForegroundColor Red
@@ -343,16 +347,22 @@ while ($true) {
         $userParts = @( @{ text = $rawInput } )
     }
 
+    # One-shot mode never sends any previously loaded or accumulated history.
+    if ($script:NoSession) { $Contents.Clear() }
+
     # Snapshot the conversation before this turn.
     $turnStartCount = $Contents.Count
     $userTurn = @{ role = "user"; parts = $userParts }
     [void]$Contents.Add($userTurn)
 
     # ===========================================================================
-. (Join-Path $PSScriptRoot 'Turn.ps1')
-
-    # Keep this turn, including tool rounds, only until its response completes.
-    if ($script:NoSession) { $Contents.Clear() }
+    try {
+        . (Join-Path $PSScriptRoot 'Turn.ps1')
+    }
+    finally {
+        # Keep this turn, including tool rounds, only until its response completes.
+        if ($script:NoSession) { $Contents.Clear() }
+    }
 
 }
 }
