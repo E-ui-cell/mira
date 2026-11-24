@@ -723,6 +723,46 @@
                 HasOutput = $false
                 LastChar = [char]0
                 CommandMode = [bool]$script:CommandMode
+                ShowFrame = (-not $script:CommandMode -and -not $script:OneShot)
+                HeaderDrawn = $false
+                HeaderLeft = 0
+                HeaderTop = -1
+            }
+            $writeStreamFrameHeader = {
+                if (-not $streamDisplayState.ShowFrame -or $streamDisplayState.HeaderDrawn) { return }
+
+                # Clear the request spinner, then put the frame header above
+                # the first visible streamed text (the old non-streaming layout).
+                Write-Host (" " * 60) -NoNewline
+                Write-Host ([string][char]13) -NoNewline
+
+                try { $frameWidth = [Console]::WindowWidth }
+                catch { $frameWidth = $Host.UI.RawUI.WindowWidth }
+                if ($frameWidth -le 10) { $frameWidth = 80 }
+                $headerWidth = [Math]::Max(1,$frameWidth - 1)
+                $headerElapsed = ([Math]::Round($turnStopwatch.Elapsed.TotalSeconds,1)).ToString('0.0',[Globalization.CultureInfo]::InvariantCulture)
+                $headerLeft = ([string][char]0x250C) + ([string][char]0x2500 * 2) + ' ' + $headerElapsed + 's'
+                $headerModel = [string]$script:MODEL
+                $headerRight = 'STREAMING'
+                $headerFixed = $headerLeft.Length + $headerRight.Length + 2
+                $headerMaxModel = [Math]::Max(1,$headerWidth - $headerFixed - 2)
+                if ($headerModel.Length -gt $headerMaxModel) {
+                    if ($headerMaxModel -gt 3) { $headerModel = $headerModel.Substring(0,$headerMaxModel - 3) + '...' }
+                    else { $headerModel = $headerModel.Substring(0,$headerMaxModel) }
+                }
+                $headerGap = $headerWidth - $headerLeft.Length - $headerModel.Length - $headerRight.Length - 2
+                if ($headerGap -lt 1) { $headerGap = 1 }
+                $headerLine = $headerLeft + (' ' * $headerGap) + $headerModel + '  ' + $headerRight
+                if ($headerLine.Length -gt $headerWidth) { $headerLine = $headerLine.Substring(0,$headerWidth) }
+
+                try {
+                    $streamDisplayState.HeaderLeft = [Console]::CursorLeft
+                    $streamDisplayState.HeaderTop = [Console]::CursorTop
+                } catch {
+                    $streamDisplayState.HeaderTop = -1
+                }
+                Write-Host $headerLine -ForegroundColor DarkGray
+                $streamDisplayState.HeaderDrawn = $true
             }
             $writeStreamChunk = {
                 param([string]$Chunk)
@@ -731,8 +771,7 @@
                 $streamDisplayState.OutputText += $Chunk
                 if ($streamDisplayState.Mode -eq 'delta') {
                     if (-not $streamDisplayState.HasOutput) {
-                        Write-Host (" " * 60) -NoNewline
-                        Write-Host ([string][char]13) -NoNewline
+                        & $writeStreamFrameHeader
                         $streamDisplayState.HasOutput = $true
                     }
                     if ($streamDisplayState.CommandMode) {
@@ -750,8 +789,7 @@
                     $completeLine = $streamDisplayState.LineBuffer.Substring(0,$newlineIndex + 1)
                     $streamDisplayState.LineBuffer = $streamDisplayState.LineBuffer.Substring($newlineIndex + 1)
                     if (-not $streamDisplayState.HasOutput) {
-                        Write-Host (" " * 60) -NoNewline
-                        Write-Host ([string][char]13) -NoNewline
+                        & $writeStreamFrameHeader
                         $streamDisplayState.HasOutput = $true
                     }
                     if ($streamDisplayState.CommandMode) {
@@ -802,8 +840,7 @@
                 $streamDisplayState.Mode -eq 'line' -and
                 $streamDisplayState.LineBuffer.Length -gt 0) {
                 if (-not $streamDisplayState.HasOutput) {
-                    Write-Host (" " * 60) -NoNewline
-                    Write-Host ([string][char]13) -NoNewline
+                    & $writeStreamFrameHeader
                     $streamDisplayState.HasOutput = $true
                 }
                 $remainingLine = $streamDisplayState.LineBuffer
@@ -1118,9 +1155,26 @@
             $bottomBoxLine = (' ' * $bottomIndent) + $bottomRule
 
             if ($streamedFinalResponse) {
-                # The response body has already been printed incrementally.
-                if (-not $script:CommandMode -and -not $script:OneShot) {
-                    Write-Host $topBoxLine -ForegroundColor DarkGray
+                # The provisional header was drawn before the first response
+                # chunk. Replace it with final elapsed/token stats when it is
+                # still visible, then close the frame below the streamed body.
+                if ($streamDisplayState.ShowFrame) {
+                    if ($streamDisplayState.HeaderDrawn -and $streamDisplayState.HeaderTop -ge 0) {
+                        try {
+                            $restoreLeft = [Console]::CursorLeft
+                            $restoreTop = [Console]::CursorTop
+                            $headerVisible = ($streamDisplayState.HeaderTop -ge [Console]::WindowTop -and
+                                $streamDisplayState.HeaderTop -lt ([Console]::WindowTop + [Console]::WindowHeight))
+                            if ($headerVisible) {
+                                [Console]::SetCursorPosition([int]$streamDisplayState.HeaderLeft,[int]$streamDisplayState.HeaderTop)
+                                Write-Host $topBoxLine.PadRight($statusWidth) -NoNewline -ForegroundColor DarkGray
+                                [Console]::SetCursorPosition($restoreLeft,$restoreTop)
+                            }
+                        } catch {
+                            # Keep the already-drawn streaming header if cursor
+                            # positioning is unsupported by the active host.
+                        }
+                    }
                     Write-Host $bottomBoxLine -ForegroundColor DarkGray
                 }
             } elseif ($script:CommandMode) { [Console]::Out.WriteLine($reply) }
