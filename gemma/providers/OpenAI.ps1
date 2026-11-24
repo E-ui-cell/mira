@@ -13,7 +13,7 @@ function Get-GemmaOpenAIApiKeys {
         $key = ([string]$item).Trim().Trim('"').Trim("'")
         if ($key -and -not $seen.ContainsKey($key)) { $seen[$key] = $true; $key }
     })
-    return ,$keys
+    return $keys
 }
 
 function ConvertTo-GemmaOpenAIMessageContent {
@@ -34,6 +34,7 @@ function ConvertTo-GemmaOpenAIMessageContent {
             if ($part.inlineData.mimeType) { $mimeType = [string]$part.inlineData.mimeType }
         }
         if (-not [string]::IsNullOrWhiteSpace($imageData)) {
+            if ($mimeType -notlike 'image/*') { throw "OpenAI Chat Completions currently supports image attachments, not '$mimeType'. Use Gemini for PDF, audio, or video attachments." }
             [void]$content.Add(@{ type='image_url'; image_url=@{ url=("data:{0};base64,{1}" -f $mimeType,$imageData) } })
         }
     }
