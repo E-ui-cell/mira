@@ -24,7 +24,11 @@ if ($PSVersionTable.PSVersion.Major -ge 7 -and $env:OS -eq 'Windows_NT') {
 # Answer provider and model
 $MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity', 'gemini', or 'openai'; no automatic provider switching
 $MIRA_DEFAULT_MODEL = 'gemini-3.1-flash-lite'
-$MIRA_DEFAULT_EFFORT = 'high'                # 'low', 'medium', or 'high'
+$MIRA_DEFAULT_EFFORT = 'high'                # Shared fallback: low, medium, high
+# Provider overrides ($null inherits the shared/default effort).
+$MIRA_OPENAI_EFFORT = $null                  # none, minimal, low, medium, high, xhigh, max
+$MIRA_GEMINI_EFFORT = $null                  # low, medium, high
+$MIRA_ANTIGRAVITY_EFFORT = $null             # low, medium, high
 $MIRA_SEARCH_MODEL = 'gemini-3.1-flash-lite' # Dedicated Antigravity OAuth research model for Gemini API web_search
 
 # Generation defaults ($null means: let the selected model use its own default)
