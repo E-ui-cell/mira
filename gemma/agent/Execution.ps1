@@ -2,19 +2,19 @@ function Invoke-GemmaPermissionCommand {
     param([ValidateSet('ask','autopilot')][string]$Mode)
     $script:ExecutionPermission = $Mode
     if ($Mode -eq 'ask') {
-        Write-Host '[PowerShell permission mode: ASK | each command requires confirmation; Enter = Yes.]' -ForegroundColor Cyan
+        Write-Host '[Local command permission mode: ASK | each requested command requires confirmation; Enter = Yes.]' -ForegroundColor Cyan
     } else {
-        Write-Host '[PowerShell permission mode: AUTOPILOT | all model-requested PowerShell commands execute without confirmation.]' -ForegroundColor Yellow
+        Write-Host '[Local command permission mode: AUTOPILOT | requested commands execute without confirmation.]' -ForegroundColor Yellow
     }
 }
 
 function Invoke-GemmaPowerShellTool {
     param([string]$Command)
     if ([string]::IsNullOrWhiteSpace($Command)) { throw 'run_powershell requires a command.' }
-    Write-Host "`n[PowerShell requested by model]:" -ForegroundColor DarkYellow
+    Write-Host "`n[Local command requested by model (PowerShell execution host)]:" -ForegroundColor DarkYellow
     Write-Host $Command -ForegroundColor Gray
     if ($script:ExecutionPermission -eq 'ask') {
-        $approval = Read-Host 'Execute this PowerShell command? [Y/n]'
+        $approval = Read-Host 'Execute this command? [Y/n]'
         if ($approval -match '^(?i:n|no)$') { return @{ approved=$false; output='User declined command execution.' } }
     }
     $previousProgressPreference = $ProgressPreference

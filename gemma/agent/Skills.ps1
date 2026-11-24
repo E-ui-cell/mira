@@ -1,11 +1,11 @@
 # BUILT-IN SKILLS
 # Skills are compact task playbooks. The model loads one only when needed;
-# execution still goes through the existing PowerShell permission gate.
+# local execution still goes through the existing ASK/AUTOPILOT permission gate.
 # ==============================================================================
 $script:GemmaSkills = [ordered]@{
     'file-management' = @'
 SKILL: FILE MANAGEMENT
-Use the existing run_powershell tool for all local operations. Use PowerShell, never Bash.
+Use run_powershell as the local execution bridge. Choose PowerShell, CMD (cmd.exe /c), Python, native Windows APIs, or an installed utility according to the task; do not force PowerShell when another tool is a better fit. The bridge evaluates PowerShell commands, so launch other runtimes explicitly.
 
 Workflow:
 1. Understand the requested outcome and target paths. If ambiguous, inspect first and ask one focused question.
@@ -27,7 +27,7 @@ Never touch ACLs, ownership, or file permissions. Never silently elevate.
 '@
     'windows-settings' = @'
 SKILL: WINDOWS SETTINGS AND CONFIGURATION
-Use run_powershell. Prefer supported Windows settings URI schemes and documented cmdlets over registry edits.
+Use run_powershell as the local execution bridge. Prefer supported Windows settings URI schemes and documented interfaces over registry edits; invoke CMD, Python, or installed utilities when they are the better fit.
 
 Open settings pages with Start-Process -FilePath 'ms-settings:<page>' or use Invoke-GemmaDirectCommand -Name settings-open -Argument display (examples: display, sound, network-wifi, appsfeatures, windowsupdate, privacy, bluetooth, printers, storagesense, startupapps). Check the target URI before launching and explain what page will open.
 
@@ -43,7 +43,7 @@ Do not claim a setting was changed merely because its settings page was opened. 
 '@
     'desktop-gui' = @'
 SKILL: WINDOWS DESKTOP AND GUI
-Use run_powershell for local Windows operations. Prefer semantic Windows UI Automation over screen coordinates.
+Use run_powershell as the local execution bridge for Windows operations; launch other installed tools when appropriate. Prefer semantic Windows UI Automation over screen coordinates.
 
 Capabilities:
 - Launch an application with Start-Process -FilePath and an argument array; do not concatenate untrusted text into a shell command.
@@ -64,7 +64,7 @@ Clipboard access is task-scoped. Never poll, monitor, or read clipboard automati
 
 Read:
 - Prefer Get-Clipboard -Raw when available; handle empty clipboard and unsupported formats.
-- For native Unicode text access, use Invoke-GemmaDirectCommand -Name clipboard-read (or clipboard-write -Argument $text) from the approved PowerShell tool. This uses the script's Win32 helper. Otherwise use Win32 OpenClipboard, GetClipboardData(CF_UNICODETEXT=13), GlobalLock, PtrToStringUni, GlobalUnlock, and CloseClipboard. Always close the clipboard in finally and unlock only when lock succeeded. Retry briefly if another application temporarily owns the clipboard, then return a clear error.
+- For native Unicode text access, use Invoke-GemmaDirectCommand -Name clipboard-read (or clipboard-write -Argument $text) through the approved local execution bridge. This uses the script's Win32 helper. Otherwise use Win32 OpenClipboard, GetClipboardData(CF_UNICODETEXT=13), GlobalLock, PtrToStringUni, GlobalUnlock, and CloseClipboard. Always close the clipboard in finally and unlock only when lock succeeded. Retry briefly if another application temporarily owns the clipboard, then return a clear error.
 - Do not assume the clipboard contains text. Report unsupported formats without changing it.
 
 Write:
@@ -85,7 +85,7 @@ The tool only contacts wttr.in, api.ipify.org, and cht.sh. Keep output concise a
 '@
     'system-inspection' = @'
 SKILL: WINDOWS SYSTEM INSPECTION
-Use read-only PowerShell/CIM/network commands first. Do not change system state during diagnosis.
+Use read-only Windows APIs and suitable inspection tools (PowerShell/CIM/network commands, CMD utilities, or installed tools) first. Do not change system state during diagnosis.
 
 Useful sources:
 - Quick local summary: Invoke-GemmaDirectCommand -Name system-info

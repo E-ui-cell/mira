@@ -3,11 +3,18 @@
 
 $script:MiraTtsModel = $MIRA_TTS_MODEL
 $script:MiraTtsVoice = $MIRA_TTS_VOICE
-$script:MiraTtsDirectorCore = $MIRA_TTS_DIRECTOR_CORE
 $script:MiraTtsAudioDirectory = Join-Path $HOME '.gemma\audio'
 
 function Get-GemmaTtsDirectorStyle {
     param([System.Collections.IList]$Contents)
+
+    # TTS direction is optional and belongs to the active system prompt preset.
+    # Only a prompt containing this heading can supply a director instruction.
+    $director = ''
+    $systemText = [string]$SystemInstruction.parts[0].text
+    $match = [regex]::Match($systemText,'(?ims)^##[ \t]+TTS voice direction[ \t]*\r?\n(?<body>.*?)(?=^##[ \t]+|\z)')
+    if ($match.Success) { $director = $match.Groups['body'].Value.Trim() }
+
     $context = ''
     if ($null -ne $Contents) {
         for ($i = $Contents.Count - 1; $i -ge 0; $i--) {
@@ -25,8 +32,10 @@ function Get-GemmaTtsDirectorStyle {
     $context = [regex]::Replace($context,'[\r\n\t]+',' ')
     $context = [regex]::Replace($context,'\s{2,}',' ').Trim()
     if ($context.Length -gt 120) { $context = $context.Substring(0,117).TrimEnd() + '...' }
-    if ($context) { return "$script:MiraTtsDirectorCore Context: $context" }
-    return $script:MiraTtsDirectorCore
+    $styleParts = New-Object 'System.Collections.Generic.List[string]'
+    if ($director) { [void]$styleParts.Add($director) }
+    if ($context) { [void]$styleParts.Add("Context: $context") }
+    return [string]::Join(' ',@($styleParts))
 }
 
 function Get-GemmaLatestAssistantTranscript {
@@ -163,7 +172,7 @@ function Invoke-GemmaTtsWithKeyRotation {
         [Parameter(Mandatory = $true)][string]$Json
     )
     $keys = @(Get-GemmaTtsApiKeys)
-    if ($keys.Count -eq 0) { throw 'No Gemini API key configured. Set GEMINI_API or GEMINI_API_KEYS.' }
+    if ($keys.Count -eq 0) { throw 'No Gemini API key candidate configured. Set GEMINI_API_KEY or GEMINI_APIJ.' }
 
     if ($null -eq $script:MiraTtsApiKeyIndex) { $script:MiraTtsApiKeyIndex = 0 }
     $start = [int]($script:MiraTtsApiKeyIndex % $keys.Count)
@@ -223,7 +232,7 @@ function Invoke-GemmaSpeakLatest {
     }
 
     if (@(Get-GeminiApiKeys).Count -eq 0) {
-        Write-Host '[TTS] Set GEMINI_API or GEMINI_API_KEYS. Antigravity OAuth alone cannot authenticate Gemini API TTS.' -ForegroundColor Yellow
+        Write-Host '[TTS] Set GEMINI_API_KEY or GEMINI_APIJ. Antigravity OAuth alone cannot authenticate Gemini API TTS.' -ForegroundColor Yellow
         return
     }
 
@@ -231,8 +240,12 @@ function Invoke-GemmaSpeakLatest {
         New-Item -ItemType Directory -Path $script:MiraTtsAudioDirectory -Force -ErrorAction Stop | Out-Null
     }
 
+    $speechPart = @{ text = $transcript }
+    if (-not [string]::IsNullOrWhiteSpace($style)) {
+        $speechPart.speechMetadata = @{ style = $style }
+    }
     $payload = @{
-        contents = @(@{ role = 'user'; parts = @(@{ text = $transcript; speechMetadata = @{ style = $style } }) })
+        contents = @(@{ role = 'user'; parts = @($speechPart) })
         generationConfig = @{
             responseModalities = @('AUDIO')
             speechConfig = @{ voiceConfig = @{ prebuiltVoiceConfig = @{ voiceName = $script:MiraTtsVoice } } }
