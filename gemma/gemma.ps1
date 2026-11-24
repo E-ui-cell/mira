@@ -9,7 +9,7 @@ $script:CommandMode = -not [string]::IsNullOrWhiteSpace($ExplainCommand)
 if ($script:CommandMode) { $Prompt = $ExplainCommand }
 
 # ==============================================================================
-# WINDOWS POWERSHELL 5.1
+# WINDOWS POWERSHELL 5.1 / POWERSHELL 7
 # ==============================================================================
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
