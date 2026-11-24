@@ -93,6 +93,7 @@ if ([string]::IsNullOrWhiteSpace($API_KEY) -and
 
 $MODEL = $MIRA_DEFAULT_MODEL
 $script:MiraOpenAIApiKeyIndex = 0
+$script:MiraGeminiApiKeyIndex = 0
 
 $script:ActiveSystemPromptName = 'default'
 $SystemInstruction = @{
