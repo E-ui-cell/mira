@@ -138,6 +138,17 @@ if ($turnErrors.Count -gt 0) {
     $firstTurnError = $turnErrors[0]
     throw ("Turn.ps1 syntax error at line {0}, column {1}: {2}" -f $firstTurnError.Extent.StartLineNumber, $firstTurnError.Extent.StartColumnNumber, $firstTurnError.Message)
 }
+$turnSource = Get-Content -LiteralPath $turnPath -Raw
+$maxTokensCheck = $turnSource.IndexOf('if ([string]$parseState.Candidate.finishReason -match ''(?i)MAX_TOKENS'')', [StringComparison]::OrdinalIgnoreCase)
+$thoughtOnlyCheck = $turnSource.IndexOf('if ($parseState.HasThoughts)', [StringComparison]::OrdinalIgnoreCase)
+if ($maxTokensCheck -lt 0 -or $thoughtOnlyCheck -lt 0 -or $maxTokensCheck -gt $thoughtOnlyCheck) {
+    throw 'Google streaming parser must report MAX_TOKENS before classifying thought-only output.'
+}
+if (($turnSource -notmatch '\$thoughtOnlyResponse -and \$attempt -eq 0') -or
+    ($turnSource -notmatch 'GetBaseException\(\)\.Message') -or
+    ($turnSource -notmatch '\$requestStats\.HttpStatus')) {
+    throw 'Google streaming thought-only retry or provider-aware error diagnostics are missing.'
+}
 
 # Verify the line/delta/off streaming mode command changes runtime state.
 $oldStreamingMode = $script:StreamingMode
