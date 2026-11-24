@@ -144,6 +144,7 @@ try {
 
 # Verify the OpenAI key-rotation error list includes key/account failures and TPM limits,
 # but leaves ramp-rate slow_down errors on the same-key backoff path.
+$turnSource = Get-Content -LiteralPath $turnPath -Raw -Encoding UTF8
 $rotationCodes = @($script:OpenAIKeyRotationErrorCodes)
 foreach ($requiredRotationCode in @(
     'invalid_api_key',
@@ -170,7 +171,6 @@ if ($turnSource -notmatch '\$retryErrorCodes\s*=\s*@\(' -or
 
 # Verify the Responses SSE worker extracts failure codes and can replay without
 # printing an already-visible prefix twice.
-$turnSource = Get-Content -LiteralPath $turnPath -Raw -Encoding UTF8
 if ($turnSource -notmatch '\$streamErrorCode\s*=\s*\[string\]\$streamErrorObject\.code' -or
     $turnSource -notmatch 'AddArgument\(\@\(\$script:OpenAIKeyRotationErrorCodes\)\)' -or
     $turnSource -notmatch '\$openAIReplayState' -or
