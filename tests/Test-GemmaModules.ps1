@@ -130,15 +130,48 @@ try {
         $script:MiraUsageStats.OpenAIRateLimits['x-ratelimit-remaining-project-tokens'] -ne '40000') {
         throw '.usage did not retain the used key slot or OpenAI rate-limit headers.'
     }
-    Add-GemmaUsageRecord -Provider 'openai' -Model 'gpt-6-luna' -Succeeded $false -HttpAttempts 1 -KeyIndex 2 -KeyCount 3 -KeySlotsTried @(3) -HttpStatus 429 -ErrorMessage 'TPM limit'
+    Add-GemmaUsageRecord -Provider 'openai' -Model 'gpt-6-luna' -Succeeded $false -HttpAttempts 1 -KeyIndex 2 -KeyCount 3 -KeySlotsTried @(3) -HttpStatus 200 -ErrorCode 'rate_limit_exceeded' -ErrorMessage 'TPM limit'
     if ($script:MiraUsageStats.Requests -ne 2 -or
         $script:MiraUsageStats.FailedRequests -ne 1 -or
         $script:MiraUsageStats.ByProvider['openai'].FailedRequests -ne 1 -or
+        $script:MiraUsageStats.LastRequest.ErrorCode -ne 'rate_limit_exceeded' -or
         $script:MiraUsageStats.LastRequest.ErrorMessage -ne 'TPM limit') {
         throw '.usage did not record a failed request.'
     }
 } finally {
     $script:MiraUsageStats = $oldUsageStats
+}
+
+# Verify the OpenAI key-rotation error list includes key/account failures and TPM limits,
+# but leaves ramp-rate slow_down errors on the same-key backoff path.
+$rotationCodes = @($script:OpenAIKeyRotationErrorCodes)
+foreach ($requiredRotationCode in @(
+    'invalid_api_key',
+    'authentication_error',
+    'insufficient_permissions',
+    'rate_limit_exceeded',
+    'insufficient_quota',
+    'credit_balance_exhausted',
+    'organization_usage_limit_exceeded',
+    'organization_spend_limit_exceeded',
+    'project_spend_limit_exceeded'
+)) {
+    if ($rotationCodes -notcontains $requiredRotationCode) {
+        throw "OpenAI key rotation list omitted $requiredRotationCode."
+    }
+}
+if ($rotationCodes -contains 'slow_down' -or $rotationCodes -contains 'server_is_overloaded') {
+    throw 'Transient OpenAI ramp/overload errors must retry the same key before rotating.'
+}
+
+# Verify the Responses SSE worker extracts failure codes and can replay without
+# printing an already-visible prefix twice.
+$turnSource = Get-Content -LiteralPath $turnPath -Raw -Encoding UTF8
+if ($turnSource -notmatch '\$streamErrorCode\s*=\s*\[string\]\$streamErrorObject\.code' -or
+    $turnSource -notmatch '\$openAIReplayState' -or
+    $turnSource -notmatch '\$emitOpenAIText' -or
+    $turnSource -match 'if \(\$streamResponses -and \$streamState\.TextStarted\)') {
+    throw 'OpenAI Responses stream failure classification/replay logic is incomplete.'
 }
 
 # Verify .usage is reachable from the interactive command loop and Tab list.
