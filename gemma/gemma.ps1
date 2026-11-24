@@ -377,7 +377,7 @@ function New-GptWebRequest {
     }
     foreach ($cookieName in $cookieMap.Keys) {
         try {
-            $cookie = New-Object System.Net.Cookie([string]$cookieName, [string]$cookieMap[$cookieName], '/', 'chatgpt.com')
+            $cookie = New-Object -TypeName System.Net.Cookie -ArgumentList @([string]$cookieName, [string]$cookieMap[$cookieName], '/', 'chatgpt.com')
             $cookie.Secure = $true
             $request.CookieContainer.Add([uri]'https://chatgpt.com/', $cookie)
         } catch {
@@ -1006,6 +1006,7 @@ function Invoke-GemmaAuthCommand {
         try {
             $session = Import-GptHarSession -Path $path
             $catalog = Get-GptBrowserModels -Session $session
+            if ($null -eq $catalog -or $null -eq $catalog.models) { throw 'The ChatGPT models endpoint did not return a models array.' }
             $script:GptSession = $session
             $script:GptHarPath = $session.Path
             $modelCount = @($catalog.models).Count
@@ -1572,7 +1573,7 @@ function Invoke-GemmaProviderCommand {
     $script:Provider = $value
     Write-Host "[Provider switched to: $script:Provider]" -ForegroundColor Green
     if ($value -eq 'gpt') {
-        Write-Host '[Experimental ChatGPT browser-session transport; no OpenAI API key is used. Text-only; local tools are unavailable; .effort is not applied.]' -ForegroundColor DarkGray
+        Write-Host '[Experimental ChatGPT browser-session transport. Requests append to the HAR conversation; text-only; local tools are unavailable; .effort is not applied.]' -ForegroundColor DarkGray
     } else {
         Write-Host '[Model name retained; use .model to select from this provider catalogue.]' -ForegroundColor DarkGray
     }
