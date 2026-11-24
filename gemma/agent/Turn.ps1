@@ -121,6 +121,7 @@
                 $streamState = [hashtable]::Synchronized(@{
                     TextStarted = $false
                     Request = $null
+                    Response = $null
                 })
             }
 
@@ -504,9 +505,13 @@
                                     usageMetadata = $parseState.Usage
                                 }
                                 if ($providerName -eq 'gemini') {
-                                    return ($completedResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru)
+                                    $streamResponse = ($completedResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru)
+                                } else {
+                                    $streamResponse = [pscustomobject]@{ response = $completedResponse }
                                 }
-                                return [pscustomobject]@{ response = $completedResponse }
+                                # Preserve the exact assembled object across the runspace boundary.
+                                $streamState.Response = $streamResponse
+                                return $streamResponse
                             } catch {
                                 $failure = $_
                                 $responseObject = $failure.Exception.Response
@@ -525,6 +530,7 @@
                                 $retryAfter = 0
                                 $errorBody = ''
                                 $errorReason = ''
+                                $apiErrorMessage = ''
                                 if ($null -ne $responseObject) {
                                     try { $status = [int]$responseObject.StatusCode } catch {}
                                     try { [void][int]::TryParse([string]$responseObject.Headers['Retry-After'],[ref]$retryAfter) } catch {}
@@ -542,6 +548,7 @@
                                 try {
                                     if (-not [string]::IsNullOrWhiteSpace($errorBody)) {
                                         $errorObject = $errorBody | ConvertFrom-Json -ErrorAction Stop
+                                        $apiErrorMessage = [string]$errorObject.error.message
                                         $errorReason = [string]$errorObject.error.status
                                         if ([string]::IsNullOrWhiteSpace($errorReason)) { $errorReason = [string]$errorObject.error.code }
                                         foreach ($errorDetail in @($errorObject.error.details)) {
@@ -572,11 +579,15 @@
                                 $capacityExhausted = ($errorReason -match '(?i)MODEL_CAPACITY_EXHAUSTED') -or
                                     ($errorBody -match '(?i)MODEL_CAPACITY_EXHAUSTED|error_number["\s:]+2010')
                                 $requestStats.ErrorCode = $errorReason
-                                $requestStats.ErrorMessage = $failureMessage
+                                $diagnosticMessage = $apiErrorMessage
+                                if ([string]::IsNullOrWhiteSpace($diagnosticMessage)) {
+                                    $diagnosticMessage = if (-not [string]::IsNullOrWhiteSpace($errorBody)) { $errorBody } else { $failureMessage }
+                                }
+                                $requestStats.ErrorMessage = $diagnosticMessage
                                 $lastFailure = if ($status -gt 0) {
-                                    "HTTP $status $errorReason $failureMessage $errorBody"
+                                    "HTTP $status $errorReason $diagnosticMessage"
                                 } else {
-                                    "$failureMessage $errorBody".Trim()
+                                    $diagnosticMessage
                                 }
 
                                 if ($status -eq 429 -and $errorReason -match '(?i)BILLING_DISABLED') {
@@ -1148,6 +1159,9 @@
                 # stream can be inspected. Preserve the original exception.
                 $endInvokeFailure = $_
             }
+            if ($null -eq $endInvokeFailure -and $streamGoogle -and $null -ne $streamState.Response) {
+                $response = $streamState.Response
+            }
             $hasRunspaceError = ($null -ne $endInvokeFailure -or $powershell.Streams.Error.Count -gt 0)
             $runspaceErrors = @($powershell.Streams.Error)
 
@@ -1201,14 +1215,21 @@
 
                     if (($usingOpenAI -or $streamGoogle) -and $runspaceErrors.Count -gt 0) {
                         $workerError = [string]$runspaceErrors[$runspaceErrors.Count - 1].Exception.Message
+                        if ($streamGoogle -and [int]$requestStats.HttpStatus -gt 0 -and
+                            -not [string]::IsNullOrWhiteSpace([string]$requestStats.ErrorMessage)) {
+                            $workerLabel = if ($usingAntigravityOAuth) { 'Antigravity' } else { 'Gemini' }
+                            throw "$workerLabel streaming failure (HTTP $([int]$requestStats.HttpStatus)): $([string]$requestStats.ErrorMessage)"
+                        }
                         if (-not [string]::IsNullOrWhiteSpace($workerError)) {
                             $workerLabel = if ($usingAntigravityOAuth) { 'Antigravity' } elseif ($usingOpenAI) { 'OpenAI' } else { 'Gemini' }
                             throw "$workerLabel API Failure: $workerError"
                         }
                     }
                     if ($streamGoogle) {
-                        $workerError = ''
-                        try { $workerError = [string]$responseException.GetBaseException().Message } catch {}
+                        $workerError = [string]$requestStats.ErrorMessage
+                        if ([string]::IsNullOrWhiteSpace($workerError)) {
+                            try { $workerError = [string]$responseException.GetBaseException().Message } catch {}
+                        }
                         if ([string]::IsNullOrWhiteSpace($workerError)) { $workerError = [string]$responseException.Message }
                         $workerLabel = if ($usingAntigravityOAuth) { 'Antigravity' } else { 'Gemini' }
                         $httpStatus = [int]$requestStats.HttpStatus
@@ -1310,24 +1331,50 @@
                 }
             }
             if ([int]$requestStats.HttpStatus -le 0) { $requestStats.HttpStatus = 200 }
-            Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $true -InputTokens $roundPromptTokens -OutputTokens $roundCompletionTokens -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorCode ([string]$requestStats.ErrorCode) -ErrorMessage ([string]$requestStats.ErrorMessage)
 
-            if ($null -eq $response.candidates -or $response.candidates.Count -eq 0) {
+            if ($null -eq $response.candidates -or @($response.candidates).Count -eq 0) {
+                $candidateFailureCode = 'NO_CANDIDATES'
+                $candidateFailureMessage = 'Google returned no candidates. Possible safety filter block or malformed request context.'
                 if ($null -ne $response.error) {
-                    throw "API Error JSON: $($response.error.message)"
+                    $candidateFailureCode = if ($null -ne $response.error.code) { [string]$response.error.code } else { 'GOOGLE_API_ERROR' }
+                    $candidateFailureMessage = [string]$response.error.message
+                    if ([string]::IsNullOrWhiteSpace($candidateFailureMessage)) { $candidateFailureMessage = 'Google returned an error without a message.' }
                 }
-                throw "No candidates returned. Possible safety filter block or malformed context."
+                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -InputTokens $roundPromptTokens -OutputTokens $roundCompletionTokens -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorCode $candidateFailureCode -ErrorMessage $candidateFailureMessage
+                throw $candidateFailureMessage
             }
 
             $content = $response.candidates[0].content
-            if ($null -eq $content -or $null -eq $content.parts -or $content.parts.Count -eq 0) {
-                $reason = $response.candidates[0].finishReason
-                throw "Generation halted by API. Finish Reason: $reason"
+            $hasContentParts = ($null -ne $content -and $null -ne $content.parts -and @($content.parts).Count -gt 0)
+            if (-not $hasContentParts -and $streamGoogle -and $streamTextThisRequest -and
+                -not [string]::IsNullOrWhiteSpace([string]$streamDisplayState.OutputText)) {
+                # Some SSE responses deliver the visible text but omit content.parts
+                # from the final assembled candidate. Preserve the actual stream.
+                $recoveredContent = @{
+                    role = 'model'
+                    parts = @(@{ text = [string]$streamDisplayState.OutputText })
+                }
+                $streamCandidate = $response.candidates[0]
+                if ($streamCandidate -is [System.Collections.IDictionary]) {
+                    $streamCandidate['content'] = $recoveredContent
+                } else {
+                    [void]($streamCandidate | Add-Member -MemberType NoteProperty -Name content -Value $recoveredContent -Force -PassThru)
+                }
+                $content = $recoveredContent
+                $hasContentParts = $true
+            }
+            if (-not $hasContentParts) {
+                $reason = [string]$response.candidates[0].finishReason
+                $failureReason = if ([string]::IsNullOrWhiteSpace($reason)) { 'unspecified (Google omitted finishReason)' } else { $reason }
+                $candidateFailureMessage = "Google returned no response text or function calls (finishReason: $failureReason)."
+                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -InputTokens $roundPromptTokens -OutputTokens $roundCompletionTokens -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorCode 'EMPTY_CANDIDATE_CONTENT' -ErrorMessage $candidateFailureMessage
+                throw $candidateFailureMessage
             }
 
             # Preserve every returned part exactly, including functionCall,
             # ids and any other fields required by Gemini's tool context.
             $modelParts = @($content.parts)
+            Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $true -InputTokens $roundPromptTokens -OutputTokens $roundCompletionTokens -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorCode ([string]$requestStats.ErrorCode) -ErrorMessage ([string]$requestStats.ErrorMessage)
 
             $functionCalls = @(
                 $modelParts | Where-Object { $null -ne $_.functionCall } |
