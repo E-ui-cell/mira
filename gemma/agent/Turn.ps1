@@ -98,6 +98,9 @@
             RateLimitHeaders = @{}
             RequestId = ''
             HttpStatus = 0
+            ErrorCode = ''
+            ErrorType = ''
+            StreamEventType = ''
             ErrorMessage = ''
         })
 
@@ -138,7 +141,7 @@
             $powershell = [Management.Automation.PowerShell]::Create()
             $powershell.Runspace = $runspace
             [void]$powershell.AddScript({
-                param($u, $b, $h, $keyPool, $keyStart, $providerName, $streamResponses, $streamQueue, $streamState, $streamGoogle, $includeThoughts, $requestStats)
+                param($u, $b, $h, $keyPool, $keyStart, $providerName, $streamResponses, $streamQueue, $streamState, $streamGoogle, $includeThoughts, $requestStats, $keyRotationErrorCodes)
                 $getOpenAIRateHeaders = {
                     param($Headers)
                     $snapshot = @{}
@@ -603,10 +606,43 @@
                 }
                 if ($providerName -eq 'openai') {
                     $lastFailure = ''
+                    $openAIReplayState = @{ Text = ''; ReplayLimit = 0; ReplayOffset = 0 }
+                    $emitOpenAIText = {
+                        param([string]$Value)
+                        if ([string]::IsNullOrEmpty($Value)) { return }
+                        if ($openAIReplayState.ReplayLimit -gt 0 -and $openAIReplayState.ReplayOffset -lt $openAIReplayState.ReplayLimit) {
+                            $matched = 0
+                            while ($matched -lt $Value.Length -and
+                                   $openAIReplayState.ReplayOffset -lt $openAIReplayState.ReplayLimit -and
+                                   $Value[$matched] -ceq $openAIReplayState.Text[$openAIReplayState.ReplayOffset]) {
+                                $matched++
+                                $openAIReplayState.ReplayOffset++
+                            }
+                            if ($matched -gt 0) { $Value = $Value.Substring($matched) }
+                            if ($Value.Length -gt 0 -and $openAIReplayState.ReplayOffset -lt $openAIReplayState.ReplayLimit) {
+                                # The regenerated prefix diverged; keep the visible
+                                # first attempt and append only the new suffix.
+                                $openAIReplayState.ReplayOffset = $openAIReplayState.ReplayLimit
+                            }
+                        }
+                        if (-not [string]::IsNullOrEmpty($Value)) {
+                            $openAIReplayState.Text += $Value
+                            $streamState.TextStarted = $true
+                            $streamQueue.Enqueue($Value)
+                        }
+                    }
                     for ($keyOffset = 0; $keyOffset -lt $keyPool.Count; $keyOffset++) {
                         $keyIndex = ($keyStart + $keyOffset) % $keyPool.Count
                         $authHeaders = @{ Authorization = ('Bearer ' + [string]$keyPool[$keyIndex]) }
                         for ($attempt = 0; $attempt -lt 3; $attempt++) {
+                            $requestStats.ErrorCode = ''
+                            $requestStats.ErrorType = ''
+                            $requestStats.StreamEventType = ''
+                            $requestStats.ErrorMessage = ''
+                            if ($openAIReplayState.Text.Length -gt 0) {
+                                $openAIReplayState.ReplayLimit = $openAIReplayState.Text.Length
+                                $openAIReplayState.ReplayOffset = 0
+                            }
                             $requestStats.HttpAttempts = [int]$requestStats.HttpAttempts + 1
                             $requestStats.LastKeyIndex = $keyIndex
                             $requestStats.KeyCount = $keyPool.Count
@@ -681,24 +717,44 @@
                                         if ($eventType -eq 'response.output_text.delta' -or $eventType -eq 'response.refusal.delta') {
                                             $deltaText = [string]$sseEvent.delta
                                             if (-not [string]::IsNullOrEmpty($deltaText)) {
-                                                $streamState.TextStarted = $true
-                                                $streamQueue.Enqueue($deltaText)
+                                                & $emitOpenAIText $deltaText
                                             }
                                         } elseif ($eventType -eq 'response.completed') {
                                             $completedResponse = $sseEvent.response
                                             break
                                         } elseif ($eventType -eq 'response.failed' -or $eventType -eq 'response.incomplete' -or $eventType -eq 'error') {
                                             $streamError = ''
+                                            $streamErrorCode = ''
+                                            $streamErrorType = ''
+                                            $streamErrorObject = $null
                                             if ($null -ne $sseEvent.response -and $null -ne $sseEvent.response.error) {
-                                                $streamError = [string]$sseEvent.response.error.message
+                                                $streamErrorObject = $sseEvent.response.error
+                                            } elseif ($null -ne $sseEvent.error) {
+                                                $streamErrorObject = $sseEvent.error
                                             }
-                                            if ([string]::IsNullOrWhiteSpace($streamError) -and $null -ne $sseEvent.error) {
-                                                $streamError = [string]$sseEvent.error.message
+                                            if ($null -ne $streamErrorObject) {
+                                                $streamError = [string]$streamErrorObject.message
+                                                $streamErrorCode = [string]$streamErrorObject.code
+                                                $streamErrorType = [string]$streamErrorObject.type
                                             }
                                             if ([string]::IsNullOrWhiteSpace($streamError) -and $null -ne $sseEvent.response.incomplete_details) {
                                                 $streamError = [string]$sseEvent.response.incomplete_details.reason
                                             }
                                             if ([string]::IsNullOrWhiteSpace($streamError)) { $streamError = $eventJson }
+                                            if ([string]::IsNullOrWhiteSpace($streamErrorCode)) {
+                                                if ($streamError -match '(?i)rate limit reached|tokens per minute|tokens per min|requests per minute|requests per min') {
+                                                    $streamErrorCode = 'rate_limit_exceeded'
+                                                } elseif ($streamError -match '(?i)invalid api key|incorrect api key') {
+                                                    $streamErrorCode = 'invalid_api_key'
+                                                } elseif ($streamError -match '(?i)credit balance exhausted') {
+                                                    $streamErrorCode = 'credit_balance_exhausted'
+                                                } elseif ($streamError -match '(?i)insufficient quota') {
+                                                    $streamErrorCode = 'insufficient_quota'
+                                                }
+                                            }
+                                            $requestStats.StreamEventType = $eventType
+                                            $requestStats.ErrorCode = $streamErrorCode
+                                            $requestStats.ErrorType = $streamErrorType
                                             $requestStats.ErrorMessage = $streamError
                                             throw "OpenAI Responses stream failed: $streamError"
                                         }
@@ -746,17 +802,53 @@
                                         }
                                     } catch {}
                                 }
-                                try { $errorCode = [string](($errorBody | ConvertFrom-Json -ErrorAction Stop).error.code) } catch {}
+                                try {
+                                    $httpError = $errorBody | ConvertFrom-Json -ErrorAction Stop
+                                    if ([string]::IsNullOrWhiteSpace([string]$requestStats.ErrorCode)) {
+                                        $requestStats.ErrorCode = [string]$httpError.error.code
+                                    }
+                                    if ([string]::IsNullOrWhiteSpace([string]$requestStats.ErrorType)) {
+                                        $requestStats.ErrorType = [string]$httpError.error.type
+                                    }
+                                } catch {}
+                                $errorCode = [string]$requestStats.ErrorCode
+                                $errorType = [string]$requestStats.ErrorType
+                                $errorMessage = [string]$requestStats.ErrorMessage
+                                if ([string]::IsNullOrWhiteSpace($errorMessage)) { $errorMessage = [string]$failure.Exception.Message }
+                                if ([string]::IsNullOrWhiteSpace($errorCode)) {
+                                    if ($errorMessage -match '(?i)rate limit reached|tokens per minute|tokens per min|requests per minute|requests per min') {
+                                        $errorCode = 'rate_limit_exceeded'
+                                    } elseif ($errorMessage -match '(?i)invalid api key|incorrect api key') {
+                                        $errorCode = 'invalid_api_key'
+                                    } elseif ($errorMessage -match '(?i)credit balance exhausted') {
+                                        $errorCode = 'credit_balance_exhausted'
+                                    } elseif ($errorMessage -match '(?i)insufficient quota') {
+                                        $errorCode = 'insufficient_quota'
+                                    }
+                                    $requestStats.ErrorCode = $errorCode
+                                }
                                 $lastFailure = "HTTP $status $errorCode $($failure.Exception.Message) $errorBody"
                                 if ([string]::IsNullOrWhiteSpace([string]$requestStats.ErrorMessage)) { $requestStats.ErrorMessage = $lastFailure }
-                                if ($streamResponses -and $streamState.TextStarted) { throw $lastFailure }
-                                if ($status -eq 429 -and $errorCode -match '(?i)insufficient_quota|credit_balance_exhausted|organization_usage_limit_exceeded') { throw $lastFailure }
-                                if ($status -eq 401 -or ($status -eq 403 -and ($errorCode -match '(?i)permission|access|api_key' -or $errorBody -match '(?i)api.?key|permission denied'))) {
+
+                                # These failures belong to a key/account/project candidate:
+                                # try the next explicitly configured key immediately.
+                                $rotateKey = ($keyRotationErrorCodes -contains $errorCode.ToLowerInvariant()) -or
+                                    ($status -eq 401) -or
+                                    ($status -eq 403 -and ($errorType -match '(?i)permission' -or
+                                        $errorCode -match '(?i)permission|access|api_key' -or
+                                        $errorMessage -match '(?i)api.?key|permission denied'))
+                                if ($rotateKey) {
                                     if ($keyOffset -lt ($keyPool.Count - 1)) { break }
                                     throw $lastFailure
                                 }
                                 if ($status -eq 403) { throw $lastFailure }
-                                $transient = ($status -in @(0,408,429,500,502,503,504)) -or ([string]$failure.Exception.Message -match '(?i)timeout|connection reset|connection closed|name resolution')
+
+                                # Transient service/ramp-limit errors retry the same key first.
+                                # The replay buffer suppresses text already shown to the user.
+                                $retryErrorCodes = @('rate_limit_error','slow_down','server_error','server_overloaded','server_is_overloaded','internal_server_error','service_unavailable_error')
+                                $transient = ($status -in @(0,408,409,429,500,502,503,504)) -or
+                                    ($retryErrorCodes -contains $errorCode.ToLowerInvariant()) -or
+                                    ([string]$failure.Exception.Message -match '(?i)timeout|connection reset|connection closed|name resolution|stream ended before response.completed|unexpected end|unexpected eof')
                                 if (-not $transient) { throw $lastFailure }
                                 if ($attempt -ge 2) {
                                     if ($keyOffset -lt ($keyPool.Count - 1)) { break }
@@ -793,7 +885,7 @@
                         Start-Sleep -Seconds ([int]$delay)
                     }
                 }
-            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders).AddArgument($requestApiKeys).AddArgument($requestKeyIndex).AddArgument($requestProviderName).AddArgument([bool]$streamOpenAIResponses).AddArgument($streamQueue).AddArgument($streamState).AddArgument([bool]$streamGoogle).AddArgument([bool]$script:VerboseOutput).AddArgument($requestStats)
+            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders).AddArgument($requestApiKeys).AddArgument($requestKeyIndex).AddArgument($requestProviderName).AddArgument([bool]$streamOpenAIResponses).AddArgument($streamQueue).AddArgument($streamState).AddArgument([bool]$streamGoogle).AddArgument([bool]$script:VerboseOutput).AddArgument($requestStats).AddArgument(@($script:OpenAIKeyRotationErrorCodes))
             $asyncResult = $powershell.BeginInvoke()
 
             $cancelled = $false
@@ -983,7 +1075,11 @@
             $runspaceErrors = @($powershell.Streams.Error)
 
             if ($hasRunspaceError) {
-                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorMessage ([string]$requestStats.ErrorMessage)
+                if ($usingOpenAI -and $requestApiKeys.Count -gt 1 -and
+                    $requestStats.KeySlotsTried.Count -gt 1 -and $requestStats.LastKeyIndex -ge 0) {
+                    $script:MiraOpenAIApiKeyIndex = ($requestStats.LastKeyIndex + 1) % $requestApiKeys.Count
+                }
+                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorCode ([string]$requestStats.ErrorCode) -ErrorMessage ([string]$requestStats.ErrorMessage)
                 if ($null -ne $endInvokeFailure) {
                     # EndInvoke may wrap the WebException in one or more
                     # MethodInvocationException/RuntimeException layers.
@@ -1105,7 +1201,7 @@
             }
 
             if ($null -eq $response) {
-                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorMessage ([string]$requestStats.ErrorMessage)
+                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorCode ([string]$requestStats.ErrorCode) -ErrorMessage ([string]$requestStats.ErrorMessage)
                 throw "The API returned a null or empty response object."
             }
 
