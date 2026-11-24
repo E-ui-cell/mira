@@ -93,7 +93,9 @@ $script:GeminiApiKeys = @(
 $script:MiraGeminiApiKeyIndex = 0
 
 $script:OpenAIApiKeys = @(
-    $env:OPENAI_API_KEY  # API 1
+    $env:OPENAI_APIJ
+    $env:OPENAI_API_OLD
+    $env:OPENAI_API_KEY
 ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
     ForEach-Object { ([string]$_).Trim() }
 $script:MiraOpenAIApiKeyIndex = 0

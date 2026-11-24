@@ -466,6 +466,14 @@ IMPLEMENTATION PROGRESS (BRANCH thin)
   before GUI implementation begins.
 - This is an incremental rewrite, not a completed rewrite or release-ready build.
 
+- Planned, not implemented: TTS-only care-mode rotation across three Google
+  TTS models (Flash-Lite primary, Flash secondary, 2.5 Flash tertiary) and all
+  configured Gemini API keys. Distribute successive synthesis requests across
+  key/model combinations proactively; track per-combination quota/rate-limit
+  state and move immediately to another available combination on throttling.
+  Cycle back to primary combinations when cooldowns expire. Regular text-model
+  provider rotation is out of scope for this item.
+
 CURRENT INVENTORY NOTES
 -----------------------
 The reviewed script currently contains 41 functions and about 2,639 lines.
