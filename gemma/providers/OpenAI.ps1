@@ -273,17 +273,30 @@ function Build-GemmaOpenAIResponsesPayload {
     if (-not [string]::IsNullOrWhiteSpace($instructions)) { $payload.instructions = $instructions }
 
     $tools = @(ConvertTo-GemmaOpenAITools -GeminiTools $GeminiTools)
-    if ($tools.Count -gt 0) {
-        $responsesTools = New-Object System.Collections.Generic.List[object]
-        foreach ($tool in $tools) {
-            [void]$responsesTools.Add(@{
-                type = 'function'
-                name = [string]$tool.function.name
-                description = [string]$tool.function.description
-                parameters = $tool.function.parameters
-                strict = $false
-            })
-        }
+    $responsesTools = New-Object System.Collections.Generic.List[object]
+    foreach ($tool in $tools) {
+        [void]$responsesTools.Add(@{
+            type = 'function'
+            name = [string]$tool.function.name
+            description = [string]$tool.function.description
+            parameters = $tool.function.parameters
+            strict = $false
+        })
+    }
+
+    # Luna supports OpenAI-hosted web search directly through the Responses API.
+    # This is independent of Gemini's Antigravity-backed web_search function.
+    # Keep all tools disabled in command-generation mode.
+    if (-not $script:CommandMode) {
+        [void]$responsesTools.Add(@{
+            type = 'web_search'
+            search_context_size = 'medium'
+            external_web_access = $true
+            user_location = @{ type = 'approximate' }
+        })
+    }
+
+    if ($responsesTools.Count -gt 0) {
         $payload.tools = @($responsesTools.ToArray())
         $payload.tool_choice = 'auto'
     }
@@ -336,11 +349,26 @@ function ConvertFrom-GemmaOpenAIResponsesResponse {
     }
 
     $parts = New-Object System.Collections.Generic.List[object]
+    $webCitations = New-Object System.Collections.Generic.List[object]
+    $seenWebCitationUrls = @{}
     foreach ($item in $outputItems) {
         if ($item.type -eq 'message') {
             foreach ($content in @($item.content)) {
                 if ($content.type -eq 'output_text' -and -not [string]::IsNullOrWhiteSpace([string]$content.text)) {
                     [void]$parts.Add(@{ text=[string]$content.text })
+                    foreach ($annotation in @($content.annotations)) {
+                        if ($annotation.type -ne 'url_citation') { continue }
+                        $citationUrl = ([string]$annotation.url).Trim()
+                        if ($citationUrl -notmatch '^https?://') { continue }
+                        if ($seenWebCitationUrls.ContainsKey($citationUrl)) { continue }
+                        $seenWebCitationUrls[$citationUrl] = $true
+                        [void]$webCitations.Add([pscustomobject]@{
+                            url = $citationUrl
+                            title = [string]$annotation.title
+                            startIndex = $annotation.start_index
+                            endIndex = $annotation.end_index
+                        })
+                    }
                 } elseif ($content.type -eq 'refusal' -and $content.refusal) {
                     [void]$parts.Add(@{ text=[string]$content.refusal })
                 }
@@ -375,5 +403,33 @@ function ConvertFrom-GemmaOpenAIResponsesResponse {
         openaiResponseId = [string]$OpenAIResponse.id
         openaiModel = [string]$OpenAIResponse.model
         openaiOutputItems = $outputItems
+        webCitations = @($webCitations.ToArray())
     }
+}
+
+function Format-GemmaOpenAIWebCitations {
+    param([object[]]$Citations)
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $seenUrls = @{}
+    foreach ($citation in @($Citations)) {
+        if ($null -eq $citation) { continue }
+        $url = ([string]$citation.url).Trim()
+        if ([string]::IsNullOrWhiteSpace($url)) { continue }
+
+        $parsedUri = $null
+        if (-not [Uri]::TryCreate($url, [UriKind]::Absolute, [ref]$parsedUri)) { continue }
+        if ($parsedUri.Scheme -ne 'http' -and $parsedUri.Scheme -ne 'https') { continue }
+        if ($seenUrls.ContainsKey($url)) { continue }
+        $seenUrls[$url] = $true
+
+        $title = [regex]::Replace([string]$citation.title, '[\x00-\x1F\x7F]', ' ').Trim()
+        if ([string]::IsNullOrWhiteSpace($title)) { $title = $url }
+        $number = [int]($lines.Count / 2) + 1
+        [void]$lines.Add(('[{0}] {1}' -f $number, $title))
+        [void]$lines.Add(('    ' + $url))
+    }
+
+    if ($lines.Count -eq 0) { return '' }
+    return ('Sources:' + [Environment]::NewLine + [string]::Join([Environment]::NewLine, $lines.ToArray()))
 }
