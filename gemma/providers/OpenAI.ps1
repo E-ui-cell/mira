@@ -2,18 +2,8 @@
 # OpenAI Chat Completions provider. No SDK or external runtime dependency.
 
 function Get-GemmaOpenAIApiKeys {
-    $raw = @()
-    if (-not [string]::IsNullOrWhiteSpace($env:OPENAI_API_KEYS)) { $raw += ($env:OPENAI_API_KEYS -split '[;,\r\n]+') }
-    foreach ($name in @('OPENAI_API_KEY','OPENAI_API')) {
-        $value = [Environment]::GetEnvironmentVariable($name)
-        if (-not [string]::IsNullOrWhiteSpace($value)) { $raw += $value }
-    }
-    $seen = @{}
-    $keys = @(foreach ($item in $raw) {
-        $key = ([string]$item).Trim().Trim('"').Trim("'")
-        if ($key -and -not $seen.ContainsKey($key)) { $seen[$key] = $true; $key }
-    })
-    return $keys
+    # Return only the explicit candidates configured in Defaults.ps1.
+    return @($script:OpenAIApiKeys)
 }
 
 function ConvertTo-GemmaOpenAIMessageContent {
