@@ -141,6 +141,13 @@ try {
     $script:MiraUsageStats = $oldUsageStats
 }
 
+# Verify .usage is reachable from the interactive command loop and Tab list.
+$mainScriptText = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\gemma.ps1') -Raw -Encoding UTF8
+$chatLoopText = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\agent\ChatLoop.ps1') -Raw -Encoding UTF8
+if ($mainScriptText -notmatch "'\.usage'" -or $chatLoopText -notmatch "Invoke-GemmaUsageCommand") {
+    throw '.usage is missing from command completion or interactive dispatch.'
+}
+
 foreach ($functionName in $requiredFunctions) {
     $command = Get-Command -Name $functionName -CommandType Function -ErrorAction SilentlyContinue
     if ($null -eq $command) {
