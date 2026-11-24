@@ -53,6 +53,7 @@ $MIRA_DEFAULT_PERMISSION = 'ask'            # 'ask' or 'autopilot'; ASK prompt d
 $MIRA_DEFAULT_GROUNDING = $true              # Global master switch for all Google Search grounding
 $MIRA_ENABLE_AGENTIC_WEB_SEARCH = $true       # Allow Gemini API models to call web_search through Antigravity OAuth
 $MIRA_DEFAULT_VERBOSE = $false                # Show provider thought summaries only when enabled with .verbose
+$MIRA_DEFAULT_STREAMING_MODE = 'delta'          # 'line', 'delta', or 'off'; delta preserves immediate Luna output
 
 # OpenAI settings. Luna uses Responses API; other OpenAI models use Chat Completions.
 # Token limit maps to max_output_tokens (Responses) or max_completion_tokens (Chat Completions).
@@ -194,6 +195,8 @@ $GeminiSafetySettings = @(
 $script:GoogleSearchGrounding = [bool]$MIRA_DEFAULT_GROUNDING
 $script:AgenticWebSearchEnabled = [bool]$MIRA_ENABLE_AGENTIC_WEB_SEARCH
 $script:VerboseOutput = [bool]$MIRA_DEFAULT_VERBOSE
+$script:StreamingMode = ([string]$MIRA_DEFAULT_STREAMING_MODE).Trim().ToLowerInvariant()
+if ($script:StreamingMode -notin @('off','line','delta')) { $script:StreamingMode = 'delta' }
 $script:Provider = $MIRA_DEFAULT_PROVIDER
 $script:GemmaLastGeminiProvider = if ($script:Provider -eq 'openai') { 'gemini' } else { $script:Provider }
 $script:Effort = $MIRA_DEFAULT_EFFORT
