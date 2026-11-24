@@ -165,6 +165,7 @@ try {
         OutputTokens = 0
         ByProvider = @{}
         LastRequest = $null
+        ProviderRateLimits = @{}
         OpenAIRateLimits = @{}
     }
     Add-GemmaUsageRecord -Provider 'openai' -Model 'gpt-6-luna' -Succeeded $true -InputTokens 123 -OutputTokens 45 -HttpAttempts 2 -KeyIndex 1 -KeyCount 3 -KeySlotsTried @(2,3) -RateLimitHeaders @{ 'x-ratelimit-limit-tokens' = '100000'; 'x-ratelimit-remaining-tokens' = '50000'; 'x-ratelimit-reset-tokens' = '1m'; 'x-ratelimit-remaining-project-tokens' = '40000' } -RequestId 'req_usage_test' -HttpStatus 200
@@ -188,6 +189,47 @@ try {
         $script:MiraUsageStats.LastRequest.ErrorCode -ne 'rate_limit_exceeded' -or
         $script:MiraUsageStats.LastRequest.ErrorMessage -ne 'TPM limit') {
         throw '.usage did not record a failed request.'
+    }
+
+    # Usage diagnostics must follow the active provider, not always show OpenAI.
+    $oldUsageProvider = $script:Provider
+    $oldUsageModel = $script:MODEL
+    $oldGeminiKeys = @($script:GeminiApiKeys)
+    $oldGeminiKeyIndex = $script:MiraGeminiApiKeyIndex
+    try {
+        $script:GeminiApiKeys = @('gemini-usage-test-key-1','gemini-usage-test-key-2')
+        $script:MiraGeminiApiKeyIndex = 1
+        $script:Provider = 'gemini'
+        $script:MODEL = 'gemini-3.1-flash-lite'
+        Add-GemmaUsageRecord -Provider 'gemini' -Model $script:MODEL -Succeeded $true -InputTokens 77 -OutputTokens 12 -HttpAttempts 1 -KeyIndex 0 -KeyCount 2 -KeySlotsTried @(1) -RateLimitHeaders @{ 'retry-after' = '30'; 'x-ratelimit-remaining-requests' = '8' } -RequestId 'google_usage_test' -HttpStatus 200
+
+        if (-not $script:MiraUsageStats.ProviderRateLimits.ContainsKey('gemini') -or
+            $script:MiraUsageStats.ProviderRateLimits['gemini']['retry-after'] -ne '30' -or
+            $script:MiraUsageStats.ProviderRateLimits['gemini']['x-ratelimit-remaining-requests'] -ne '8') {
+            throw '.usage did not retain Google provider response headers.'
+        }
+
+        $geminiUsageOutput = (& { Invoke-GemmaUsageCommand } 6>&1 | Out-String)
+        if ($geminiUsageOutput -notmatch 'Active model: Google AI Studio API \| gemini-3\.1-flash-lite' -or
+            $geminiUsageOutput -notmatch 'Google AI Studio API key candidates: 2 configured \| next slot 2/2' -or
+            $geminiUsageOutput -notmatch 'Last observed Google AI Studio API rate-limit/response headers:' -or
+            $geminiUsageOutput -match 'OpenAI key candidates:') {
+            throw '.usage diagnostics did not follow the active Google AI Studio API provider.'
+        }
+
+        $script:Provider = 'antigravity'
+        $script:MODEL = 'gemini-3.1-flash-lite'
+        $antigravityUsageOutput = (& { Invoke-GemmaUsageCommand } 6>&1 | Out-String)
+        if ($antigravityUsageOutput -notmatch 'Active model: Antigravity \| gemini-3\.1-flash-lite' -or
+            $antigravityUsageOutput -notmatch 'Antigravity OAuth:' -or
+            $antigravityUsageOutput -match 'OpenAI key candidates:|Google AI Studio API key candidates:') {
+            throw '.usage diagnostics did not follow the active Antigravity OAuth provider.'
+        }
+    } finally {
+        $script:Provider = $oldUsageProvider
+        $script:MODEL = $oldUsageModel
+        $script:GeminiApiKeys = $oldGeminiKeys
+        $script:MiraGeminiApiKeyIndex = $oldGeminiKeyIndex
     }
 } finally {
     $script:MiraUsageStats = $oldUsageStats
@@ -228,6 +270,12 @@ if ($turnSource -notmatch '\$streamErrorCode\s*=\s*\[string\]\$streamErrorObject
     $turnSource -notmatch '\$emitOpenAIText' -or
     $turnSource -match 'if \(\$streamResponses -and \$streamState\.TextStarted\)') {
     throw 'OpenAI Responses stream failure classification/replay logic is incomplete.'
+}
+
+if ($turnSource -notmatch '\$getProviderRateHeaders' -or
+    $turnSource -notmatch '\$captureProviderResponse' -or
+    $turnSource -notmatch '\$script:MiraGeminiApiKeyIndex\s*=\s*\(\$requestStats\.LastKeyIndex \+ 1\)') {
+    throw 'Provider response-header capture or Gemini failed-key rotation diagnostics are incomplete.'
 }
 
 # Verify .usage is reachable from the interactive command loop and Tab list.
