@@ -5,6 +5,7 @@ $modules = @(
     (Join-Path $repoRoot 'gemma\config\Cli.ps1'),
     (Join-Path $repoRoot 'gemma\config\Defaults.ps1'),
     (Join-Path $repoRoot 'gemma\providers\GeminiApi.ps1'),
+    (Join-Path $repoRoot 'gemma\providers\OpenAI.ps1'),
     (Join-Path $repoRoot 'gemma\providers\Antigravity.ps1'),
     (Join-Path $repoRoot 'gemma\ui\ModelPicker.ps1'),
     (Join-Path $repoRoot 'gemma\agent\Execution.ps1'),
@@ -47,6 +48,9 @@ $requiredFunctions = @(
     'Invoke-GemmaStreamingCommand',
     'Invoke-GemmaProviderCommand',
     'Build-GeminiPayload',
+    'Build-GemmaOpenAIResponsesPayload',
+    'ConvertFrom-GemmaOpenAIResponsesResponse',
+    'Format-GemmaOpenAIWebCitations',
     'Rollback-MiraTurn',
     'Save-GeminiCodeBlocks',
     'Normalize-MiraReply',
@@ -120,35 +124,29 @@ if ($cleanArgs.Count -ne 2 -or $cleanArgs[0] -ne '-File' -or $cleanArgs[1] -ne '
     throw 'Explorer Run with PowerShell argument wrapper was not stripped correctly.'
 }
 
-# Verify canonical and migration API-key environment variables.
+# Verify the explicit Gemini API-key candidate list used by Defaults.ps1.
 $defaultsPath = Join-Path $repoRoot 'gemma\config\Defaults.ps1'
-$oldGeminiApi = $env:GEMINI_API
 $oldGeminiApiKey = $env:GEMINI_API_KEY
 $oldGeminiApiJ = $env:GEMINI_APIJ
 try {
-    $env:GEMINI_API = 'canonical-test-key'
-    $env:GEMINI_API_KEY = 'standard-test-key'
-    $env:GEMINI_APIJ = 'legacy-test-key'
+    $env:GEMINI_API_KEY = 'primary-test-key'
+    $env:GEMINI_APIJ = 'secondary-test-key'
     . $defaultsPath
-    if ($API_KEY -ne 'canonical-test-key') {
-        throw 'GEMINI_API must take precedence for API key selection.'
-    }
-
-    $env:GEMINI_API = ''
-    . $defaultsPath
-    if ($API_KEY -ne 'standard-test-key') {
-        throw 'GEMINI_API_KEY compatibility alias did not load.'
+    if ($script:GeminiApiKeys.Count -ne 2 -or
+        $script:GeminiApiKeys[0] -ne 'primary-test-key' -or
+        $script:GeminiApiKeys[1] -ne 'secondary-test-key') {
+        throw 'Gemini API key candidates were not loaded in the configured order.'
     }
 
     $env:GEMINI_API_KEY = ''
     . $defaultsPath
-    if ($API_KEY -ne 'legacy-test-key') {
-        throw 'GEMINI_APIJ legacy compatibility alias did not load.'
+    if ($script:GeminiApiKeys.Count -ne 1 -or $script:GeminiApiKeys[0] -ne 'secondary-test-key') {
+        throw 'Gemini API key candidate filtering did not preserve the remaining key.'
     }
 } finally {
-    $env:GEMINI_API = $oldGeminiApi
     $env:GEMINI_API_KEY = $oldGeminiApiKey
     $env:GEMINI_APIJ = $oldGeminiApiJ
+    . $defaultsPath
 }
 
 # Verify the shared agent tool registry respects provider and command mode.
@@ -193,6 +191,102 @@ try {
     $script:CommandMode = $oldCommandMode
     $script:GoogleSearchGrounding = $oldGrounding
     $script:AgenticWebSearchEnabled = $oldAgenticSearch
+}
+
+# Verify Luna receives OpenAI-hosted web_search beside GEMMA's local functions.
+$oldOpenAIModel = $script:MODEL
+$oldOpenAIProvider = $script:Provider
+$oldOpenAICommandMode = $script:CommandMode
+$oldGeminiTools = $GeminiTools
+try {
+    $script:Provider = 'openai'
+    $script:MODEL = 'gpt-6-luna'
+    $script:CommandMode = $false
+    $GeminiTools = (Get-GemmaToolConfiguration).Tools
+
+    $lunaPayload = Build-GemmaOpenAIResponsesPayload -SystemInstruction $SystemInstruction -Contents (New-Object System.Collections.ArrayList)
+    $nativeSearchTools = @($lunaPayload.tools | Where-Object { $_.type -eq 'web_search' })
+    if ($nativeSearchTools.Count -ne 1) {
+        throw 'Luna Responses payload must include exactly one native web_search tool.'
+    }
+    if ($nativeSearchTools[0].search_context_size -ne 'medium' -or
+        $nativeSearchTools[0].external_web_access -ne $true -or
+        $nativeSearchTools[0].user_location.type -ne 'approximate') {
+        throw 'Luna native web_search defaults were not configured correctly.'
+    }
+    if ($lunaPayload.tool_choice -ne 'auto') {
+        throw 'Luna native web_search must use automatic tool selection.'
+    }
+    $localToolNames = @($lunaPayload.tools | Where-Object { $_.type -eq 'function' } | ForEach-Object { $_.name })
+    foreach ($localTool in @('get_current_datetime','run_powershell','quick_web','get_skill')) {
+        if ($localToolNames -notcontains $localTool) {
+            throw "Adding native web_search removed Luna's local $localTool function."
+        }
+    }
+
+    $chatPayload = Build-GemmaOpenAIChatPayload -SystemInstruction $SystemInstruction -Contents (New-Object System.Collections.ArrayList)
+    if (@($chatPayload.tools | Where-Object { $_.type -eq 'web_search' }).Count -gt 0) {
+        throw 'Native Responses web_search must not leak into Chat Completions requests.'
+    }
+
+    $script:CommandMode = $true
+    $GeminiTools = $null
+    $commandPayload = Build-GemmaOpenAIResponsesPayload -SystemInstruction $SystemInstruction -Contents (New-Object System.Collections.ArrayList)
+    if ($null -ne $commandPayload.tools -or $null -ne $commandPayload.tool_choice) {
+        throw 'Luna command-generation mode must keep hosted and local tools disabled.'
+    }
+
+    $fixtureResponse = [pscustomobject]@{
+        error = $null
+        status = 'completed'
+        id = 'resp_test'
+        model = 'gpt-6-luna'
+        usage = [pscustomobject]@{ input_tokens = 20; output_tokens = 8 }
+        output = @(
+            [pscustomobject]@{
+                type = 'message'
+                content = @(
+                    [pscustomobject]@{
+                        type = 'output_text'
+                        text = 'Example answer [1]'
+                        annotations = @(
+                            [pscustomobject]@{
+                                type = 'url_citation'
+                                url = 'https://example.com/article'
+                                title = 'Example Article'
+                                start_index = 15
+                                end_index = 18
+                            },
+                            [pscustomobject]@{
+                                type = 'url_citation'
+                                url = 'https://example.com/article'
+                                title = 'Example Article'
+                                start_index = 15
+                                end_index = 18
+                            }
+                        )
+                    }
+                )
+            }
+        )
+    }
+    $convertedResponse = ConvertFrom-GemmaOpenAIResponsesResponse -OpenAIResponse $fixtureResponse
+    if (@($convertedResponse.webCitations).Count -ne 1) {
+        throw 'Luna Responses converter did not deduplicate and retain URL citations.'
+    }
+    if ($convertedResponse.candidates[0].content.parts[0].text -ne 'Example answer [1]') {
+        throw 'Luna Responses converter changed the model answer while extracting citations.'
+    }
+    $formattedSources = Format-GemmaOpenAIWebCitations -Citations @($convertedResponse.webCitations)
+    if ($formattedSources -notmatch 'Example Article' -or
+        $formattedSources -notmatch 'https://example.com/article') {
+        throw 'Luna web citations were not formatted as visible source links.'
+    }
+} finally {
+    $script:MODEL = $oldOpenAIModel
+    $script:Provider = $oldOpenAIProvider
+    $script:CommandMode = $oldOpenAICommandMode
+    $GeminiTools = $oldGeminiTools
 }
 
 # Keep Antigravity native Search conditional on the current user request.
