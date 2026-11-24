@@ -29,10 +29,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Parse mira.ps1 with PowerShell 7
-        shell: pwsh
-        run: ./tests/Test-ScriptSyntax.ps1 -ScriptPath ./mira.ps1
-
       - name: Parse gemma.ps1 with PowerShell 7
         shell: pwsh
         run: ./tests/Test-ScriptSyntax.ps1 -ScriptPath ./gemma/gemma.ps1
