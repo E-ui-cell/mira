@@ -207,11 +207,28 @@ function ConvertTo-GemmaOpenAIResponsesInput {
 
         if ($turn.role -eq 'model') {
             if ($null -ne $turn.openaiOutputItems -and @($turn.openaiOutputItems).Count -gt 0) {
+                # Native Responses items retain reasoning and tool-call metadata.
                 foreach ($item in @($turn.openaiOutputItems)) { [void]$inputItems.Add($item) }
             } else {
+                # Rebuild normalized tool calls when history was created by
+                # Gemini or OpenAI Chat Completions before switching to Luna.
                 $textParts = @($turn.parts | Where-Object { $null -ne $_.text -and -not $_.thought } | ForEach-Object { [string]$_.text })
                 if ($textParts.Count -gt 0) {
                     [void]$inputItems.Add(@{ type='message'; role='assistant'; content=($textParts -join [Environment]::NewLine) })
+                }
+                $calls = @($turn.parts | Where-Object { $null -ne $_.functionCall } | ForEach-Object { $_.functionCall })
+                foreach ($call in $calls) {
+                    $callId = [string]$call.id
+                    if ([string]::IsNullOrWhiteSpace($callId)) {
+                        throw "Cannot replay '$($call.name)' from prior provider history into OpenAI Responses: the original tool call has no ID. Start a new session or use .oneshot."
+                    }
+                    $arguments = $call.args | ConvertTo-Json -Depth 30 -Compress
+                    [void]$inputItems.Add(@{
+                        type = 'function_call'
+                        call_id = $callId
+                        name = [string]$call.name
+                        arguments = $arguments
+                    })
                 }
             }
         }
@@ -229,6 +246,7 @@ function Build-GemmaOpenAIResponsesPayload {
 
     $payload = [ordered]@{
         model = [string]$script:MODEL
+        store = $false
         input = (ConvertTo-GemmaOpenAIResponsesInput -SystemInstruction $SystemInstruction -Contents $Contents)
     }
     if (-not [string]::IsNullOrWhiteSpace($instructions)) { $payload.instructions = $instructions }
@@ -258,10 +276,28 @@ function Build-GemmaOpenAIResponsesPayload {
         $payload.max_output_tokens = [int]$MIRA_OPENAI_MAX_COMPLETION_TOKENS
     }
     if ($null -ne $MIRA_OPENAI_RESPONSE_FORMAT) {
-        if ([string]$MIRA_OPENAI_RESPONSE_FORMAT.type -eq 'json_object') {
+        $formatType = [string]$MIRA_OPENAI_RESPONSE_FORMAT.type
+        if ($formatType -eq 'json_object') {
             $payload.text = @{ format = @{ type = 'json_object' } }
-        } elseif ([string]$MIRA_OPENAI_RESPONSE_FORMAT.type -eq 'json_schema') {
-            $payload.text = @{ format = $MIRA_OPENAI_RESPONSE_FORMAT }
+        } elseif ($formatType -eq 'json_schema') {
+            # Chat Completions nests schema settings under json_schema;
+            # Responses expects name/schema/strict directly under text.format.
+            $schemaConfig = $MIRA_OPENAI_RESPONSE_FORMAT.json_schema
+            if ($null -ne $schemaConfig) {
+                $responsesFormat = [ordered]@{
+                    type = 'json_schema'
+                    name = [string]$schemaConfig.name
+                    schema = $schemaConfig.schema
+                }
+                if ($null -ne $schemaConfig.strict) { $responsesFormat.strict = [bool]$schemaConfig.strict }
+                if (-not [string]::IsNullOrWhiteSpace([string]$schemaConfig.description)) {
+                    $responsesFormat.description = [string]$schemaConfig.description
+                }
+                $payload.text = @{ format = $responsesFormat }
+            } else {
+                # Also accept a Responses-shaped setting for direct configuration.
+                $payload.text = @{ format = $MIRA_OPENAI_RESPONSE_FORMAT }
+            }
         }
     }
     return $payload
