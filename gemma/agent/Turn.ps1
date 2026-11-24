@@ -485,15 +485,20 @@
                                     throw 'Google streaming response ended without candidate content.'
                                 }
                                 if (-not $parseState.HasToolCall -and -not $parseState.HasResponseText) {
-                                    if ($parseState.HasThoughts) {
-                                        throw 'Google streaming response contained thought summaries but no final response text.'
-                                    }
                                     if ([string]$parseState.Candidate.finishReason -match '(?i)MAX_TOKENS') {
-                                        throw 'Google streaming response reached MAX_TOKENS without response text.'
+                                        $finishMessage = [string]$parseState.Candidate.finishMessage
+                                        $finishDetail = if ([string]::IsNullOrWhiteSpace($finishMessage)) { '' } else { " ($finishMessage)" }
+                                        throw "Google streaming response reached MAX_TOKENS without response text$finishDetail."
+                                    }
+                                    if ($parseState.HasThoughts) {
+                                        $finishReason = [string]$parseState.Candidate.finishReason
+                                        $finishDetail = if ([string]::IsNullOrWhiteSpace($finishReason)) { '' } else { " (finishReason=$finishReason)" }
+                                        throw "Google streaming response contained thought summaries but no final response text$finishDetail."
                                     }
                                     throw 'Google streaming response finished without response text or function calls.'
                                 }
 
+                                $requestStats.ErrorMessage = ''
                                 $completedResponse = [pscustomobject]@{
                                     candidates = @($parseState.Candidate)
                                     usageMetadata = $parseState.Usage
@@ -529,7 +534,13 @@
                                     $errorReason = [string]$errorObject.error.status
                                     if ([string]::IsNullOrWhiteSpace($errorReason)) { $errorReason = [string]$errorObject.error.code }
                                 } catch {}
-                                $lastFailure = "HTTP $status $errorReason $($failure.Exception.Message) $errorBody"
+                                $failureMessage = [string]$failure.Exception.Message
+                                $requestStats.ErrorMessage = $failureMessage
+                                $lastFailure = if ($status -gt 0) {
+                                    "HTTP $status $errorReason $failureMessage $errorBody"
+                                } else {
+                                    "$failureMessage $errorBody".Trim()
+                                }
 
                                 if ($status -eq 429 -and $errorReason -match '(?i)BILLING_DISABLED') {
                                     throw $lastFailure
@@ -544,8 +555,10 @@
                                 }
                                 if ($status -eq 403) { throw $lastFailure }
 
-                                $failureMessage = [string]$failure.Exception.Message
-                                $transient = ($status -in @(408,429,499,500,502,503,504)) -or
+                                $thoughtOnlyResponse = ($failureMessage -match '(?i)thought summaries but no final response text')
+                                if ($thoughtOnlyResponse -and $attempt -gt 0) { throw $lastFailure }
+                                $transient = ($thoughtOnlyResponse -and $attempt -eq 0) -or
+                                    ($status -in @(408,429,499,500,502,503,504)) -or
                                     ($status -eq 0 -and $failureMessage -match '(?i)timeout|connection reset|connection aborted|connection closed|underlying connection was closed|unable to read data from the transport connection|unexpected end|unexpected eof|unexpected error occurred on a receive|broken pipe|name resolution|forcibly closed|stream reset|goaway')
                                 if (-not $transient) { throw $lastFailure }
                                 if ($attempt -ge 3) {
@@ -1153,6 +1166,17 @@
                             $workerLabel = if ($usingAntigravityOAuth) { 'Antigravity' } elseif ($usingOpenAI) { 'OpenAI' } else { 'Gemini' }
                             throw "$workerLabel API Failure: $workerError"
                         }
+                    }
+                    if ($streamGoogle) {
+                        $workerError = ''
+                        try { $workerError = [string]$responseException.GetBaseException().Message } catch {}
+                        if ([string]::IsNullOrWhiteSpace($workerError)) { $workerError = [string]$responseException.Message }
+                        $workerLabel = if ($usingAntigravityOAuth) { 'Antigravity' } else { 'Gemini' }
+                        $httpStatus = [int]$requestStats.HttpStatus
+                        if ($httpStatus -gt 0) {
+                            throw "$workerLabel streaming failure (HTTP $httpStatus): $workerError"
+                        }
+                        throw "$workerLabel streaming failure: $workerError"
                     }
                     throw "HTTP/REST Error: $($responseException.Message)"
                 }
