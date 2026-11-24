@@ -21,7 +21,7 @@ if ($script:CommandMode) { $Prompt = $ExplainCommand }
 # USER CONFIGURATION — all runtime defaults are centralized here
 # ==============================================================================
 # Answer provider and model
-$MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity', 'gemini', or 'gpt'; no automatic provider switching
+$MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity' or 'gemini'; switch to gpt after ChatGPT sign-in
 $MIRA_DEFAULT_MODEL = 'gemini-3.1-flash-lite'
 $MIRA_DEFAULT_EFFORT = 'high'                # 'low', 'medium', or 'high'
 $MIRA_SEARCH_MODEL = 'gemini-3.1-flash-lite' # Dedicated search engine; independent of answer provider/model
@@ -81,7 +81,7 @@ if (-not $API_KEY -and $MIRA_DEFAULT_PROVIDER -eq 'antigravity' -and
 }
 
 #$MODEL   = "gemini-flash-lite-latest"
-$MODEL   = if ($MIRA_DEFAULT_PROVIDER -eq 'gpt') { 'auto' } else { $MIRA_DEFAULT_MODEL }
+$MODEL   = $MIRA_DEFAULT_MODEL
 #$MODEL   = "gemini-3.6-flash"
 #$MODEL   = "gemini-2.5-computer-use-preview-10-2025"
 #$MODEL   = "gemini-3-flash-preview"
