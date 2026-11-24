@@ -1,47 +1,238 @@
+# Unified model picker. Provider identity is carried by each catalogue entry.
+
+function Add-GemmaModelCatalogEntry {
+    param(
+        [System.Collections.Generic.List[object]]$List,
+        [hashtable]$Seen,
+        [string]$Provider,
+        [object]$Item
+    )
+
+    $id = ''
+    $displayName = ''
+    if ($Item -is [string]) {
+        $id = [string]$Item
+        $displayName = $id
+    } elseif ($null -ne $Item) {
+        if ($null -ne $Item.name) { $id = [string]$Item.name }
+        if ($null -ne $Item.displayName) { $displayName = [string]$Item.displayName }
+        if ([string]::IsNullOrWhiteSpace($id) -and $null -ne $Item.modelId) { $id = [string]$Item.modelId }
+        if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = $id }
+    }
+
+    $id = ($id.Trim() -replace '^models/','')
+    if ([string]::IsNullOrWhiteSpace($id)) { return }
+
+    $seenKey = $Provider + '|' + $id.ToLowerInvariant()
+    if ($Seen.ContainsKey($seenKey)) { return }
+    $Seen[$seenKey] = $true
+
+    if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = $id }
+    [void]$List.Add([pscustomobject]@{
+        name = $id
+        displayName = $displayName
+        provider = $Provider
+    })
+}
+
+function Get-GemmaModelCatalog {
+    $models = New-Object 'System.Collections.Generic.List[object]'
+    $seen = @{}
+    $statuses = @{}
+
+    # OpenAI is intentionally pinned to Luna for this application.
+    $openAIModel = [string]$MIRA_OPENAI_DEFAULT_MODEL
+    $openAIKeys = @(Get-GemmaOpenAIApiKeys)
+    if (-not [string]::IsNullOrWhiteSpace($openAIModel) -and $openAIKeys.Count -gt 0) {
+        Add-GemmaModelCatalogEntry -List $models -Seen $seen -Provider 'openai' -Item ([pscustomobject]@{
+            name = $openAIModel
+            displayName = 'GPT-6 Luna'
+        })
+    } elseif ($openAIKeys.Count -eq 0) {
+        $statuses['openai'] = 'No OpenAI API key configured'
+    } else {
+        $statuses['openai'] = 'No OpenAI model configured'
+    }
+
+    # Antigravity OAuth has its own catalogue and must not be conflated with
+    # the Gemini Developer API catalogue.
+    $antigravityTokenPath = Get-AntigravityTokenPath
+    if (Test-Path -LiteralPath $antigravityTokenPath -PathType Leaf) {
+        try {
+            $antigravityModels = @(Get-AntigravityModels)
+            foreach ($item in $antigravityModels) {
+                Add-GemmaModelCatalogEntry -List $models -Seen $seen -Provider 'antigravity' -Item $item
+            }
+            if ($antigravityModels.Count -eq 0) {
+                $statuses['antigravity'] = 'No selectable models returned'
+            }
+        } catch {
+            $statuses['antigravity'] = 'Unavailable: ' + [string]$_.Exception.Message
+        }
+    } else {
+        $statuses['antigravity'] = 'Not authenticated; run .auth login'
+    }
+
+    # Get-GeminiModels dispatches to Antigravity when that provider is active.
+    # Temporarily select the Gemini API route only while fetching its catalogue.
+    $geminiKeys = @(Get-GeminiApiKeys)
+    if ($geminiKeys.Count -gt 0) {
+        $originalProvider = [string]$script:Provider
+        try {
+            $script:Provider = 'gemini'
+            $geminiModels = @(Get-GeminiModels)
+            foreach ($item in $geminiModels) {
+                Add-GemmaModelCatalogEntry -List $models -Seen $seen -Provider 'gemini' -Item $item
+            }
+            if ($geminiModels.Count -eq 0) {
+                $statuses['gemini'] = 'No selectable models returned'
+            }
+        } catch {
+            $statuses['gemini'] = 'Unavailable: ' + [string]$_.Exception.Message
+        } finally {
+            $script:Provider = $originalProvider
+        }
+    } else {
+        $statuses['gemini'] = 'No Gemini API key configured'
+    }
+
+    return [pscustomobject]@{
+        Models = @($models.ToArray())
+        ProviderStatuses = $statuses
+    }
+}
+
 function Read-GemmaModelSelection {
     param(
         [object[]]$Models,
-        [string]$CurrentModel
+        [string]$CurrentModel,
+        [string]$CurrentProvider,
+        [hashtable]$ProviderStatuses = @{}
     )
 
-    if ($Models.Count -eq 0) { return -1 }
+    $modelList = @($Models)
+    $providerDefinitions = @(
+        [pscustomobject]@{ Id = 'openai'; Label = 'OpenAI' },
+        [pscustomobject]@{ Id = 'antigravity'; Label = 'Antigravity' },
+        [pscustomobject]@{ Id = 'gemini'; Label = 'Google AI Studio API' }
+    )
 
-    $modelIds = @(
-        foreach ($item in $Models) {
-            ([string]$item.name -replace '^models/','')
+    $displayRows = New-Object 'System.Collections.Generic.List[object]'
+    $modelRowIndices = New-Object 'System.Collections.Generic.List[int]'
+    for ($i = 0; $i -lt $modelList.Count; $i++) { [void]$modelRowIndices.Add(-1) }
+
+    foreach ($provider in $providerDefinitions) {
+        [void]$displayRows.Add([pscustomobject]@{
+            Kind = 'header'
+            Provider = $provider.Id
+            Text = $provider.Label
+            ModelIndex = -1
+        })
+
+        $providerModelIndices = @(
+            for ($i = 0; $i -lt $modelList.Count; $i++) {
+                if ([string]$modelList[$i].provider -eq $provider.Id) { $i }
+            }
+        )
+
+        if ($providerModelIndices.Count -eq 0) {
+            $status = ''
+            if ($null -ne $ProviderStatuses -and $ProviderStatuses.ContainsKey($provider.Id)) {
+                $status = [string]$ProviderStatuses[$provider.Id]
+            }
+            if ([string]::IsNullOrWhiteSpace($status)) { $status = 'No selectable models' }
+            [void]$displayRows.Add([pscustomobject]@{
+                Kind = 'status'
+                Provider = $provider.Id
+                Text = $status
+                ModelIndex = -1
+            })
+        } else {
+            foreach ($modelIndex in $providerModelIndices) {
+                $modelRowIndices[$modelIndex] = $displayRows.Count
+                [void]$displayRows.Add([pscustomobject]@{
+                    Kind = 'model'
+                    Provider = $provider.Id
+                    Text = [string]$modelList[$modelIndex].name
+                    ModelIndex = [int]$modelIndex
+                })
+            }
         }
-    )
-    $selectedIndex = 0
-    for ($i = 0; $i -lt $modelIds.Count; $i++) {
-        if ($modelIds[$i] -ieq $CurrentModel) { $selectedIndex = $i; break }
     }
+
+    if ($modelList.Count -eq 0) {
+        Write-Host 'No selectable models are currently available.' -ForegroundColor Yellow
+        foreach ($row in $displayRows) {
+            if ($row.Kind -eq 'header') {
+                Write-Host $row.Text -ForegroundColor Cyan
+            } else {
+                Write-Host ('    ' + $row.Text) -ForegroundColor DarkGray
+            }
+        }
+        return -1
+    }
+
+    $selectedIndex = 0
+    for ($i = 0; $i -lt $modelList.Count; $i++) {
+        if ([string]$modelList[$i].provider -eq $CurrentProvider -and
+            [string]$modelList[$i].name -ieq $CurrentModel) {
+            $selectedIndex = $i
+            break
+        }
+    }
+    $selectedDisplayIndex = $modelRowIndices[$selectedIndex]
 
     $interactive = $false
     try {
         $interactive = -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
     } catch {}
     if (-not $interactive) {
-        for ($i = 0; $i -lt $modelIds.Count; $i++) {
-            $marker = if ($i -eq $selectedIndex) { '  [CURRENT]' } else { '' }
-            Write-Host ('  {0,3}. {1}{2}' -f ($i + 1),$modelIds[$i],$marker)
+        $number = 0
+        foreach ($provider in $providerDefinitions) {
+            Write-Host $provider.Label -ForegroundColor Cyan
+            $providerModelIndices = @(
+                for ($i = 0; $i -lt $modelList.Count; $i++) {
+                    if ([string]$modelList[$i].provider -eq $provider.Id) { $i }
+                }
+            )
+            if ($providerModelIndices.Count -eq 0) {
+                $status = if ($ProviderStatuses.ContainsKey($provider.Id)) { [string]$ProviderStatuses[$provider.Id] } else { 'No selectable models' }
+                Write-Host ('    ' + $status) -ForegroundColor DarkGray
+            } else {
+                foreach ($modelIndex in $providerModelIndices) {
+                    $number++
+                    $marker = if ($modelIndex -eq $selectedIndex) { '  [CURRENT]' } else { '' }
+                    Write-Host ('    {0,3}. {1}{2}' -f $number,$modelList[$modelIndex].name,$marker)
+                }
+            }
         }
+
         $selection = Read-Host 'Select model number or exact model ID; Enter cancels'
         if ([string]::IsNullOrWhiteSpace($selection)) { return -1 }
         $selection = $selection.Trim() -replace '^models/',''
         if ($selection -match '^\d+$') {
             $index = [int]$selection - 1
-            if ($index -ge 0 -and $index -lt $modelIds.Count) { return $index }
+            if ($index -ge 0 -and $index -lt $modelList.Count) { return $index }
             return -1
         }
-        for ($i = 0; $i -lt $modelIds.Count; $i++) {
-            if ($modelIds[$i] -ieq $selection) { return $i }
+
+        $matchingIndices = @(
+            for ($i = 0; $i -lt $modelList.Count; $i++) {
+                if ([string]$modelList[$i].name -ieq $selection) { $i }
+            }
+        )
+        if ($matchingIndices.Count -eq 1) { return [int]$matchingIndices[0] }
+        if ($matchingIndices.Count -gt 1) {
+            foreach ($index in $matchingIndices) {
+                if ([string]$modelList[$index].provider -eq $CurrentProvider) { return [int]$index }
+            }
         }
         return -1
     }
 
     $windowHeight = [Math]::Max(10,[Console]::WindowHeight)
     $visibleRows = [Math]::Max(1,[Math]::Min(12,$windowHeight - 6))
-    $visibleRows = [Math]::Min($visibleRows,$modelIds.Count)
+    $visibleRows = [Math]::Min($visibleRows,$displayRows.Count)
     $menuHeight = $visibleRows + 3
     $windowTop = [Console]::WindowTop
     $top = [Console]::CursorTop
@@ -60,46 +251,74 @@ function Read-GemmaModelSelection {
 
     function Draw-GemmaModelMenu {
         $first = [Math]::Max(0,[Math]::Min(
-            $selectedIndex - [int][Math]::Floor($visibleRows / 2),
-            $modelIds.Count - $visibleRows
+            $selectedDisplayIndex - [int][Math]::Floor($visibleRows / 2),
+            $displayRows.Count - $visibleRows
         ))
+
+        # Keep the selected provider heading visible when it fits in the viewport.
+        if ($displayRows[$first].Kind -eq 'model') {
+            $providerId = [string]$displayRows[$first].Provider
+            $headerIndex = $first
+            while ($headerIndex -gt 0) {
+                $previousRow = $displayRows[$headerIndex - 1]
+                if ($previousRow.Kind -eq 'header') {
+                    if ([string]$previousRow.Provider -eq $providerId) { $headerIndex-- }
+                    break
+                }
+                if ([string]$previousRow.Provider -ne $providerId) { break }
+                $headerIndex--
+            }
+            if (($selectedDisplayIndex - $headerIndex) -lt $visibleRows) { $first = $headerIndex }
+        }
+
         $last = $first + $visibleRows
         $clearWidth = [Math]::Max(1,[Console]::WindowWidth - 1)
         [Console]::SetCursorPosition(0,$top)
 
         [Console]::ForegroundColor = [ConsoleColor]::Cyan
-        $title = 'Models - all providers'
+        $title = 'Select model'
         [Console]::Write($title.PadRight($clearWidth).Substring(0,$clearWidth))
         [Console]::WriteLine()
         [Console]::ForegroundColor = [ConsoleColor]::DarkGray
         [Console]::Write(('Up/Down or j/k move; Enter select; Esc or q cancel').PadRight($clearWidth).Substring(0,$clearWidth))
         [Console]::WriteLine()
 
-        for ($row = 0; $row -lt $visibleRows; $row++) {
-            $index = $first + $row
+        for ($rowIndex = $first; $rowIndex -lt $last; $rowIndex++) {
+            $row = $displayRows[$rowIndex]
             $line = ''
-            if ($index -lt $last) {
-                $marker = if ($index -eq $selectedIndex) { '>' } else { ' ' }
-                $current = if ($modelIds[$index] -ieq $CurrentModel) { '  [current]' } else { '' }
-                $line = (' {0} {1}{2}' -f $marker,$modelIds[$index],$current)
-                if ($line.Length -gt $clearWidth) {
-                    $line = $line.Substring(0,$clearWidth)
+            $isSelected = $false
+
+            if ($row.Kind -eq 'header') {
+                $line = [string]$row.Text
+                [Console]::ForegroundColor = [ConsoleColor]::Cyan
+                [Console]::BackgroundColor = $oldBackground
+            } elseif ($row.Kind -eq 'status') {
+                $line = '    ' + [string]$row.Text
+                [Console]::ForegroundColor = [ConsoleColor]::DarkGray
+                [Console]::BackgroundColor = $oldBackground
+            } else {
+                $model = $modelList[$row.ModelIndex]
+                $marker = if ($row.ModelIndex -eq $selectedIndex) { '>' } else { ' ' }
+                $current = if ([string]$model.provider -eq $CurrentProvider -and [string]$model.name -ieq $CurrentModel) { '  [current]' } else { '' }
+                $line = ('    {0} {1}{2}' -f $marker,$model.name,$current)
+                $isSelected = ($row.ModelIndex -eq $selectedIndex)
+                if ($isSelected) {
+                    [Console]::ForegroundColor = [ConsoleColor]::White
+                    [Console]::BackgroundColor = [ConsoleColor]::DarkCyan
+                } else {
+                    [Console]::ForegroundColor = [ConsoleColor]::Gray
+                    [Console]::BackgroundColor = $oldBackground
                 }
             }
-            if ($index -eq $selectedIndex) {
-                [Console]::ForegroundColor = [ConsoleColor]::White
-                [Console]::BackgroundColor = [ConsoleColor]::DarkCyan
-            } else {
-                [Console]::ForegroundColor = [ConsoleColor]::Gray
-                [Console]::BackgroundColor = $oldBackground
-            }
+
+            if ($line.Length -gt $clearWidth) { $line = $line.Substring(0,$clearWidth) }
             [Console]::Write($line.PadRight($clearWidth).Substring(0,$clearWidth))
             [Console]::WriteLine()
         }
 
         [Console]::ForegroundColor = $oldForeground
         [Console]::BackgroundColor = $oldBackground
-        $footer = (' {0}/{1} ' -f ($selectedIndex + 1),$modelIds.Count)
+        $footer = (' {0}/{1} models ' -f ($selectedIndex + 1),$modelList.Count)
         [Console]::ForegroundColor = [ConsoleColor]::DarkGray
         [Console]::Write($footer.PadRight($clearWidth).Substring(0,$clearWidth))
         [Console]::SetCursorPosition(0,[Math]::Min($top + $menuHeight,[Console]::BufferHeight - 1))
@@ -113,21 +332,27 @@ function Read-GemmaModelSelection {
 
             if ($key.Key -eq [ConsoleKey]::UpArrow -or $character -eq 'k') {
                 $selectedIndex = [Math]::Max(0,$selectedIndex - 1)
+                $selectedDisplayIndex = $modelRowIndices[$selectedIndex]
                 Draw-GemmaModelMenu
             } elseif ($key.Key -eq [ConsoleKey]::DownArrow -or $character -eq 'j') {
-                $selectedIndex = [Math]::Min($modelIds.Count - 1,$selectedIndex + 1)
+                $selectedIndex = [Math]::Min($modelList.Count - 1,$selectedIndex + 1)
+                $selectedDisplayIndex = $modelRowIndices[$selectedIndex]
                 Draw-GemmaModelMenu
             } elseif ($key.Key -eq [ConsoleKey]::Home) {
                 $selectedIndex = 0
+                $selectedDisplayIndex = $modelRowIndices[$selectedIndex]
                 Draw-GemmaModelMenu
             } elseif ($key.Key -eq [ConsoleKey]::End) {
-                $selectedIndex = $modelIds.Count - 1
+                $selectedIndex = $modelList.Count - 1
+                $selectedDisplayIndex = $modelRowIndices[$selectedIndex]
                 Draw-GemmaModelMenu
             } elseif ($key.Key -eq [ConsoleKey]::PageUp) {
                 $selectedIndex = [Math]::Max(0,$selectedIndex - $visibleRows)
+                $selectedDisplayIndex = $modelRowIndices[$selectedIndex]
                 Draw-GemmaModelMenu
             } elseif ($key.Key -eq [ConsoleKey]::PageDown) {
-                $selectedIndex = [Math]::Min($modelIds.Count - 1,$selectedIndex + $visibleRows)
+                $selectedIndex = [Math]::Min($modelList.Count - 1,$selectedIndex + $visibleRows)
+                $selectedDisplayIndex = $modelRowIndices[$selectedIndex]
                 Draw-GemmaModelMenu
             } elseif ($key.Key -eq [ConsoleKey]::Enter) {
                 $confirmed = $true
@@ -138,7 +363,9 @@ function Read-GemmaModelSelection {
     } finally {
         [Console]::ForegroundColor = $oldForeground
         [Console]::BackgroundColor = $oldBackground
-        [Console]::SetCursorPosition(0,[Math]::Min($top + $menuHeight,[Console]::BufferHeight - 1))
+        try {
+            [Console]::SetCursorPosition(0,[Math]::Min($top + $menuHeight,[Console]::BufferHeight - 1))
+        } catch {}
         [Console]::WriteLine()
     }
 
@@ -146,111 +373,120 @@ function Read-GemmaModelSelection {
     return $selectedIndex
 }
 
-function Invoke-GeminiModelSwitcher {
-    param([string]$RequestedModel = "")
+function Set-GemmaActiveModel {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('openai','antigravity','gemini')][string]$Provider,
+        [Parameter(Mandatory = $true)][string]$Model
+    )
 
-    # Remember the last Gemini-side provider so the combined picker can show
-    # its catalogue even while OpenAI is currently selected.
-    if ($script:Provider -ne 'openai') {
-        $script:GemmaLastGeminiProvider = $script:Provider
+    if ($Provider -eq 'openai' -and @(Get-GemmaOpenAIApiKeys).Count -eq 0) {
+        Write-Host '[OpenAI API key is not configured. Add a key to the explicit OpenAI key list in Defaults.ps1.]' -ForegroundColor Yellow
+        return $false
     }
-    if ([string]::IsNullOrWhiteSpace([string]$script:GemmaLastGeminiProvider)) {
-        $script:GemmaLastGeminiProvider = 'gemini'
+    if ($Provider -eq 'antigravity' -and -not (Test-Path -LiteralPath (Get-AntigravityTokenPath) -PathType Leaf)) {
+        Write-Host '[Antigravity is not authenticated. Run .auth login first.]' -ForegroundColor Yellow
+        return $false
+    }
+    if ($Provider -eq 'gemini' -and @(Get-GeminiApiKeys).Count -eq 0) {
+        Write-Host '[Google AI Studio API key is not configured. Add a key to the explicit Gemini key list in Defaults.ps1.]' -ForegroundColor Yellow
+        return $false
     }
 
-    $openAIModel = [string]$MIRA_OPENAI_DEFAULT_MODEL
-    if ([string]::IsNullOrWhiteSpace($openAIModel)) {
-        Write-Host '[OpenAI default model is not configured in Defaults.ps1.]' -ForegroundColor Yellow
+    $script:Provider = $Provider
+    $script:MODEL = $Model
+    if ($Provider -ne 'openai') { $script:GemmaLastGeminiProvider = $Provider }
+
+    $providerLabel = switch ($Provider) {
+        'openai' { 'OpenAI' }
+        'antigravity' { 'Antigravity' }
+        'gemini' { 'Google AI Studio API' }
+    }
+    Write-Host (([Environment]::NewLine) + '[Provider: ' + $providerLabel + ' | Model: ' + $script:MODEL + ']') -ForegroundColor Green
+    $effectiveEffort = Get-GemmaRequestEffort -Provider $Provider
+    Write-Host "[Reasoning effort: $effectiveEffort (provider override or shared .effort setting).]" -ForegroundColor DarkGray
+    return $true
+}
+
+function Invoke-GemmaModelPicker {
+    param([string]$RequestedModel = '')
+
+    $requested = ([string]$RequestedModel).Trim()
+    $explicitProvider = $null
+    $requestedId = $requested
+
+    if (-not [string]::IsNullOrWhiteSpace($requested)) {
+        $providerMatch = [regex]::Match(
+            $requested,
+            '^(openai|antigravity|gemini|google-ai-studio|googleai|aistudio)[:/](.+)$',
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+        )
+        if ($providerMatch.Success) {
+            $providerName = $providerMatch.Groups[1].Value.ToLowerInvariant()
+            $requestedId = $providerMatch.Groups[2].Value.Trim()
+            switch ($providerName) {
+                'openai' { $explicitProvider = 'openai' }
+                'antigravity' { $explicitProvider = 'antigravity' }
+                { $_ -in @('gemini','google-ai-studio','googleai','aistudio') } { $explicitProvider = 'gemini' }
+            }
+        }
+        $requestedId = $requestedId -replace '^models/',''
+
+        if (($null -eq $explicitProvider -or $explicitProvider -eq 'openai') -and
+            $requestedId -ieq [string]$MIRA_OPENAI_DEFAULT_MODEL) {
+            [void](Set-GemmaActiveModel -Provider 'openai' -Model ([string]$MIRA_OPENAI_DEFAULT_MODEL))
+            return
+        }
+    } else {
+        $catalog = Get-GemmaModelCatalog
+        $selectedIndex = Read-GemmaModelSelection -Models @($catalog.Models) -CurrentModel ([string]$script:MODEL) -CurrentProvider ([string]$script:Provider) -ProviderStatuses $catalog.ProviderStatuses
+        if ($selectedIndex -lt 0 -or $selectedIndex -ge @($catalog.Models).Count) { return }
+        $selected = @($catalog.Models)[$selectedIndex]
+        [void](Set-GemmaActiveModel -Provider ([string]$selected.provider) -Model ([string]$selected.name))
         return
     }
 
-    # Direct model selection: .model <id>
-    if (-not [string]::IsNullOrWhiteSpace($RequestedModel)) {
-        $selectedModel = $RequestedModel.Trim() -replace '^models/',''
-        if ($selectedModel -ieq $openAIModel) {
-            if (@(Get-GemmaOpenAIApiKeys).Count -eq 0) {
-                Write-Host '[OpenAI API key is not set. Configure OPENAI_API_KEY or OPENAI_API_KEYS.]' -ForegroundColor Yellow
+    $catalog = Get-GemmaModelCatalog
+    $matchingModels = @(
+        $catalog.Models | Where-Object {
+            [string]$_.name -ieq $requestedId -and
+            ($null -eq $explicitProvider -or [string]$_.provider -eq $explicitProvider)
+        }
+    )
+
+    if ($matchingModels.Count -eq 0) {
+        if ($null -ne $explicitProvider) {
+            if ($catalog.ProviderStatuses.ContainsKey($explicitProvider)) {
+                Write-Host ('[' + [string]$catalog.ProviderStatuses[$explicitProvider] + ']') -ForegroundColor Yellow
                 return
             }
-            $script:Provider = 'openai'
-            $script:MODEL = $openAIModel
+            if ($explicitProvider -eq 'openai') {
+                Write-Host ('[OpenAI is pinned to ' + [string]$MIRA_OPENAI_DEFAULT_MODEL + '.]') -ForegroundColor Yellow
+                return
+            }
+            [void](Set-GemmaActiveModel -Provider $explicitProvider -Model $requestedId)
+            return
+        }
+
+        if ($script:Provider -in @('antigravity','gemini') -and
+            -not $catalog.ProviderStatuses.ContainsKey([string]$script:Provider)) {
+            [void](Set-GemmaActiveModel -Provider ([string]$script:Provider) -Model $requestedId)
+            return
+        }
+
+        Write-Host ("[Unknown model '{0}'. Run .model to browse the available models, or use .model provider:model-id.]" -f $requestedId) -ForegroundColor Yellow
+        return
+    }
+
+    if ($matchingModels.Count -gt 1) {
+        $activeMatches = @($matchingModels | Where-Object { [string]$_.provider -eq [string]$script:Provider })
+        if ($activeMatches.Count -eq 1) {
+            $matchingModels = $activeMatches
         } else {
-            $targetProvider = [string]$script:GemmaLastGeminiProvider
-            if ($targetProvider -notin @('antigravity','gemini')) { $targetProvider = 'gemini' }
-            if ($targetProvider -eq 'antigravity' -and -not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
-                $targetProvider = 'gemini'
-            }
-            if ($targetProvider -eq 'gemini' -and @(Get-GeminiApiKeys).Count -eq 0) {
-                Write-Host '[Gemini API key is not set. Configure GEMINI_API or GEMINI_API_KEYS.]' -ForegroundColor Yellow
-                return
-            }
-            $script:Provider = $targetProvider
-            $script:GemmaLastGeminiProvider = $targetProvider
-            $script:MODEL = $selectedModel
+            Write-Host ("[Model '{0}' is available from multiple providers. Use .model antigravity:{0} or .model google-ai-studio:{0}.]" -f $requestedId) -ForegroundColor Yellow
+            return
         }
-        Write-Host (([Environment]::NewLine) + '[Provider: ' + $script:Provider + ' | Model: ' + $script:MODEL + ']') -ForegroundColor Green
-        return
     }
 
-    try {
-        # The OpenAI catalogue is deliberately static: one configured model,
-        # pinned first. Only the Gemini-side catalogue is fetched.
-        $models = New-Object 'System.Collections.Generic.List[object]'
-        [void]$models.Add([pscustomobject]@{
-            name = $openAIModel
-            displayName = 'GPT-6 Luna'
-            provider = 'openai'
-        })
-
-        $catalogProvider = [string]$script:GemmaLastGeminiProvider
-        if ($catalogProvider -notin @('antigravity','gemini')) { $catalogProvider = 'gemini' }
-        $originalProvider = $script:Provider
-        try {
-            $script:Provider = $catalogProvider
-            $geminiModels = @(Get-GeminiModels)
-        } finally {
-            $script:Provider = $originalProvider
-        }
-
-        foreach ($item in $geminiModels) {
-            $id = ([string]$item.name -replace '^models/','')
-            if ([string]::IsNullOrWhiteSpace($id) -or $id -ieq $openAIModel) { continue }
-            [void]$models.Add([pscustomobject]@{
-                name = $id
-                displayName = if ($item.displayName) { [string]$item.displayName } else { $id }
-                provider = $catalogProvider
-            })
-        }
-
-        $availableModels = $models.ToArray()
-        $selectedIndex = Read-GemmaModelSelection -Models $availableModels -CurrentModel $script:MODEL
-        if ($selectedIndex -lt 0 -or $selectedIndex -ge $availableModels.Count) { return }
-
-        $selected = $availableModels[$selectedIndex]
-        $selectedModel = [string]$selected.name
-        $targetProvider = [string]$selected.provider
-        if ($targetProvider -eq 'openai') {
-            if (@(Get-GemmaOpenAIApiKeys).Count -eq 0) {
-                Write-Host '[OpenAI API key is not set. Configure OPENAI_API_KEY or OPENAI_API_KEYS.]' -ForegroundColor Yellow
-                return
-            }
-        } elseif ($targetProvider -eq 'gemini') {
-            if (@(Get-GeminiApiKeys).Count -eq 0) {
-                Write-Host '[Gemini API key is not set. Configure GEMINI_API or GEMINI_API_KEYS.]' -ForegroundColor Yellow
-                return
-            }
-        } elseif ($targetProvider -eq 'antigravity') {
-            if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
-                Write-Host '[Antigravity is not authenticated. Run .auth login first.]' -ForegroundColor Yellow
-                return
-            }
-        }
-
-        $script:Provider = $targetProvider
-        if ($targetProvider -ne 'openai') { $script:GemmaLastGeminiProvider = $targetProvider }
-        $script:MODEL = $selectedModel
-        Write-Host (([Environment]::NewLine) + '[Provider: ' + $script:Provider + ' | Model: ' + $script:MODEL + ']') -ForegroundColor Green
-    } catch {
-        Write-Host (([Environment]::NewLine) + '[Could not fetch/switch models]: ' + $_.Exception.Message) -ForegroundColor Red
-    }
+    $selectedModel = $matchingModels[0]
+    [void](Set-GemmaActiveModel -Provider ([string]$selectedModel.provider) -Model ([string]$selectedModel.name))
 }
