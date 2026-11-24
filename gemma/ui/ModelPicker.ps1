@@ -149,28 +149,107 @@ function Read-GemmaModelSelection {
 function Invoke-GeminiModelSwitcher {
     param([string]$RequestedModel = "")
 
+    # Remember the last Gemini-side provider so the combined picker can show
+    # its catalogue even while OpenAI is currently selected.
+    if ($script:Provider -ne 'openai') {
+        $script:GemmaLastGeminiProvider = $script:Provider
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$script:GemmaLastGeminiProvider)) {
+        $script:GemmaLastGeminiProvider = 'gemini'
+    }
+
+    $openAIModel = [string]$MIRA_OPENAI_DEFAULT_MODEL
+    if ([string]::IsNullOrWhiteSpace($openAIModel)) {
+        Write-Host '[OpenAI default model is not configured in Defaults.ps1.]' -ForegroundColor Yellow
+        return
+    }
+
+    # Direct model selection: .model <id>
     if (-not [string]::IsNullOrWhiteSpace($RequestedModel)) {
-        $selectedModel = $RequestedModel.Trim() -replace '^models/', ''
-        $script:MODEL = $selectedModel
-        Write-Host (([Environment]::NewLine) + '[Model switched to: ' + $script:MODEL + ']') -ForegroundColor Green
+        $selectedModel = $RequestedModel.Trim() -replace '^models/',''
+        if ($selectedModel -ieq $openAIModel) {
+            if (@(Get-GemmaOpenAIApiKeys).Count -eq 0) {
+                Write-Host '[OpenAI API key is not set. Configure OPENAI_API_KEY or OPENAI_API_KEYS.]' -ForegroundColor Yellow
+                return
+            }
+            $script:Provider = 'openai'
+            $script:MODEL = $openAIModel
+        } else {
+            $targetProvider = [string]$script:GemmaLastGeminiProvider
+            if ($targetProvider -notin @('antigravity','gemini')) { $targetProvider = 'gemini' }
+            if ($targetProvider -eq 'antigravity' -and -not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
+                $targetProvider = 'gemini'
+            }
+            if ($targetProvider -eq 'gemini' -and @(Get-GeminiApiKeys).Count -eq 0) {
+                Write-Host '[Gemini API key is not set. Configure GEMINI_API or GEMINI_API_KEYS.]' -ForegroundColor Yellow
+                return
+            }
+            $script:Provider = $targetProvider
+            $script:GemmaLastGeminiProvider = $targetProvider
+            $script:MODEL = $selectedModel
+        }
+        Write-Host (([Environment]::NewLine) + '[Provider: ' + $script:Provider + ' | Model: ' + $script:MODEL + ']') -ForegroundColor Green
         return
     }
 
     try {
-        $availableModels = if ($script:Provider -eq 'openai') { @(Get-GemmaOpenAIModels) } else { @(Get-GeminiModels) }
-        if ($availableModels.Count -eq 0) {
-            Write-Host '[No models available.]' -ForegroundColor Yellow
-            return
+        # The OpenAI catalogue is deliberately static: one configured model,
+        # pinned first. Only the Gemini-side catalogue is fetched.
+        $models = New-Object 'System.Collections.Generic.List[object]'
+        [void]$models.Add([pscustomobject]@{
+            name = $openAIModel
+            displayName = 'GPT-6 Luna'
+            provider = 'openai'
+        })
+
+        $catalogProvider = [string]$script:GemmaLastGeminiProvider
+        if ($catalogProvider -notin @('antigravity','gemini')) { $catalogProvider = 'gemini' }
+        $originalProvider = $script:Provider
+        try {
+            $script:Provider = $catalogProvider
+            $geminiModels = @(Get-GeminiModels)
+        } finally {
+            $script:Provider = $originalProvider
         }
 
+        foreach ($item in $geminiModels) {
+            $id = ([string]$item.name -replace '^models/','')
+            if ([string]::IsNullOrWhiteSpace($id) -or $id -ieq $openAIModel) { continue }
+            [void]$models.Add([pscustomobject]@{
+                name = $id
+                displayName = if ($item.displayName) { [string]$item.displayName } else { $id }
+                provider = $catalogProvider
+            })
+        }
+
+        $availableModels = $models.ToArray()
         $selectedIndex = Read-GemmaModelSelection -Models $availableModels -CurrentModel $script:MODEL
         if ($selectedIndex -lt 0 -or $selectedIndex -ge $availableModels.Count) { return }
 
-        $selectedModel = [string]$availableModels[$selectedIndex].name -replace '^models/', ''
-        if ($selectedModel -ieq $script:MODEL) { return }
+        $selected = $availableModels[$selectedIndex]
+        $selectedModel = [string]$selected.name
+        $targetProvider = [string]$selected.provider
+        if ($targetProvider -eq 'openai') {
+            if (@(Get-GemmaOpenAIApiKeys).Count -eq 0) {
+                Write-Host '[OpenAI API key is not set. Configure OPENAI_API_KEY or OPENAI_API_KEYS.]' -ForegroundColor Yellow
+                return
+            }
+        } elseif ($targetProvider -eq 'gemini') {
+            if (@(Get-GeminiApiKeys).Count -eq 0) {
+                Write-Host '[Gemini API key is not set. Configure GEMINI_API or GEMINI_API_KEYS.]' -ForegroundColor Yellow
+                return
+            }
+        } elseif ($targetProvider -eq 'antigravity') {
+            if (-not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
+                Write-Host '[Antigravity is not authenticated. Run .auth login first.]' -ForegroundColor Yellow
+                return
+            }
+        }
 
+        $script:Provider = $targetProvider
+        if ($targetProvider -ne 'openai') { $script:GemmaLastGeminiProvider = $targetProvider }
         $script:MODEL = $selectedModel
-        Write-Host (([Environment]::NewLine) + '[Model switched to: ' + $script:MODEL + ']') -ForegroundColor Green
+        Write-Host (([Environment]::NewLine) + '[Provider: ' + $script:Provider + ' | Model: ' + $script:MODEL + ']') -ForegroundColor Green
     } catch {
         Write-Host (([Environment]::NewLine) + '[Could not fetch/switch models]: ' + $_.Exception.Message) -ForegroundColor Red
     }
