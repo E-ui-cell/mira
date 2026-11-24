@@ -123,10 +123,11 @@
                                 }
                                 try { $parsedError = $bodyText | ConvertFrom-Json -ErrorAction Stop; $reason = [string]$parsedError.error.status } catch {}
                                 $lastFailure = "HTTP $status $reason $($failure.Exception.Message) $bodyText"
-                                if ($status -in @(401,403)) {
+                                if ($status -eq 401 -or ($status -eq 403 -and $errorCode -match '(?i)permission|access|api_key')) {
                                     if ($keyOffset -lt ($keyPool.Count - 1)) { break }
                                     throw $lastFailure
                                 }
+                                if ($status -eq 403) { throw $lastFailure }
                                 if ($status -eq 429 -and $reason -match '(?i)BILLING_DISABLED|QUOTA_EXCEEDED|RESOURCE_EXHAUSTED') {
                                     if ($reason -match '(?i)BILLING_DISABLED') { throw $lastFailure }
                                 }
