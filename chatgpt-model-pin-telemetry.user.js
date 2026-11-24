@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ChatGPT Model Pin + Reasoning + Model Slug Monitor
 // @namespace    local.chatgpt.modelpin
-// @version      3.1.0
-// @description  Pin ChatGPT Web conversation requests and report model-slug metadata
+// @version      3.2.0
+// @description  Pin ChatGPT Web model, model slug, and reasoning effort; monitor model metadata
 // @match        https://chatgpt.com/*
 // @run-at       document-start
 // @sandbox      raw
@@ -20,11 +20,12 @@
     //   gpt-6-astra
     //   auto
     const TARGET_MODEL = "auto";
+    const TARGET_MODEL_SLUG = "gpt-6-sol";
     const TARGET_THINKING_EFFORT = "extended";
 
-    // The observed conversation request schema uses "model".
-    // Model-slug fields are monitored in requests/responses/telemetry,
-    // but are not injected into conversation requests.
+    // TARGET_MODEL is written to payload.model.
+    // TARGET_MODEL_SLUG is additionally written to payload.model_slug.
+    // The server may ignore unrecognized fields; this is an explicit test.
     const PATCH_PATTERN =
         /\/backend-api\/(?:f\/)?conversation(?:\/prepare)?(?:[?#]|$)/;
 
@@ -109,13 +110,16 @@
         }
 
         const previousModel = payload.model;
+        const previousModelSlug = payload.model_slug;
         const previousEffort = payload.thinking_effort;
 
         payload.model = TARGET_MODEL;
+        payload.model_slug = TARGET_MODEL_SLUG;
         payload.thinking_effort = TARGET_THINKING_EFFORT;
 
         if (
             previousModel === TARGET_MODEL &&
+            previousModelSlug === TARGET_MODEL_SLUG &&
             previousEffort === TARGET_THINKING_EFFORT
         ) {
             return body;
@@ -123,6 +127,11 @@
 
         console.info(
             `[ModelPin] Model: ${previousModel} -> ${TARGET_MODEL}`,
+            transport
+        );
+
+        console.info(
+            `[ModelPin] Model slug: ${previousModelSlug ?? "unset"} -> ${TARGET_MODEL_SLUG}`,
             transport
         );
 
@@ -376,6 +385,7 @@
 
     window[KEY] = {
         target: TARGET_MODEL,
+        modelSlug: TARGET_MODEL_SLUG,
         reasoning: TARGET_THINKING_EFFORT,
 
         get enabled() {
@@ -394,6 +404,7 @@
 
     console.info(
         `[ModelPin] Installed. Model: ${TARGET_MODEL}; ` +
+        `Model slug: ${TARGET_MODEL_SLUG}; ` +
         `Thinking effort: ${TARGET_THINKING_EFFORT}`
     );
 })();
