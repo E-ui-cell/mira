@@ -473,8 +473,8 @@
                                 if ($status -eq 403) { throw $lastFailure }
 
                                 $failureMessage = [string]$failure.Exception.Message
-                                $transient = ($status -in @(0,408,429,499,500,502,503,504)) -or
-                                    ($failureMessage -match '(?i)timeout|connection reset|connection aborted|connection closed|underlying connection was closed|unable to read data from the transport connection|unexpected end|unexpected eof|broken pipe|name resolution|forcibly closed|stream reset|goaway')
+                                $transient = ($status -in @(408,429,499,500,502,503,504)) -or
+                                    ($status -eq 0 -and $failureMessage -match '(?i)timeout|connection reset|connection aborted|connection closed|underlying connection was closed|unable to read data from the transport connection|unexpected end|unexpected eof|unexpected error occurred on a receive|broken pipe|name resolution|forcibly closed|stream reset|goaway')
                                 if (-not $transient) { throw $lastFailure }
                                 if ($attempt -ge 3) {
                                     if ($keyOffset -lt ($keyCount - 1)) { break }
