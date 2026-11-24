@@ -1235,7 +1235,7 @@
                 }
             }
             if ([int]$requestStats.HttpStatus -le 0) { $requestStats.HttpStatus = 200 }
-            Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $true -InputTokens $roundPromptTokens -OutputTokens $roundCompletionTokens -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorMessage ([string]$requestStats.ErrorMessage)
+            Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $true -InputTokens $roundPromptTokens -OutputTokens $roundCompletionTokens -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorCode ([string]$requestStats.ErrorCode) -ErrorMessage ([string]$requestStats.ErrorMessage)
 
             if ($null -eq $response.candidates -or $response.candidates.Count -eq 0) {
                 if ($null -ne $response.error) {
