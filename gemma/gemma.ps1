@@ -370,25 +370,50 @@ function Invoke-GptOAuthTokenRequest {
     try {
         return Invoke-RestMethod -Uri 'https://auth.openai.com/api/accounts/oauth/token' -Method Post -ContentType 'application/x-www-form-urlencoded' -Headers @{ Accept = 'application/json' } -Body $body -ErrorAction Stop
     } catch {
+        $errorRecord = $_
         $status = 0
-        $detail = $_.Exception.Message
-        $response = $_.Exception.Response
+        $detail = ''
+        $requestId = ''
+        if ($null -ne $errorRecord.ErrorDetails -and -not [string]::IsNullOrWhiteSpace([string]$errorRecord.ErrorDetails.Message)) {
+            $detail = [string]$errorRecord.ErrorDetails.Message
+        }
+        $response = $errorRecord.Exception.Response
         if ($null -ne $response) {
             try {
                 $status = [int]$response.StatusCode
-                $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
-                try { $detail = $reader.ReadToEnd() } finally { $reader.Dispose() }
-                try {
-                    $errorObject = ConvertFrom-Json -InputObject $detail -ErrorAction Stop
-                    if ($errorObject.error_description) { $detail = [string]$errorObject.error_description }
-                    elseif ($errorObject.error) { $detail = [string]$errorObject.error }
-                } catch {}
+                foreach ($headerName in @('openai-request-id', 'x-request-id', 'x-openai-request-id')) {
+                    try {
+                        $headerValue = [string]$response.Headers[$headerName]
+                        if (-not [string]::IsNullOrWhiteSpace($headerValue)) {
+                            $requestId = $headerValue
+                            break
+                        }
+                    } catch {}
+                }
+                if ([string]::IsNullOrWhiteSpace($detail)) {
+                    $responseStream = $response.GetResponseStream()
+                    if ($null -ne $responseStream) {
+                        $reader = New-Object System.IO.StreamReader($responseStream)
+                        try { $detail = $reader.ReadToEnd() } finally { $reader.Dispose() }
+                    }
+                }
             } catch {}
-            finally { $response.Close() }
+            finally {
+                try { $response.Close() } catch {}
+            }
         }
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = [string]$errorRecord.Exception.Message }
+        try {
+            $errorObject = ConvertFrom-Json -InputObject $detail -ErrorAction Stop
+            if ($errorObject.error_description) { $detail = [string]$errorObject.error_description }
+            elseif ($errorObject.error) { $detail = [string]$errorObject.error }
+            elseif ($errorObject.message) { $detail = [string]$errorObject.message }
+        } catch {}
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = 'The token endpoint returned no error details.' }
         if ($detail.Length -gt 500) { $detail = $detail.Substring(0, 500) }
-        if ($status -gt 0) { throw "OpenAI OAuth token request failed (HTTP $status): $detail" }
-        throw "OpenAI OAuth token request failed: $detail"
+        $requestSuffix = if (-not [string]::IsNullOrWhiteSpace($requestId)) { " (request ID: $requestId)" } else { '' }
+        if ($status -gt 0) { throw "OpenAI OAuth token request failed (HTTP $status): $detail$requestSuffix" }
+        throw "OpenAI OAuth token request failed: $detail$requestSuffix"
     }
 }
 
