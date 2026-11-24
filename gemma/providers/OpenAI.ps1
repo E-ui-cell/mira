@@ -104,8 +104,14 @@ function Build-GemmaOpenAIChatPayload {
     }
     $tools = @(ConvertTo-GemmaOpenAITools -GeminiTools $GeminiTools)
     if ($tools.Count -gt 0) { $payload.tools = $tools; $payload.tool_choice = 'auto' }
+    $effectiveEffort = Get-GemmaEffectiveEffort -Provider 'openai'
+    # GPT-6 Luna Chat Completions permits function calling only with effort=none.
+    # Responses API migration is required to combine non-none reasoning with tools.
+    if ($tools.Count -gt 0) { $effectiveEffort = 'none' }
+    $payload.reasoning_effort = $effectiveEffort
     if ($null -ne $MIRA_OPENAI_MAX_COMPLETION_TOKENS) { $payload.max_completion_tokens = [int]$MIRA_OPENAI_MAX_COMPLETION_TOKENS }
-    if ($null -ne $MIRA_OPENAI_TEMPERATURE) { $payload.temperature = [double]$MIRA_OPENAI_TEMPERATURE }
+    # GPT-6 reasoning requests reject sampling controls such as temperature.
+    if ($effectiveEffort -eq 'none' -and $null -ne $MIRA_OPENAI_TEMPERATURE) { $payload.temperature = [double]$MIRA_OPENAI_TEMPERATURE }
     if ($null -ne $MIRA_OPENAI_RESPONSE_FORMAT) { $payload.response_format = $MIRA_OPENAI_RESPONSE_FORMAT }
     return $payload
 }
