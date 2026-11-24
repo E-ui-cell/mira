@@ -149,6 +149,9 @@
                         'x-ratelimit-limit-tokens',
                         'x-ratelimit-remaining-tokens',
                         'x-ratelimit-reset-tokens',
+                        'x-ratelimit-limit-project-tokens',
+                        'x-ratelimit-remaining-project-tokens',
+                        'x-ratelimit-reset-project-tokens',
                         'retry-after',
                         'x-request-id'
                     )) {
