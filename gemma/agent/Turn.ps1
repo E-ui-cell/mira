@@ -142,29 +142,39 @@
             $powershell.Runspace = $runspace
             [void]$powershell.AddScript({
                 param($u, $b, $h, $keyPool, $keyStart, $providerName, $streamResponses, $streamQueue, $streamState, $streamGoogle, $includeThoughts, $requestStats, $keyRotationErrorCodes)
-                $getOpenAIRateHeaders = {
+                $getProviderRateHeaders = {
                     param($Headers)
                     $snapshot = @{}
-                    foreach ($headerName in @(
-                        'x-ratelimit-limit-requests',
-                        'x-ratelimit-remaining-requests',
-                        'x-ratelimit-reset-requests',
-                        'x-ratelimit-limit-tokens',
-                        'x-ratelimit-remaining-tokens',
-                        'x-ratelimit-reset-tokens',
-                        'x-ratelimit-limit-project-tokens',
-                        'x-ratelimit-remaining-project-tokens',
-                        'x-ratelimit-reset-project-tokens',
-                        'retry-after',
-                        'x-request-id'
-                    )) {
+                    $headerNames = @()
+                    try { $headerNames = @($Headers.AllKeys) } catch {}
+                    foreach ($headerName in $headerNames) {
+                        $normalizedName = ([string]$headerName).ToLowerInvariant()
+                        if ($normalizedName -notmatch '^x-ratelimit-' -and
+                            $normalizedName -notin @('retry-after','x-request-id','x-goog-request-id','request-id')) {
+                            continue
+                        }
                         $headerValue = ''
                         try { $headerValue = [string]$Headers[$headerName] } catch {}
                         if (-not [string]::IsNullOrWhiteSpace($headerValue)) {
-                            $snapshot[$headerName] = $headerValue
+                            $snapshot[$normalizedName] = $headerValue
                         }
                     }
                     return $snapshot
+                }
+                $captureProviderResponse = {
+                    param($Response)
+                    if ($null -eq $Response) { return }
+                    try { $requestStats.HttpStatus = [int]$Response.StatusCode } catch {}
+                    try {
+                        $snapshot = & $getProviderRateHeaders $Response.Headers
+                        if ($snapshot.Count -gt 0) { $requestStats.RateLimitHeaders = $snapshot }
+                        foreach ($requestIdHeader in @('x-request-id','x-goog-request-id','request-id')) {
+                            if ($snapshot.ContainsKey($requestIdHeader)) {
+                                $requestStats.RequestId = [string]$snapshot[$requestIdHeader]
+                                break
+                            }
+                        }
+                    } catch {}
                 }
                 if ($streamGoogle) {
                     $lastFailure = ''
@@ -444,6 +454,7 @@
                                 finally { $requestStream.Dispose() }
 
                                 $httpResponse = $httpRequest.GetResponse()
+                                & $captureProviderResponse $httpResponse
                                 if ([int]$httpResponse.StatusCode -ge 300) {
                                     throw "Google streaming endpoint returned HTTP $([int]$httpResponse.StatusCode) $($httpResponse.StatusDescription)"
                                 }
@@ -494,6 +505,7 @@
                             } catch {
                                 $failure = $_
                                 $responseObject = $failure.Exception.Response
+                                if ($null -ne $responseObject) { & $captureProviderResponse $responseObject }
                                 $status = 0
                                 $retryAfter = 0
                                 $errorBody = ''
@@ -573,6 +585,7 @@
                             catch {
                                 $failure = $_; $response = $failure.Exception.Response; $status = 0; $retryAfter = 0; $bodyText = ''; $reason = ''
                                 if ($null -ne $response) {
+                                    & $captureProviderResponse $response
                                     try { $status = [int]$response.StatusCode } catch {}
                                     try { [void][int]::TryParse([string]$response.Headers['Retry-After'],[ref]$retryAfter) } catch {}
                                     try {
@@ -666,9 +679,7 @@
                                     try { $requestStream.Write($b,0,$b.Length) }
                                     finally { $requestStream.Dispose() }
                                     $httpResponse = $httpRequest.GetResponse()
-                                    $requestStats.HttpStatus = [int]$httpResponse.StatusCode
-                                    $requestStats.RateLimitHeaders = & $getOpenAIRateHeaders $httpResponse.Headers
-                                    $requestStats.RequestId = [string]$httpResponse.Headers['x-request-id']
+                                    & $captureProviderResponse $httpResponse
                                     $responseStream = $httpResponse.GetResponseStream()
                                     $responseReader = New-Object System.IO.StreamReader($responseStream,[System.Text.Encoding]::UTF8,$true)
                                     $responseText = $responseReader.ReadToEnd()
@@ -709,9 +720,7 @@
                                 finally { $requestStream.Dispose() }
 
                                 $httpResponse = $httpRequest.GetResponse()
-                                $requestStats.HttpStatus = [int]$httpResponse.StatusCode
-                                $requestStats.RateLimitHeaders = & $getOpenAIRateHeaders $httpResponse.Headers
-                                $requestStats.RequestId = [string]$httpResponse.Headers['x-request-id']
+                                & $captureProviderResponse $httpResponse
                                 $responseStream = $httpResponse.GetResponseStream()
                                 $sseReader = New-Object System.IO.StreamReader($responseStream, [System.Text.Encoding]::UTF8, $true)
                                 $eventData = New-Object 'System.Collections.Generic.List[string]'
@@ -801,8 +810,7 @@
                                     try { $status = [int]$response.StatusCode } catch {}
                                     $requestStats.HttpStatus = $status
                                     try {
-                                        $requestStats.RateLimitHeaders = & $getOpenAIRateHeaders $response.Headers
-                                        $requestStats.RequestId = [string]$response.Headers['x-request-id']
+                                        & $captureProviderResponse $response
                                     } catch {}
                                     try { [void][int]::TryParse([string]$response.Headers['Retry-After'],[ref]$retryAfter) } catch {}
                                     try {
@@ -891,6 +899,7 @@
                     catch {
                         $failure = $_; $response = $failure.Exception.Response; $status = 0; $retryAfter = 0
                         if ($null -ne $response) {
+                            & $captureProviderResponse $response
                             try { $status = [int]$response.StatusCode } catch {}
                             try { [void][int]::TryParse([string]$response.Headers['Retry-After'],[ref]$retryAfter) } catch {}
                         }
@@ -1094,6 +1103,9 @@
                 if ($usingOpenAI -and $requestApiKeys.Count -gt 1 -and
                     $requestStats.KeySlotsTried.Count -gt 1 -and $requestStats.LastKeyIndex -ge 0) {
                     $script:MiraOpenAIApiKeyIndex = ($requestStats.LastKeyIndex + 1) % $requestApiKeys.Count
+                } elseif ($requestProviderName -eq 'gemini' -and $requestApiKeys.Count -gt 1 -and
+                    $requestStats.KeySlotsTried.Count -gt 1 -and $requestStats.LastKeyIndex -ge 0) {
+                    $script:MiraGeminiApiKeyIndex = ($requestStats.LastKeyIndex + 1) % $requestApiKeys.Count
                 }
                 Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorCode ([string]$requestStats.ErrorCode) -ErrorMessage ([string]$requestStats.ErrorMessage)
                 if ($null -ne $endInvokeFailure) {
