@@ -18,3 +18,7 @@ jobs:
       - name: Parse gemma.ps1 with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\gemma.ps1
+
+      - name: Test GPT HAR cookie handling
+        shell: powershell
+        run: .\tests\Test-GptHarCookieHandling.ps1 -ScriptPath .\gemma\gemma.ps1
