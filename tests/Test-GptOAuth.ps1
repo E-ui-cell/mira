@@ -136,6 +136,9 @@ foreach ($required in @(
     'store = $false',
     'stream = $true',
     'AllowReadStreamBuffering = $false',
+    'ErrorDetails.Message',
+    'openai-request-id',
+    'x-request-id',
     'ProtectedData]::Protect',
     'ProtectedData]::Unprotect'
 )) {
