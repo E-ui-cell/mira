@@ -158,27 +158,3 @@ function ConvertFrom-GemmaOpenAIResponse {
         openaiModel = [string]$OpenAIResponse.model
     }
 }
-
-function Get-GemmaOpenAIModels {
-    $keys = @(Get-GemmaOpenAIApiKeys)
-    if ($keys.Count -eq 0) { throw 'No OpenAI API key configured. Set OPENAI_API_KEY or OPENAI_API_KEYS.' }
-    $start = 0
-    if ($null -ne $script:MiraOpenAIApiKeyIndex) { $start = [int]($script:MiraOpenAIApiKeyIndex % $keys.Count) }
-    $lastError = $null
-    for ($offset=0; $offset -lt $keys.Count; $offset++) {
-        $index = ($start + $offset) % $keys.Count
-        try {
-            $response = Invoke-RestMethod -Uri 'https://api.openai.com/v1/models' -Method Get -Headers @{ Authorization=('Bearer ' + $keys[$index]) } -TimeoutSec 30 -ErrorAction Stop
-            $script:MiraOpenAIApiKeyIndex = ($index + 1) % $keys.Count
-            $models = @($response.data | Where-Object { $_.id } | ForEach-Object { [pscustomobject]@{ name=[string]$_.id; displayName=[string]$_.id } } | Sort-Object name)
-            if ($models.Count -eq 0) { throw 'OpenAI returned an empty model catalogue.' }
-            return $models
-        } catch {
-            $lastError = $_
-            $status = 0
-            try { $status = [int]$_.Exception.Response.StatusCode } catch {}
-            if ($status -notin @(0,401,403,408,429,500,502,503,504)) { throw }
-        }
-    }
-    throw "Could not retrieve OpenAI models using any configured API key. $($lastError.Exception.Message)"
-}
