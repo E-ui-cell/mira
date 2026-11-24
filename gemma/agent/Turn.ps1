@@ -61,7 +61,7 @@
             $requestHeaders = Get-AntigravityHeaders -AccessToken $accessToken
         } elseif ($usingOpenAI) {
             $requestApiKeys = @(Get-GemmaOpenAIApiKeys)
-            if ($requestApiKeys.Count -eq 0) { throw 'OpenAI API key is not set. Set OPENAI_API_KEY or OPENAI_API_KEYS.' }
+            if ($requestApiKeys.Count -eq 0) { throw 'OpenAI API key is not configured in the OpenAI candidate list in Defaults.ps1.' }
             if ($null -ne $script:MiraOpenAIApiKeyIndex) { $requestKeyIndex = [int]($script:MiraOpenAIApiKeyIndex % $requestApiKeys.Count) }
             $jsonPayload = $payloadObj | ConvertTo-Json -Depth 30
             $url = 'https://api.openai.com/v1/chat/completions'
@@ -69,7 +69,7 @@
             $requestProviderName = 'openai'
         } else {
             $requestApiKeys = @(Get-GeminiApiKeys)
-            if ($requestApiKeys.Count -eq 0) { throw 'Gemini API key is not set. Set GEMINI_API or GEMINI_API_KEYS.' }
+            if ($requestApiKeys.Count -eq 0) { throw 'Gemini API keys are not configured in the Gemini candidate list in Defaults.ps1.' }
             if ($null -ne $script:MiraGeminiApiKeyIndex) { $requestKeyIndex = [int]($script:MiraGeminiApiKeyIndex % $requestApiKeys.Count) }
             $jsonPayload = $payloadObj | ConvertTo-Json -Depth 30
             $url = "https://generativelanguage.googleapis.com/v1beta/models/$($MODEL):generateContent"
