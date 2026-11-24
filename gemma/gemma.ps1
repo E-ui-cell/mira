@@ -21,7 +21,7 @@ if ($script:CommandMode) { $Prompt = $ExplainCommand }
 # USER CONFIGURATION — all runtime defaults are centralized here
 # ==============================================================================
 # Answer provider and model
-$MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity' or 'gemini'; no automatic provider switching
+$MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity', 'gemini', or 'gpt'; no automatic provider switching
 $MIRA_DEFAULT_MODEL = 'gemini-3.1-flash-lite'
 $MIRA_DEFAULT_EFFORT = 'high'                # 'low', 'medium', or 'high'
 $MIRA_SEARCH_MODEL = 'gemini-3.1-flash-lite' # Dedicated search engine; independent of answer provider/model
@@ -497,11 +497,11 @@ function Invoke-GptSignIn {
         $listener.Stop()
     }
 
+    if ([string]$callback.state -ne $state) { throw 'ChatGPT OAuth state validation failed.' }
     if (-not [string]::IsNullOrWhiteSpace([string]$callback.error)) {
         if ([string]$callback.error -eq 'access_denied') { throw 'ChatGPT sign-in or plan-usage consent was declined. No inference request was sent.' }
         throw "ChatGPT OAuth authorization failed: $($callback.error)"
     }
-    if ([string]$callback.state -ne $state) { throw 'ChatGPT OAuth state validation failed.' }
     if ([string]::IsNullOrWhiteSpace([string]$callback.code)) { throw 'ChatGPT OAuth callback did not contain an authorization code.' }
 
     if ($isNewRegistration) {
@@ -1259,11 +1259,18 @@ function Invoke-GemmaAuthCommand {
             Write-Host "Google Antigravity: not signed in" -ForegroundColor Yellow
             Write-Host 'Run .auth login to connect.' -ForegroundColor DarkGray
         }
-        if ($null -ne $script:GptSession) {
-            $expiry = $script:GptSession.SentinelExpiresUtc.ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss')
-            Write-Host "[ChatGPT browser session: loaded; Sentinel expires $expiry local time]" -ForegroundColor DarkGray
-        } else {
-            Write-Host '[ChatGPT OAuth: use .auth gpt status]' -ForegroundColor DarkGray
+        try {
+            $gptProfile = Get-GptProfile
+            if ($null -eq $gptProfile) {
+                Write-Host '[ChatGPT OAuth: not connected; run .auth gpt]' -ForegroundColor DarkGray
+            } elseif ([string]::IsNullOrWhiteSpace([string]$gptProfile.access_token)) {
+                Write-Host "[ChatGPT registration saved for $($gptProfile.email); signed out]" -ForegroundColor DarkGray
+            } else {
+                $gptState = if (Test-GptPlanUsageEnabled -Profile $gptProfile) { 'plan usage authorized' } else { 'identity only; plan usage not authorized' }
+                Write-Host "[ChatGPT OAuth: $($gptProfile.email); $gptState]" -ForegroundColor DarkGray
+            }
+        } catch {
+            Write-Host "[ChatGPT OAuth profile could not be read: $($_.Exception.Message)]" -ForegroundColor Yellow
         }
         return
     }
@@ -2330,7 +2337,7 @@ function Save-GeminiCodeBlocks {
 # Short interactive entry points: -p asks Mira; -e generates a command without running it.
 if (-not $script:OneShot) {
     Clear-Host
-    Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.provider' | '.model' | '.effort' | '.verbose' | '.auth' | '.auth gpt <HAR path>' | '.grounding' | '.ask' | '.autopilot' | '.skills' | '.skill <name>' | '!<cmd>' | '-p <request>' | '-e <command request>'`n" -ForegroundColor DarkGray
+    Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.provider' | '.model' | '.effort' | '.verbose' | '.auth' | '.auth gpt [status|consent|logout]' | '.grounding' | '.ask' | '.autopilot' | '.skills' | '.skill <name>' | '!<cmd>' | '-p <request>' | '-e <command request>'`n" -ForegroundColor DarkGray
 }
 
 # ==============================================================================
