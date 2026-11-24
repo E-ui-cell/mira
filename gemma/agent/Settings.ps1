@@ -135,11 +135,19 @@ function Add-GemmaUsageRecord {
             OutputTokens = 0
             ByProvider = @{}
             LastRequest = $null
+            ProviderRateLimits = @{}
             OpenAIRateLimits = @{}
         }
     }
 
     $stats = $script:MiraUsageStats
+    if ($null -eq $stats.ProviderRateLimits) {
+        $stats.ProviderRateLimits = @{}
+        if ($null -ne $stats.OpenAIRateLimits -and $stats.OpenAIRateLimits.Count -gt 0) {
+            $stats.ProviderRateLimits['openai'] = $stats.OpenAIRateLimits
+        }
+    }
+
     $inputCount = [Math]::Max(0,$InputTokens)
     $outputCount = [Math]::Max(0,$OutputTokens)
     $attemptCount = [Math]::Max(0,$HttpAttempts)
@@ -193,26 +201,55 @@ function Add-GemmaUsageRecord {
         ErrorMessage = $ErrorMessage
     }
 
-    if ($providerName -eq 'openai' -and $null -ne $RateLimitHeaders -and $RateLimitHeaders.Count -gt 0) {
+    if ($null -ne $RateLimitHeaders -and $RateLimitHeaders.Count -gt 0) {
         $rateSnapshot = @{}
         foreach ($headerName in $RateLimitHeaders.Keys) {
             $rateSnapshot[[string]$headerName] = [string]$RateLimitHeaders[$headerName]
         }
-        $stats.OpenAIRateLimits = $rateSnapshot
+        $stats.ProviderRateLimits[$providerName] = $rateSnapshot
+        # Keep the old field as a compatibility alias for existing diagnostics.
+        if ($providerName -eq 'openai') { $stats.OpenAIRateLimits = $rateSnapshot }
     }
 }
 
 function Invoke-GemmaUsageCommand {
     $stats = $script:MiraUsageStats
     if ($null -eq $stats) {
-        Write-Host '[No usage statistics are available yet.]' -ForegroundColor Yellow
-        return
+        $stats = @{
+            StartedAt = Get-Date
+            Requests = 0
+            SuccessfulRequests = 0
+            FailedRequests = 0
+            HttpAttempts = 0
+            InputTokens = 0
+            OutputTokens = 0
+            ByProvider = @{}
+            LastRequest = $null
+            ProviderRateLimits = @{}
+            OpenAIRateLimits = @{}
+        }
+    }
+    if ($null -eq $stats.ProviderRateLimits) {
+        $stats.ProviderRateLimits = @{}
+        if ($null -ne $stats.OpenAIRateLimits -and $stats.OpenAIRateLimits.Count -gt 0) {
+            $stats.ProviderRateLimits['openai'] = $stats.OpenAIRateLimits
+        }
+    }
+
+    $activeProvider = ([string]$script:Provider).Trim().ToLowerInvariant()
+    $activeModel = [string]$script:MODEL
+    $providerLabel = switch ($activeProvider) {
+        'openai' { 'OpenAI' }
+        'gemini' { 'Google AI Studio API' }
+        'antigravity' { 'Antigravity' }
+        default { if ($activeProvider) { $activeProvider } else { 'Unknown provider' } }
     }
 
     $totalTokens = [int64]$stats.InputTokens + [int64]$stats.OutputTokens
     $startedAt = [DateTime]$stats.StartedAt
     Write-Host ''
     Write-Host ("Session usage since {0}" -f $startedAt.ToString('yyyy-MM-dd HH:mm:ss')) -ForegroundColor Cyan
+    Write-Host ("Active model: {0} | {1}" -f $providerLabel,$activeModel) -ForegroundColor Cyan
     Write-Host ("Requests: {0} total | {1} completed | {2} failed | {3} HTTP attempts" -f
         $stats.Requests,$stats.SuccessfulRequests,$stats.FailedRequests,$stats.HttpAttempts) -ForegroundColor Gray
     Write-Host ("Tokens: {0:N0} input | {1:N0} output | {2:N0} total" -f
@@ -232,7 +269,7 @@ function Invoke-GemmaUsageCommand {
     if ($null -ne $stats.LastRequest) {
         $last = $stats.LastRequest
         $keyText = ''
-        if ($last.Provider -eq 'openai' -and $last.KeyCount -gt 0) {
+        if ($last.Provider -in @('openai','gemini') -and $last.KeyCount -gt 0) {
             $triedText = ''
             if (@($last.KeySlotsTried).Count -gt 0) {
                 $triedText = ' (tried ' + ((@($last.KeySlotsTried) | ForEach-Object { [string]$_ }) -join ',') + ')'
@@ -259,54 +296,64 @@ function Invoke-GemmaUsageCommand {
         Write-Host 'No provider requests recorded in this session yet.' -ForegroundColor DarkGray
     }
 
-    $openAiKeys = @(Get-GemmaOpenAIApiKeys)
-    if ($openAiKeys.Count -gt 0) {
-        $nextKeyIndex = 0
-        if ($null -ne $script:MiraOpenAIApiKeyIndex) {
-            $nextKeyIndex = [int]$script:MiraOpenAIApiKeyIndex % $openAiKeys.Count
+    switch ($activeProvider) {
+        'openai' {
+            $activeKeys = @(Get-GemmaOpenAIApiKeys)
+            $nextKeyIndex = 0
+            if ($null -ne $script:MiraOpenAIApiKeyIndex -and $activeKeys.Count -gt 0) {
+                $nextKeyIndex = [int]$script:MiraOpenAIApiKeyIndex % $activeKeys.Count
+            }
+            if ($activeKeys.Count -gt 0) {
+                Write-Host ("OpenAI key candidates: {0} configured | next slot {1}/{2}" -f
+                    $activeKeys.Count,($nextKeyIndex + 1),$activeKeys.Count) -ForegroundColor DarkGray
+            } else {
+                Write-Host 'OpenAI key candidates: none configured.' -ForegroundColor DarkGray
+            }
         }
-        Write-Host ("OpenAI key candidates: {0} configured | next slot {1}/{0}" -f
-            $openAiKeys.Count,($nextKeyIndex + 1)) -ForegroundColor DarkGray
-    } else {
-        Write-Host 'OpenAI key candidates: none configured.' -ForegroundColor DarkGray
+        'gemini' {
+            $activeKeys = @(Get-GeminiApiKeys)
+            $nextKeyIndex = 0
+            if ($null -ne $script:MiraGeminiApiKeyIndex -and $activeKeys.Count -gt 0) {
+                $nextKeyIndex = [int]$script:MiraGeminiApiKeyIndex % $activeKeys.Count
+            }
+            if ($activeKeys.Count -gt 0) {
+                Write-Host ("Google AI Studio API key candidates: {0} configured | next slot {1}/{2}" -f
+                    $activeKeys.Count,($nextKeyIndex + 1),$activeKeys.Count) -ForegroundColor DarkGray
+            } else {
+                Write-Host 'Google AI Studio API key candidates: none configured.' -ForegroundColor DarkGray
+            }
+        }
+        'antigravity' {
+            try {
+                $tokenPath = Get-AntigravityTokenPath
+                if (Test-Path -LiteralPath $tokenPath -PathType Leaf) {
+                    Write-Host 'Antigravity OAuth: saved token file found (validity not checked; no refresh or probe).' -ForegroundColor DarkGray
+                } else {
+                    Write-Host 'Antigravity OAuth: not signed in (no saved token file).' -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host 'Antigravity OAuth: could not inspect local token status.' -ForegroundColor Yellow
+            }
+        }
+        default {
+            Write-Host ("No credential diagnostics are defined for provider '{0}'." -f $activeProvider) -ForegroundColor DarkGray
+        }
     }
 
-    $limits = $stats.OpenAIRateLimits
+    $limits = @{}
+    if ($null -ne $stats.ProviderRateLimits -and $stats.ProviderRateLimits.ContainsKey($activeProvider)) {
+        $limits = $stats.ProviderRateLimits[$activeProvider]
+    } elseif ($activeProvider -eq 'openai' -and $null -ne $stats.OpenAIRateLimits) {
+        $limits = $stats.OpenAIRateLimits
+    }
     if ($null -ne $limits -and $limits.Count -gt 0) {
-        Write-Host 'Last observed OpenAI rate-limit headers:' -ForegroundColor DarkGray
-        $requestLimit = [string]$limits['x-ratelimit-limit-requests']
-        $requestRemaining = [string]$limits['x-ratelimit-remaining-requests']
-        $requestReset = [string]$limits['x-ratelimit-reset-requests']
-        if ($requestLimit -or $requestRemaining -or $requestReset) {
-            Write-Host ("  Requests: limit {0} | remaining {1} | reset {2}" -f
-                $(if ($requestLimit) { $requestLimit } else { '?' }),
-                $(if ($requestRemaining) { $requestRemaining } else { '?' }),
-                $(if ($requestReset) { $requestReset } else { '?' })) -ForegroundColor Gray
-        }
-        $tokenLimit = [string]$limits['x-ratelimit-limit-tokens']
-        $tokenRemaining = [string]$limits['x-ratelimit-remaining-tokens']
-        $tokenReset = [string]$limits['x-ratelimit-reset-tokens']
-        if ($tokenLimit -or $tokenRemaining -or $tokenReset) {
-            Write-Host ("  Organization tokens: limit {0} | remaining {1} | reset {2}" -f
-                $(if ($tokenLimit) { $tokenLimit } else { '?' }),
-                $(if ($tokenRemaining) { $tokenRemaining } else { '?' }),
-                $(if ($tokenReset) { $tokenReset } else { '?' })) -ForegroundColor Gray
-        }
-        $projectTokenLimit = [string]$limits['x-ratelimit-limit-project-tokens']
-        $projectTokenRemaining = [string]$limits['x-ratelimit-remaining-project-tokens']
-        $projectTokenReset = [string]$limits['x-ratelimit-reset-project-tokens']
-        if ($projectTokenLimit -or $projectTokenRemaining -or $projectTokenReset) {
-            Write-Host ("  Project tokens: limit {0} | remaining {1} | reset {2}" -f
-                $(if ($projectTokenLimit) { $projectTokenLimit } else { '?' }),
-                $(if ($projectTokenRemaining) { $projectTokenRemaining } else { '?' }),
-                $(if ($projectTokenReset) { $projectTokenReset } else { '?' })) -ForegroundColor Gray
-        }
-        if ($limits['retry-after']) {
-            Write-Host ("  Retry-After: {0}" -f $limits['retry-after']) -ForegroundColor Yellow
+        Write-Host ("Last observed {0} rate-limit/response headers:" -f $providerLabel) -ForegroundColor DarkGray
+        foreach ($headerName in @($limits.Keys | Sort-Object)) {
+            Write-Host ("  {0}: {1}" -f $headerName,$limits[$headerName]) -ForegroundColor Gray
         }
     } else {
-        Write-Host 'OpenAI rate-limit headers: not observed yet (no probe request is sent).' -ForegroundColor DarkGray
+        Write-Host ("{0} rate-limit headers: not observed yet (no probe request is sent)." -f $providerLabel) -ForegroundColor DarkGray
     }
 
-    Write-Host 'Chat/model calls only. Remaining values are rate-window capacity, not billing credits. Totals use provider-reported tokens; .usage sends no API request.' -ForegroundColor DarkGray
+    Write-Host 'Chat/model calls only. Token totals use provider-reported usage; rate-limit headers appear only when returned. .usage sends no API request.' -ForegroundColor DarkGray
 }
