@@ -1106,6 +1106,10 @@
 
             # No tool call: this is the final natural-language response.
             $toolLoop = $false
+            $webCitationText = ''
+            if ($usingOpenAIResponses -and $null -ne $response.webCitations) {
+                $webCitationText = Format-GemmaOpenAIWebCitations -Citations @($response.webCitations)
+            }
             $replyTextParts = @(
                 $modelParts | Where-Object { $null -ne $_.text -and ($script:VerboseOutput -or -not $_.thought) } |
                     ForEach-Object {
@@ -1158,6 +1162,9 @@
                 # The provisional header was drawn before the first response
                 # chunk. Replace it with final elapsed/token stats when it is
                 # still visible, then close the frame below the streamed body.
+                if (-not [string]::IsNullOrWhiteSpace($webCitationText)) {
+                    Write-Host $webCitationText -ForegroundColor DarkCyan
+                }
                 if ($streamDisplayState.ShowFrame) {
                     if ($streamDisplayState.HeaderDrawn -and $streamDisplayState.HeaderTop -ge 0) {
                         try {
@@ -1181,8 +1188,19 @@
                     Write-Host $bottomBoxLine -ForegroundColor DarkGray
                 }
             } elseif ($script:CommandMode) { [Console]::Out.WriteLine($reply) }
-            elseif ($script:OneShot) { Write-Host $reply -ForegroundColor Cyan }
-            else { Write-Host $topBoxLine -ForegroundColor DarkGray; Write-Host $reply -ForegroundColor Cyan; Write-Host $bottomBoxLine -ForegroundColor DarkGray }
+            elseif ($script:OneShot) {
+                Write-Host $reply -ForegroundColor Cyan
+                if (-not [string]::IsNullOrWhiteSpace($webCitationText)) {
+                    Write-Host $webCitationText -ForegroundColor DarkCyan
+                }
+            } else {
+                Write-Host $topBoxLine -ForegroundColor DarkGray
+                Write-Host $reply -ForegroundColor Cyan
+                if (-not [string]::IsNullOrWhiteSpace($webCitationText)) {
+                    Write-Host $webCitationText -ForegroundColor DarkCyan
+                }
+                Write-Host $bottomBoxLine -ForegroundColor DarkGray
+            }
             $modelTurn = @{ role = "model"; parts = @( @{ text = $reply } ) }
             if ($usingOpenAIResponses -and $null -ne $response.openaiOutputItems) {
                 $modelTurn.openaiOutputItems = @($response.openaiOutputItems)
