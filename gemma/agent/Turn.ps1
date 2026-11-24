@@ -674,11 +674,13 @@
                                     $responseText = $responseReader.ReadToEnd()
                                     $responseReader.Dispose()
                                     $successResponse = $responseText | ConvertFrom-Json -ErrorAction Stop
-                                    if ([string]$successResponse.status -eq 'failed' -or $null -ne $successResponse.error) {
+                                    if ([string]$successResponse.status -in @('failed','incomplete') -or $null -ne $successResponse.error) {
                                         if ($null -ne $successResponse.error) {
                                             $requestStats.ErrorCode = [string]$successResponse.error.code
                                             $requestStats.ErrorType = [string]$successResponse.error.type
                                             $requestStats.ErrorMessage = [string]$successResponse.error.message
+                                        } elseif ($null -ne $successResponse.incomplete_details) {
+                                            $requestStats.ErrorMessage = [string]$successResponse.incomplete_details.reason
                                         }
                                         if ([string]::IsNullOrWhiteSpace([string]$requestStats.ErrorCode) -and
                                             [string]$requestStats.ErrorMessage -match '(?i)rate limit reached|tokens per minute|tokens per min') {
@@ -845,6 +847,7 @@
                                 # These failures belong to a key/account/project candidate:
                                 # try the next explicitly configured key immediately.
                                 $rotateKey = ($keyRotationErrorCodes -contains $errorCode.ToLowerInvariant()) -or
+                                    ($keyRotationErrorCodes -contains $errorType.ToLowerInvariant()) -or
                                     ($status -eq 401) -or
                                     ($status -eq 403 -and ($errorType -match '(?i)permission' -or
                                         $errorCode -match '(?i)permission|access|api_key' -or
