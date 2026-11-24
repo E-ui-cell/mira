@@ -14,7 +14,9 @@ if ($errors.Count -gt 0) {
 }
 
 # Load only deterministic helpers. No browser, credentials, or network requests
-# are used by this test.
+# are used by this test. Define them together in the test script scope so helper
+# functions called by other extracted functions are visible in both PS 5.1 and 7.
+$functionDefinitions = New-Object System.Collections.Generic.List[string]
 foreach ($functionName in @(
     'ConvertTo-GptBase64Url',
     'ConvertFrom-GptBase64Url',
@@ -33,8 +35,9 @@ foreach ($functionName in @(
             $node.Name -eq $functionName
     }, $true)
     if ($null -eq $functionAst) { throw "Required GEMMA function not found: $functionName" }
-    . ([scriptblock]::Create($functionAst.Extent.Text))
+    [void]$functionDefinitions.Add($functionAst.Extent.Text)
 }
+. ([scriptblock]::Create([string]::Join([Environment]::NewLine, $functionDefinitions.ToArray())))
 
 $originalBytes = New-Object byte[] 32
 for ($i = 0; $i -lt $originalBytes.Length; $i++) { $originalBytes[$i] = [byte]$i }
