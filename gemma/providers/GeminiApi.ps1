@@ -15,16 +15,16 @@ function Get-GeminiApiKeys {
 
 function Get-GeminiModels {
     if ($script:Provider -eq 'antigravity') { return Get-AntigravityModels }
-    if ([string]::IsNullOrWhiteSpace($API_KEY)) {
-        throw "No Antigravity OAuth token or Gemini API key found. Run .auth login or set GEMINI_API."
-    }
+    $keys = @(Get-GeminiApiKeys)
+    if ($keys.Count -eq 0) { throw 'No Gemini API key found. Set GEMINI_API or GEMINI_API_KEYS.' }
+    $keyIndex = 0
     $allModels = New-Object 'System.Collections.Generic.List[object]'
     $pageToken = $null
     $pageCount = 0
     do {
         $uri = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100"
         if (-not [string]::IsNullOrWhiteSpace($pageToken)) { $uri += "&pageToken=$([uri]::EscapeDataString($pageToken))" }
-        $page = Invoke-RestMethod -Uri $uri -Method Get -Headers @{ "x-goog-api-key" = $API_KEY } -ErrorAction Stop
+        $page = Invoke-RestMethod -Uri $uri -Method Get -Headers @{ 'x-goog-api-key' = $keys[$keyIndex] } -ErrorAction Stop
         foreach ($item in @($page.models)) {
             if ($null -ne $item -and @($item.supportedGenerationMethods) -contains "generateContent") { [void]$allModels.Add($item) }
         }
