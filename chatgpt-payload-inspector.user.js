@@ -262,7 +262,8 @@
                 contentType.includes("multipart/form-data") ||
                 contentType.includes("application/x-www-form-urlencoded")
             ) {
-                clone.formData().then(formData => {
+                const formClone = request.clone();
+                formClone.formData().then(formData => {
                     inspectBody(formData, source, {
                         ...metadata,
                         contentType
@@ -344,7 +345,11 @@
         console.info("Request details:", metadata);
         console.groupEnd();
 
-        if (Object.prototype.hasOwnProperty.call(init || {}, "body")) {
+        if (
+            init &&
+            Object.prototype.hasOwnProperty.call(init, "body") &&
+            init.body !== undefined
+        ) {
             inspectBody(
                 init.body,
                 "[PayloadInspector #" + id + "] FETCH REQUEST BODY",
@@ -414,7 +419,7 @@
             };
 
             try {
-                if (typeof this.responseText === "string") {
+                if (this.responseType === "" || this.responseType === "text") {
                     inspectText(
                         this.responseText,
                         "[PayloadInspector #" + id + "] XHR RESPONSE BODY",
@@ -443,12 +448,20 @@
                     return;
                 }
 
-                printGroup(
-                    "[PayloadInspector #" + id + "] XHR RESPONSE BODY",
-                    responseMetadata,
-                    this.response,
-                    "XHR response object"
-                );
+                if (this.response !== undefined && this.response !== null) {
+                    printGroup(
+                        "[PayloadInspector #" + id + "] XHR RESPONSE BODY",
+                        responseMetadata,
+                        this.response,
+                        "XHR response object"
+                    );
+                } else {
+                    inspectText(
+                        String(this.response),
+                        "[PayloadInspector #" + id + "] XHR RESPONSE BODY",
+                        responseMetadata
+                    );
+                }
             } catch (error) {
                 console.warn("[PayloadInspector #" + id + "] XHR response read failed:", error);
             }
