@@ -77,6 +77,13 @@ while ($true) {
         continue
     }
 
+    if ($trimmedInput -ieq ".streaming" -or $trimmedInput.StartsWith(".streaming ", [StringComparison]::OrdinalIgnoreCase)) {
+        $streamingArgument = ""
+        if ($trimmedInput.Length -gt ".streaming".Length) { $streamingArgument = $trimmedInput.Substring(".streaming".Length).Trim() }
+        Invoke-GemmaStreamingCommand -Argument $streamingArgument
+        continue
+    }
+
     if ($trimmedInput -eq ".effort" -or $trimmedInput.StartsWith(".effort ", [StringComparison]::OrdinalIgnoreCase)) {
         $effortArgument = ""
         if ($trimmedInput.Length -gt 7) { $effortArgument = $trimmedInput.Substring(7).Trim() }
