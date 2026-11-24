@@ -648,61 +648,93 @@ function Invoke-GptLogout {
 }
 
 
+function Get-GptObjectProperty {
+    param(
+        [object]$InputObject,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+    if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        if ($InputObject.Contains($Name)) { return $InputObject[$Name] }
+        return $null
+    }
+    $property = $InputObject.PSObject.Properties[$Name]
+    if ($null -ne $property) { return $property.Value }
+    return $null
+}
+
 function ConvertTo-GptResponsesInput {
     param([object[]]$History)
     $messages = New-Object System.Collections.Generic.List[object]
 
     foreach ($turn in @($History)) {
         if ($null -eq $turn) { continue }
-        if ($null -ne $turn.response_items) {
-            foreach ($responseItem in @($turn.response_items)) {
+        $savedResponseItems = Get-GptObjectProperty -InputObject $turn -Name 'response_items'
+        if ($null -ne $savedResponseItems) {
+            foreach ($responseItem in @($savedResponseItems)) {
                 if ($null -ne $responseItem) { [void]$messages.Add($responseItem) }
             }
             continue
         }
 
-        $role = if ([string]$turn.role -eq 'model') { 'assistant' } elseif ([string]$turn.role -eq 'user') { 'user' } else { continue }
+        $turnRole = [string](Get-GptObjectProperty -InputObject $turn -Name 'role')
+        $role = if ($turnRole -eq 'model') { 'assistant' } elseif ($turnRole -eq 'user') { 'user' } else { continue }
+        $turnParts = Get-GptObjectProperty -InputObject $turn -Name 'parts'
         $textParts = New-Object System.Collections.Generic.List[string]
         $contentParts = New-Object System.Collections.Generic.List[object]
         $functionCalls = New-Object System.Collections.Generic.List[object]
         $functionOutputs = New-Object System.Collections.Generic.List[object]
         $hasImage = $false
 
-        foreach ($part in @($turn.parts)) {
+        foreach ($part in @($turnParts)) {
             if ($null -eq $part) { continue }
             if ($part -is [string]) {
                 [void]$textParts.Add([string]$part)
                 [void]$contentParts.Add(@{ type = $(if ($role -eq 'user') { 'input_text' } else { 'output_text' }); text = [string]$part })
                 continue
             }
-            if ($null -ne $part.PSObject.Properties['functionCall']) {
-                $call = $part.functionCall
-                $callId = [string]$call.id
+
+            $functionCall = Get-GptObjectProperty -InputObject $part -Name 'functionCall'
+            if ($null -ne $functionCall) {
+                $callId = [string](Get-GptObjectProperty -InputObject $functionCall -Name 'id')
                 if ([string]::IsNullOrWhiteSpace($callId)) { throw 'A saved function_call has no call ID.' }
-                $arguments = if ($null -ne $call.args) { ConvertTo-Json -InputObject $call.args -Depth 20 -Compress } else { '{}' }
-                [void]$functionCalls.Add(@{ type = 'function_call'; call_id = $callId; name = [string]$call.name; arguments = $arguments })
+                $callArguments = Get-GptObjectProperty -InputObject $functionCall -Name 'args'
+                $arguments = if ($null -ne $callArguments) { ConvertTo-Json -InputObject $callArguments -Depth 20 -Compress } else { '{}' }
+                [void]$functionCalls.Add(@{
+                    type = 'function_call'
+                    call_id = $callId
+                    name = [string](Get-GptObjectProperty -InputObject $functionCall -Name 'name')
+                    arguments = $arguments
+                })
                 continue
             }
-            if ($null -ne $part.PSObject.Properties['functionResponse']) {
-                $toolResponse = $part.functionResponse
-                $callId = [string]$toolResponse.id
+
+            $functionResponse = Get-GptObjectProperty -InputObject $part -Name 'functionResponse'
+            if ($null -ne $functionResponse) {
+                $callId = [string](Get-GptObjectProperty -InputObject $functionResponse -Name 'id')
                 if ([string]::IsNullOrWhiteSpace($callId)) { throw 'A saved function_call_output has no call ID.' }
-                $outputValue = $toolResponse.response
+                $outputValue = Get-GptObjectProperty -InputObject $functionResponse -Name 'response'
                 $outputText = if ($outputValue -is [string]) { [string]$outputValue } else { ConvertTo-Json -InputObject $outputValue -Depth 20 -Compress }
                 [void]$functionOutputs.Add(@{ type = 'function_call_output'; call_id = $callId; output = $outputText })
                 continue
             }
-            if ($null -ne $part.PSObject.Properties['inline_data']) {
-                $imageData = $part.inline_data
-                $mimeType = if ($imageData.mime_type) { [string]$imageData.mime_type } else { 'image/png' }
-                $base64Data = [string]$imageData.data
+
+            $imageData = Get-GptObjectProperty -InputObject $part -Name 'inline_data'
+            if ($null -ne $imageData) {
+                $mimeValue = Get-GptObjectProperty -InputObject $imageData -Name 'mime_type'
+                $dataValue = Get-GptObjectProperty -InputObject $imageData -Name 'data'
+                $mimeType = if ($mimeValue) { [string]$mimeValue } else { 'image/png' }
+                $base64Data = [string]$dataValue
                 if ([string]::IsNullOrWhiteSpace($base64Data)) { throw 'An image input has no base64 data.' }
                 [void]$contentParts.Add(@{ type = 'input_image'; image_url = ('data:' + $mimeType + ';base64,' + $base64Data) })
                 $hasImage = $true
                 continue
             }
-            if ($null -ne $part.PSObject.Properties['text'] -and -not $part.thought) {
-                $value = [string]$part.text
+
+            $partText = Get-GptObjectProperty -InputObject $part -Name 'text'
+            $isThought = [bool](Get-GptObjectProperty -InputObject $part -Name 'thought')
+            if ($null -ne $partText -and -not $isThought) {
+                $value = [string]$partText
                 [void]$textParts.Add($value)
                 [void]$contentParts.Add(@{ type = $(if ($role -eq 'user') { 'input_text' } else { 'output_text' }); text = $value })
             }
@@ -716,7 +748,7 @@ function ConvertTo-GptResponsesInput {
         foreach ($functionOutputItem in $functionOutputs) { [void]$messages.Add($functionOutputItem) }
     }
 
-    if ($messages.Count -eq 0) { throw 'The ChatGPT Responses API received no conversation input.' }
+    if ($messages.Count -eq 0) { throw 'The ChatGPT Responses API received no conversation input. Check that saved turns contain readable text, image data, or Responses API tool items.' }
     return @($messages.ToArray())
 }
 
@@ -2246,6 +2278,32 @@ while ($true) {
     # ==========================================================================
     else {
         $userParts = @( @{ text = $rawInput } )
+    }
+
+    # Refuse locally before constructing history or making an API call when
+    # OAuth plan usage is unavailable or no model has been selected.
+    $turnBlocked = $false
+    if ($null -eq $script:GptSession) {
+        try { $script:GptSession = Get-GptProfile } catch {
+            Write-Host "[ChatGPT OAuth profile could not be loaded: $($_.Exception.Message)]" -ForegroundColor Red
+            $turnBlocked = $true
+        }
+    }
+    if (-not $turnBlocked -and $null -eq $script:GptSession) {
+        Write-Host '[ChatGPT is not connected. Run .auth gpt to sign in.]' -ForegroundColor Yellow
+        $turnBlocked = $true
+    }
+    if (-not $turnBlocked -and -not (Test-GptPlanUsageEnabled -Profile $script:GptSession)) {
+        Write-Host '[ChatGPT plan usage is not authorized for this account/workspace. GEMMA will not send a request. Sign in with an eligible plan and approve plan usage.]' -ForegroundColor Yellow
+        $turnBlocked = $true
+    }
+    if (-not $turnBlocked -and [string]::IsNullOrWhiteSpace([string]$MODEL)) {
+        Write-Host '[No ChatGPT model is selected. Use .model after plan usage is authorized.]' -ForegroundColor Yellow
+        $turnBlocked = $true
+    }
+    if ($turnBlocked) {
+        if ($script:OneShot) { $script:OneShotCompleted = $true }
+        continue
     }
 
     # Snapshot the conversation before this turn.
