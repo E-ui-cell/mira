@@ -291,6 +291,12 @@
                         }
                         throw "$requestProviderLabel request failed with HTTP $failureStatus."
                     }
+                    if ($usingOpenAI -and $runspaceErrors.Count -gt 0) {
+                        $openAIWorkerError = [string]$runspaceErrors[$runspaceErrors.Count - 1].Exception.Message
+                        if (-not [string]::IsNullOrWhiteSpace($openAIWorkerError)) {
+                            throw "OpenAI API Failure: $openAIWorkerError"
+                        }
+                    }
                     throw "HTTP/REST Error: $($responseException.Message)"
                 }
 
