@@ -31,11 +31,16 @@
             throw "Tool loop exceeded $maxToolRounds rounds; aborting this turn to prevent an infinite request cycle."
         }
 
-        $payloadObj = Build-GeminiPayload `
-            -SystemInstruction $SystemInstruction `
-            -Contents $Contents
-
+        $usingOpenAI = ($script:Provider -eq 'openai')
+        if ($usingOpenAI) {
+            $payloadObj = Build-GemmaOpenAIChatPayload -SystemInstruction $SystemInstruction -Contents $Contents
+        } else {
+            $payloadObj = Build-GeminiPayload -SystemInstruction $SystemInstruction -Contents $Contents
+        }
         $usingAntigravityOAuth = ($script:Provider -eq 'antigravity')
+        $requestApiKeys = @()
+        $requestKeyIndex = 0
+        $requestProviderName = 'gemini'
 
         if ($usingAntigravityOAuth) {
             $accessToken = Get-AntigravityAccessToken
@@ -53,11 +58,21 @@
             $jsonPayload = $requestEnvelope | ConvertTo-Json -Depth 30
             $url = "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
             $requestHeaders = Get-AntigravityHeaders -AccessToken $accessToken
+        } elseif ($usingOpenAI) {
+            $requestApiKeys = @(Get-GemmaOpenAIApiKeys)
+            if ($requestApiKeys.Count -eq 0) { throw 'OpenAI API key is not set. Set OPENAI_API_KEY or OPENAI_API_KEYS.' }
+            if ($null -ne $script:MiraOpenAIApiKeyIndex) { $requestKeyIndex = [int]($script:MiraOpenAIApiKeyIndex % $requestApiKeys.Count) }
+            $jsonPayload = $payloadObj | ConvertTo-Json -Depth 30
+            $url = 'https://api.openai.com/v1/chat/completions'
+            $requestHeaders = @{}
+            $requestProviderName = 'openai'
         } else {
-            if ([string]::IsNullOrWhiteSpace($API_KEY)) { throw "Gemini API key is not set. Set GEMINI_APIJ." }
-            $jsonPayload = $payloadObj | ConvertTo-Json -Depth 20
-            $url = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL`:generateContent"
-            $requestHeaders = @{ "x-goog-api-key" = $API_KEY }
+            $requestApiKeys = @(Get-GeminiApiKeys)
+            if ($requestApiKeys.Count -eq 0) { throw 'Gemini API key is not set. Set GEMINI_API or GEMINI_API_KEYS.' }
+            if ($null -ne $script:MiraGeminiApiKeyIndex) { $requestKeyIndex = [int]($script:MiraGeminiApiKeyIndex % $requestApiKeys.Count) }
+            $jsonPayload = $payloadObj | ConvertTo-Json -Depth 30
+            $url = "https://generativelanguage.googleapis.com/v1beta/models/$($MODEL):generateContent"
+            $requestHeaders = @{ 'x-goog-api-key' = $requestApiKeys[$requestKeyIndex] }
         }
 
         $oldTreatControlCAsInput = $null
@@ -87,33 +102,70 @@
             $powershell = [Management.Automation.PowerShell]::Create()
             $powershell.Runspace = $runspace
             [void]$powershell.AddScript({
-                param($u, $b, $h)
-                # Retry transient HTTP failures without changing the serialized request.
+                param($u, $b, $h, $keyPool, $keyStart, $providerName)
+                if ($providerName -eq 'openai') {
+                    $lastFailure = ''
+                    for ($keyOffset = 0; $keyOffset -lt $keyPool.Count; $keyOffset++) {
+                        $keyIndex = ($keyStart + $keyOffset) % $keyPool.Count
+                        $authHeaders = @{ Authorization = ('Bearer ' + [string]$keyPool[$keyIndex]) }
+                        for ($attempt = 0; $attempt -lt 3; $attempt++) {
+                            try {
+                                return Invoke-RestMethod -Uri $u -Method Post -Headers $authHeaders -ContentType 'application/json; charset=utf-8' -Body $b -TimeoutSec 180 -ErrorAction Stop
+                            } catch {
+                                $failure = $_
+                                $response = $failure.Exception.Response
+                                $status = 0; $retryAfter = 0; $errorCode = ''; $errorBody = ''
+                                if ($null -ne $response) {
+                                    try { $status = [int]$response.StatusCode } catch {}
+                                    try { [void][int]::TryParse([string]$response.Headers['Retry-After'],[ref]$retryAfter) } catch {}
+                                    try {
+                                        $stream = $response.GetResponseStream()
+                                        if ($null -ne $stream) {
+                                            $reader = New-Object System.IO.StreamReader($stream)
+                                            $errorBody = $reader.ReadToEnd()
+                                            $reader.Dispose(); $stream.Dispose()
+                                        }
+                                    } catch {}
+                                }
+                                try { $errorCode = [string](($errorBody | ConvertFrom-Json -ErrorAction Stop).error.code) } catch {}
+                                $lastFailure = "HTTP $status $errorCode $($failure.Exception.Message) $errorBody"
+                                if ($status -eq 429 -and $errorCode -match '(?i)insufficient_quota|credit_balance_exhausted|organization_usage_limit_exceeded') { throw $lastFailure }
+                                if ($status -in @(401,403)) {
+                                    if ($keyOffset -lt ($keyPool.Count - 1)) { break }
+                                    throw $lastFailure
+                                }
+                                $transient = ($status -in @(0,408,429,500,502,503,504)) -or ([string]$failure.Exception.Message -match '(?i)timeout|connection reset|connection closed|name resolution')
+                                if (-not $transient) { throw $lastFailure }
+                                if ($attempt -ge 2) {
+                                    if ($keyOffset -lt ($keyPool.Count - 1)) { break }
+                                    throw $lastFailure
+                                }
+                                if ($retryAfter -gt 0) {
+                                    if ($retryAfter -gt 60) { throw "OpenAI Retry-After is $retryAfter seconds; deferring request. $lastFailure" }
+                                    $delay = $retryAfter
+                                } else { $delay = [Math]::Min(8,[Math]::Pow(2,$attempt)) }
+                                Start-Sleep -Seconds ([int]$delay)
+                            }
+                        }
+                    }
+                    throw "OpenAI request failed with all configured API keys. $lastFailure"
+                }
                 for ($attempt = 0; $attempt -lt 4; $attempt++) {
-                    try {
-                        return Invoke-RestMethod -Uri $u -Method Post -Headers $h -ContentType "application/json; charset=utf-8" -Body $b -ErrorAction Stop
-                    } catch {
-                        $failure = $_
-                        $response = $failure.Exception.Response
-                        $status = 0
-                        $retryAfter = 0
+                    try { return Invoke-RestMethod -Uri $u -Method Post -Headers $h -ContentType 'application/json; charset=utf-8' -Body $b -TimeoutSec 180 -ErrorAction Stop }
+                    catch {
+                        $failure = $_; $response = $failure.Exception.Response; $status = 0; $retryAfter = 0
                         if ($null -ne $response) {
                             try { $status = [int]$response.StatusCode } catch {}
-                            try {
-                                $header = [string]$response.Headers['Retry-After']
-                                [void][int]::TryParse($header,[ref]$retryAfter)
-                            } catch {}
+                            try { [void][int]::TryParse([string]$response.Headers['Retry-After'],[ref]$retryAfter) } catch {}
                         }
                         $message = [string]$failure.Exception.Message
-                        $transient = ($status -eq 408 -or $status -eq 429 -or $status -eq 500 -or $status -eq 502 -or $status -eq 503 -or $status -eq 504) -or
-                            ($message -match '(?i)timeout|temporarily unavailable|connection reset|connection closed|name resolution')
+                        $transient = ($status -in @(408,429,500,502,503,504)) -or ($message -match '(?i)timeout|temporarily unavailable|connection reset|connection closed|name resolution')
                         if (-not $transient -or $attempt -ge 3) { throw }
-                        if ($retryAfter -gt 0) { $delay = [Math]::Min(30,$retryAfter) }
-                        else { $delay = [Math]::Min(12,2 * [Math]::Pow(2,$attempt)) }
+                        if ($retryAfter -gt 0) { $delay = [Math]::Min(30,$retryAfter) } else { $delay = [Math]::Min(12,2 * [Math]::Pow(2,$attempt)) }
                         Start-Sleep -Seconds ([int]$delay)
                     }
                 }
-            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders)
+            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders).AddArgument($requestApiKeys).AddArgument($requestKeyIndex).AddArgument($requestProviderName)
             $asyncResult = $powershell.BeginInvoke()
 
             $cancelled = $false
@@ -246,6 +298,11 @@
             if ($usingAntigravityOAuth) {
                 if ($null -eq $response.response) { throw "Antigravity returned an invalid response envelope." }
                 $response = $response.response
+            } elseif ($usingOpenAI) {
+                $script:MiraOpenAIApiKeyIndex = ($requestKeyIndex + 1) % $requestApiKeys.Count
+                $response = ConvertFrom-GemmaOpenAIResponse -OpenAIResponse $response
+            } elseif ($requestProviderName -eq 'gemini') {
+                $script:MiraGeminiApiKeyIndex = $requestKeyIndex
             }
 
             if ($null -eq $response) {
