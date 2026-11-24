@@ -43,6 +43,7 @@
         $requestProviderName = 'gemini'
 
         if ($usingAntigravityOAuth) {
+            $requestProviderName = 'antigravity'
             $accessToken = Get-AntigravityAccessToken
             $project = Get-AntigravityProject
             $payloadObj.systemInstruction.role = "user"
@@ -103,6 +104,46 @@
             $powershell.Runspace = $runspace
             [void]$powershell.AddScript({
                 param($u, $b, $h, $keyPool, $keyStart, $providerName)
+                if ($providerName -eq 'gemini') {
+                    $lastFailure = ''
+                    for ($keyOffset = 0; $keyOffset -lt $keyPool.Count; $keyOffset++) {
+                        $keyIndex = ($keyStart + $keyOffset) % $keyPool.Count
+                        $keyHeaders = @{ 'x-goog-api-key' = [string]$keyPool[$keyIndex] }
+                        for ($attempt = 0; $attempt -lt 3; $attempt++) {
+                            try { return Invoke-RestMethod -Uri $u -Method Post -Headers $keyHeaders -ContentType 'application/json; charset=utf-8' -Body $b -TimeoutSec 180 -ErrorAction Stop }
+                            catch {
+                                $failure = $_; $response = $failure.Exception.Response; $status = 0; $retryAfter = 0; $bodyText = ''; $reason = ''
+                                if ($null -ne $response) {
+                                    try { $status = [int]$response.StatusCode } catch {}
+                                    try { [void][int]::TryParse([string]$response.Headers['Retry-After'],[ref]$retryAfter) } catch {}
+                                    try {
+                                        $stream = $response.GetResponseStream()
+                                        if ($null -ne $stream) { $reader = New-Object System.IO.StreamReader($stream); $bodyText = $reader.ReadToEnd(); $reader.Dispose(); $stream.Dispose() }
+                                    } catch {}
+                                }
+                                try { $parsedError = $bodyText | ConvertFrom-Json -ErrorAction Stop; $reason = [string]$parsedError.error.status } catch {}
+                                $lastFailure = "HTTP $status $reason $($failure.Exception.Message) $bodyText"
+                                if ($status -in @(401,403)) {
+                                    if ($keyOffset -lt ($keyPool.Count - 1)) { break }
+                                    throw $lastFailure
+                                }
+                                if ($status -eq 429 -and $reason -match '(?i)BILLING_DISABLED|QUOTA_EXCEEDED|RESOURCE_EXHAUSTED') {
+                                    if ($reason -match '(?i)BILLING_DISABLED') { throw $lastFailure }
+                                }
+                                $transient = ($status -in @(0,408,429,500,502,503,504)) -or ([string]$failure.Exception.Message -match '(?i)timeout|connection reset|connection closed|name resolution')
+                                if (-not $transient) { throw $lastFailure }
+                                if ($attempt -ge 2) {
+                                    if ($keyOffset -lt ($keyPool.Count - 1)) { break }
+                                    throw $lastFailure
+                                }
+                                if ($retryAfter -gt 0) { if ($retryAfter -gt 60) { throw "Gemini Retry-After is $retryAfter seconds; deferring request. $lastFailure" }; $delay = $retryAfter }
+                                else { $delay = [Math]::Min(8,[Math]::Pow(2,$attempt)) }
+                                Start-Sleep -Seconds ([int]$delay)
+                            }
+                        }
+                    }
+                    throw "Gemini request failed with all configured API keys. $lastFailure"
+                }
                 if ($providerName -eq 'openai') {
                     $lastFailure = ''
                     for ($keyOffset = 0; $keyOffset -lt $keyPool.Count; $keyOffset++) {
@@ -302,7 +343,7 @@
                 $script:MiraOpenAIApiKeyIndex = ($requestKeyIndex + 1) % $requestApiKeys.Count
                 $response = ConvertFrom-GemmaOpenAIResponse -OpenAIResponse $response
             } elseif ($requestProviderName -eq 'gemini') {
-                $script:MiraGeminiApiKeyIndex = $requestKeyIndex
+                $script:MiraGeminiApiKeyIndex = ($requestKeyIndex + 1) % $requestApiKeys.Count
             }
 
             if ($null -eq $response) {
