@@ -110,7 +110,7 @@
                         $keyIndex = ($keyStart + $keyOffset) % $keyPool.Count
                         $keyHeaders = @{ 'x-goog-api-key' = [string]$keyPool[$keyIndex] }
                         for ($attempt = 0; $attempt -lt 3; $attempt++) {
-                            try { return Invoke-RestMethod -Uri $u -Method Post -Headers $keyHeaders -ContentType 'application/json; charset=utf-8' -Body $b -TimeoutSec 180 -ErrorAction Stop }
+                            try { $successResponse = Invoke-RestMethod -Uri $u -Method Post -Headers $keyHeaders -ContentType 'application/json; charset=utf-8' -Body $b -TimeoutSec 180 -ErrorAction Stop; return ($successResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru) }
                             catch {
                                 $failure = $_; $response = $failure.Exception.Response; $status = 0; $retryAfter = 0; $bodyText = ''; $reason = ''
                                 if ($null -ne $response) {
@@ -152,7 +152,8 @@
                         $authHeaders = @{ Authorization = ('Bearer ' + [string]$keyPool[$keyIndex]) }
                         for ($attempt = 0; $attempt -lt 3; $attempt++) {
                             try {
-                                return Invoke-RestMethod -Uri $u -Method Post -Headers $authHeaders -ContentType 'application/json; charset=utf-8' -Body $b -TimeoutSec 180 -ErrorAction Stop
+                                $successResponse = Invoke-RestMethod -Uri $u -Method Post -Headers $authHeaders -ContentType 'application/json; charset=utf-8' -Body $b -TimeoutSec 180 -ErrorAction Stop
+                                return ($successResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru)
                             } catch {
                                 $failure = $_
                                 $response = $failure.Exception.Response
@@ -342,10 +343,14 @@
                 if ($null -eq $response.response) { throw "Antigravity returned an invalid response envelope." }
                 $response = $response.response
             } elseif ($usingOpenAI) {
-                $script:MiraOpenAIApiKeyIndex = ($requestKeyIndex + 1) % $requestApiKeys.Count
+                $usedKeyIndex = $requestKeyIndex
+                if ($null -ne $response._gemmaKeyIndex) { $usedKeyIndex = [int]$response._gemmaKeyIndex }
+                $script:MiraOpenAIApiKeyIndex = ($usedKeyIndex + 1) % $requestApiKeys.Count
                 $response = ConvertFrom-GemmaOpenAIResponse -OpenAIResponse $response
             } elseif ($requestProviderName -eq 'gemini') {
-                $script:MiraGeminiApiKeyIndex = ($requestKeyIndex + 1) % $requestApiKeys.Count
+                $usedKeyIndex = $requestKeyIndex
+                if ($null -ne $response._gemmaKeyIndex) { $usedKeyIndex = [int]$response._gemmaKeyIndex }
+                $script:MiraGeminiApiKeyIndex = ($usedKeyIndex + 1) % $requestApiKeys.Count
             }
 
             if ($null -eq $response) {
