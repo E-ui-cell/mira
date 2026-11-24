@@ -23,7 +23,8 @@ foreach ($functionName in @(
     'Test-GptPlanUsageEnabled',
     'Test-GptIdToken',
     'Resolve-GptModel',
-    'ConvertTo-GptResponsesInput'
+    'ConvertTo-GptResponsesInput',
+    'Get-GptToolDefinitions'
 )) {
     $functionAst = $ast.Find({
         param($node)
@@ -115,13 +116,67 @@ if (-not $modelRejected) { throw 'GPT model resolver accepted an empty model.' }
 
 $history = @(
     [pscustomobject]@{ role = 'user'; parts = @([pscustomobject]@{ text = 'hello' }) },
-    [pscustomobject]@{ role = 'model'; parts = @([pscustomobject]@{ text = 'hi there' }) },
-    [pscustomobject]@{ role = 'user'; parts = @([pscustomobject]@{ functionResponse = [pscustomobject]@{ name = 'ignored' } }) }
+    [pscustomobject]@{ role = 'model'; parts = @([pscustomobject]@{ text = 'hi there' }) }
 )
 $inputMessages = @(ConvertTo-GptResponsesInput -History $history)
 if ($inputMessages.Count -ne 2 -or $inputMessages[0].role -ne 'user' -or
     $inputMessages[1].role -ne 'assistant' -or $inputMessages[1].content -ne 'hi there') {
-    throw 'Gemini conversation history was not converted to Responses API user/assistant messages correctly.'
+    throw 'GEMMA conversation history was not converted to Responses API user/assistant messages correctly.'
+}
+
+$toolDefinitions = @(Get-GptToolDefinitions)
+$toolNames = @($toolDefinitions | ForEach-Object { [string]$_.name })
+foreach ($requiredTool in @('get_current_datetime','run_powershell','quick_web','get_skill')) {
+    if ($toolNames -notcontains $requiredTool) { throw "GPT function tool definition is missing: $requiredTool" }
+}
+if ($toolDefinitions.Count -ne 4) { throw 'Unexpected GPT local tool definition count.' }
+
+$toolCallItem = [pscustomobject]@{
+    type = 'function_call'
+    name = 'run_powershell'
+    call_id = 'call_gemma_test'
+    arguments = '{"command":"Get-Date"}'
+}
+$toolHistory = @(
+    [pscustomobject]@{ role = 'model'; parts = @(); response_items = @($toolCallItem) },
+    [pscustomobject]@{
+        role = 'user'
+        parts = @(
+            [pscustomobject]@{
+                functionResponse = [pscustomobject]@{
+                    id = 'call_gemma_test'
+                    response = [pscustomobject]@{ approved = $true; output = 'synthetic output' }
+                }
+            }
+        )
+    }
+)
+$toolInput = @(ConvertTo-GptResponsesInput -History $toolHistory)
+if ($toolInput.Count -ne 2 -or $toolInput[0].type -ne 'function_call' -or
+    $toolInput[1].type -ne 'function_call_output' -or
+    $toolInput[1].call_id -ne 'call_gemma_test') {
+    throw 'Responses API function_call/function_call_output history conversion failed.'
+}
+$toolOutputObject = $toolInput[1].output | ConvertFrom-Json
+if (-not $toolOutputObject.approved -or $toolOutputObject.output -ne 'synthetic output') {
+    throw 'Function tool output was not serialized correctly.'
+}
+
+$imageHistory = @(
+    [pscustomobject]@{
+        role = 'user'
+        parts = @(
+            [pscustomobject]@{ inline_data = [pscustomobject]@{ mime_type = 'image/png'; data = 'YWJj' } },
+            [pscustomobject]@{ text = 'Describe this image.' }
+        )
+    }
+)
+$imageInput = @(ConvertTo-GptResponsesInput -History $imageHistory)
+if ($imageInput.Count -ne 1 -or $imageInput[0].content.Count -ne 2 -or
+    $imageInput[0].content[0].type -ne 'input_image' -or
+    $imageInput[0].content[0].image_url -ne 'data:image/png;base64,YWJj' -or
+    $imageInput[0].content[1].type -ne 'input_text') {
+    throw 'ChatGPT Responses image input conversion failed.'
 }
 
 $sourceText = Get-Content -LiteralPath $resolved -Raw -Encoding UTF8
@@ -140,7 +195,15 @@ foreach ($required in @(
     'openai-request-id',
     'x-request-id',
     'ProtectedData]::Protect',
-    'ProtectedData]::Unprotect'
+    'ProtectedData]::Unprotect',
+    "type = 'additional_tools'",
+    "type = 'function_call_output'",
+    "type = 'input_image'",
+    "type = 'web_search'",
+    'reasoning = @{ effort = $script:Effort }',
+    "$MIRA_DEFAULT_MODEL = ''",
+    'Invoke-GptModelSwitcher',
+    'Invoke-GemmaWebSearchCommand'
 )) {
     if (-not $sourceText.Contains($required)) { throw "Required official ChatGPT OAuth/Responses implementation marker is missing: $required" }
 }
@@ -151,10 +214,23 @@ foreach ($forbidden in @(
     'MIRA_GPT_HAR_PATH',
     'openai-sentinel',
     'Turnstile',
-    'SentinelExpiresUtc'
+    'SentinelExpiresUtc',
+    'Antigravity',
+    'Gemini',
+    'GEMINI_APIJ',
+    'AGY_',
+    'generativelanguage.googleapis.com',
+    'daily-cloudcode-pa.googleapis.com',
+    'MIRA_DEFAULT_PROVIDER',
+    'script:Provider',
+    '.provider',
+    '.grounding',
+    'Get-Antigravity',
+    'Invoke-Gemini',
+    'Save-GeminiCodeBlocks'
 )) {
     if ($sourceText.Contains($forbidden)) { throw "Obsolete HAR/private-endpoint implementation remains: $forbidden" }
 }
 
-Write-Host 'GPT OAuth tests OK: PKCE/base64url helpers, unique state tokens, scope gating, model resolution, history conversion, DPAPI storage, public Responses API streaming, and removal of HAR/private endpoints.' -ForegroundColor Green
+Write-Host 'GPT-only tests OK: OAuth/PKCE, scope gating, account model catalogue, Responses API streaming, local function tools, web search, image input, DPAPI storage, and removal of Gemini/Antigravity/HAR paths.' -ForegroundColor Green
 exit 0
