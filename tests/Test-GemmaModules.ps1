@@ -168,6 +168,7 @@ if ($rotationCodes -contains 'slow_down' -or $rotationCodes -contains 'server_is
 # printing an already-visible prefix twice.
 $turnSource = Get-Content -LiteralPath $turnPath -Raw -Encoding UTF8
 if ($turnSource -notmatch '\$streamErrorCode\s*=\s*\[string\]\$streamErrorObject\.code' -or
+    $turnSource -notmatch 'AddArgument\(\@\(\$script:OpenAIKeyRotationErrorCodes\)\)' -or
     $turnSource -notmatch '\$openAIReplayState' -or
     $turnSource -notmatch '\$emitOpenAIText' -or
     $turnSource -match 'if \(\$streamResponses -and \$streamState\.TextStarted\)') {
