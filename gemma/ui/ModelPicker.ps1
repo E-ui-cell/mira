@@ -32,6 +32,8 @@ function Add-GemmaModelCatalogEntry {
         name = $id
         displayName = $displayName
         provider = $Provider
+        # Google restricts Gemini 2.5 API generation to projects with prior active use.
+        legacyAccessRestricted = ($Provider -eq 'gemini' -and $id -match '^gemini-2\.5-')
     })
 }
 
@@ -203,7 +205,9 @@ function Read-GemmaModelSelection {
                 foreach ($modelIndex in $providerModelIndices) {
                     $number++
                     $marker = if ($modelIndex -eq $selectedIndex) { '  [CURRENT]' } else { '' }
-                    Write-Host ('    {0,3}. {1}{2}' -f $number,$modelList[$modelIndex].name,$marker)
+                    $modelEntry = $modelList[$modelIndex]
+                    $legacyNote = if ($modelEntry.legacyAccessRestricted) { '  [legacy access]' } else { '' }
+                    Write-Host ('    {0,3}. {1}{2}{3}' -f $number,$modelEntry.name,$legacyNote,$marker)
                 }
             }
         }
@@ -301,7 +305,8 @@ function Read-GemmaModelSelection {
                 $model = $modelList[$row.ModelIndex]
                 $marker = if ($row.ModelIndex -eq $selectedIndex) { '>' } else { ' ' }
                 $current = if ([string]$model.provider -eq $CurrentProvider -and [string]$model.name -ieq $CurrentModel) { '  [current]' } else { '' }
-                $line = ('    {0} {1}{2}' -f $marker,$model.name,$current)
+                $legacyNote = if ($model.legacyAccessRestricted) { '  [legacy access]' } else { '' }
+                $line = ('    {0} {1}{2}{3}' -f $marker,$model.name,$legacyNote,$current)
                 $isSelected = ($row.ModelIndex -eq $selectedIndex)
                 if ($isSelected) {
                     [Console]::ForegroundColor = [ConsoleColor]::White
