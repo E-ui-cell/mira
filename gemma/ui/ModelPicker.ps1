@@ -395,7 +395,6 @@ function Set-GemmaActiveModel {
 
     $script:Provider = $Provider
     $script:MODEL = $Model
-    if ($Provider -ne 'openai') { $script:GemmaLastGeminiProvider = $Provider }
 
     $providerLabel = switch ($Provider) {
         'openai' { 'OpenAI' }
