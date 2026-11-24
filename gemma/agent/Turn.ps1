@@ -1166,9 +1166,12 @@
                             $headerVisible = ($streamDisplayState.HeaderTop -ge [Console]::WindowTop -and
                                 $streamDisplayState.HeaderTop -lt ([Console]::WindowTop + [Console]::WindowHeight))
                             if ($headerVisible) {
-                                [Console]::SetCursorPosition([int]$streamDisplayState.HeaderLeft,[int]$streamDisplayState.HeaderTop)
-                                Write-Host $topBoxLine.PadRight($statusWidth) -NoNewline -ForegroundColor DarkGray
-                                [Console]::SetCursorPosition($restoreLeft,$restoreTop)
+                                try {
+                                    [Console]::SetCursorPosition([int]$streamDisplayState.HeaderLeft,[int]$streamDisplayState.HeaderTop)
+                                    Write-Host $topBoxLine.PadRight($statusWidth) -NoNewline -ForegroundColor DarkGray
+                                } finally {
+                                    try { [Console]::SetCursorPosition($restoreLeft,$restoreTop) } catch {}
+                                }
                             }
                         } catch {
                             # Keep the already-drawn streaming header if cursor
