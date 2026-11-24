@@ -403,9 +403,20 @@
                     $toolResult = Invoke-GemmaToolCall -Call $call
 
 
+                    # Gemini function_response.response must be a JSON object
+                    # (google.protobuf.Struct), never a bare string or scalar.
+                    if ($null -eq $toolResult) {
+                        $toolResponseValue = @{}
+                    } elseif ($toolResult -is [System.Collections.IDictionary] -or
+                              $toolResult -is [pscustomobject]) {
+                        $toolResponseValue = $toolResult
+                    } else {
+                        $toolResponseValue = @{ result = $toolResult }
+                    }
+
                     $functionResponse = @{
                         name     = $toolName
-                        response = $toolResult
+                        response = $toolResponseValue
                     }
 
                     if ($null -ne $call.id -and -not [string]::IsNullOrEmpty([string]$call.id)) {
