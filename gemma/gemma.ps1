@@ -588,7 +588,7 @@ function Invoke-GptWebConversation {
             }
             if ($eventData.conversation_id) { $responseConversationId = [string]$eventData.conversation_id }
             $streamMessage = $eventData.message
-            if ($null -ne $streamMessage -and $null -ne $streamMessage.author -and $streamMessage.author.role -eq 'assistant') {
+            if ($null -ne $streamMessage -and $null -ne $streamMessage.author -and $streamMessage.author.role -eq 'assistant' -and ([string]::IsNullOrWhiteSpace([string]$streamMessage.channel) -or [string]$streamMessage.channel -eq 'final')) {
                 if ($streamMessage.id) { $assistantMessageId = [string]$streamMessage.id }
                 $partText = New-Object System.Collections.Generic.List[string]
                 foreach ($part in @($streamMessage.content.parts)) {
@@ -2514,11 +2514,12 @@ while ($true) {
         $runspace = $null
         $powershell = $null
 
-        if ($usingGptBrowser) {
-            $gptPrompt = ConvertTo-GptPromptText -Parts $userParts -SystemInstruction $SystemInstruction
-            Write-Host "`n[ChatGPT browser-session SSE request...]" -ForegroundColor DarkGray
-            $response = Invoke-GptWebConversation -Session $script:GptSession -Prompt $gptPrompt -Model $MODEL
-        } else {
+        try {
+            if ($usingGptBrowser) {
+                $gptPrompt = ConvertTo-GptPromptText -Parts $userParts -SystemInstruction $SystemInstruction
+                Write-Host "`n[ChatGPT browser-session SSE request...]" -ForegroundColor DarkGray
+                $response = Invoke-GptWebConversation -Session $script:GptSession -Prompt $gptPrompt -Model $MODEL
+            } else {
         $payloadObj = Build-GeminiPayload `
             -SystemInstruction $SystemInstruction `
             -Contents $Contents
@@ -2547,7 +2548,6 @@ while ($true) {
             $requestHeaders = @{ "x-goog-api-key" = $API_KEY }
         }
 
-        try {
             $utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($jsonPayload)
             $frames = @('.  ', '.. ', '...', '   ')
             $i = 0
