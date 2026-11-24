@@ -16,6 +16,18 @@ function Get-GemmaEffectiveEffort {
     return $value
 }
 
+function Get-GemmaRequestEffort {
+    param([ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider)
+
+    $value = Get-GemmaEffectiveEffort -Provider $Provider
+    # GPT-6 Luna Chat Completions can use function calling only at effort=none.
+    # Use Responses API to remove this restriction while retaining tools.
+    if ($Provider -eq 'openai' -and @(ConvertTo-GemmaOpenAITools -GeminiTools $GeminiTools).Count -gt 0) {
+        return 'none'
+    }
+    return $value
+}
+
 function Build-GeminiPayload {
     param(
         [object]$SystemInstruction,
