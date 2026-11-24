@@ -674,6 +674,18 @@
                                     $responseText = $responseReader.ReadToEnd()
                                     $responseReader.Dispose()
                                     $successResponse = $responseText | ConvertFrom-Json -ErrorAction Stop
+                                    if ([string]$successResponse.status -eq 'failed' -or $null -ne $successResponse.error) {
+                                        if ($null -ne $successResponse.error) {
+                                            $requestStats.ErrorCode = [string]$successResponse.error.code
+                                            $requestStats.ErrorType = [string]$successResponse.error.type
+                                            $requestStats.ErrorMessage = [string]$successResponse.error.message
+                                        }
+                                        if ([string]::IsNullOrWhiteSpace([string]$requestStats.ErrorCode) -and
+                                            [string]$requestStats.ErrorMessage -match '(?i)rate limit reached|tokens per minute|tokens per min') {
+                                            $requestStats.ErrorCode = 'rate_limit_exceeded'
+                                        }
+                                        throw ("OpenAI Responses request failed: " + [string]$requestStats.ErrorMessage)
+                                    }
                                     return ($successResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru)
                                 }
 
@@ -848,6 +860,7 @@
                                 $retryErrorCodes = @('rate_limit_error','slow_down','server_error','server_overloaded','server_is_overloaded','internal_server_error','service_unavailable_error')
                                 $transient = ($status -in @(0,408,409,429,500,502,503,504)) -or
                                     ($retryErrorCodes -contains $errorCode.ToLowerInvariant()) -or
+                                    ($retryErrorCodes -contains $errorType.ToLowerInvariant()) -or
                                     ([string]$failure.Exception.Message -match '(?i)timeout|connection reset|connection closed|name resolution|stream ended before response.completed|unexpected end|unexpected eof')
                                 if (-not $transient) { throw $lastFailure }
                                 if ($attempt -ge 2) {
