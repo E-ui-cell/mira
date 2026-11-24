@@ -104,6 +104,21 @@ $script:OpenAIApiKeys = @(
     ForEach-Object { ([string]$_).Trim() }
 $script:MiraOpenAIApiKeyIndex = 0
 
+# Session-local provider usage. These counters are updated from actual responses;
+# .usage is passive and never sends a probe request.
+$script:MiraUsageStats = @{
+    StartedAt = Get-Date
+    Requests = 0
+    SuccessfulRequests = 0
+    FailedRequests = 0
+    HttpAttempts = 0
+    InputTokens = 0
+    OutputTokens = 0
+    ByProvider = @{}
+    LastRequest = $null
+    OpenAIRateLimits = @{}
+}
+
 if ($script:GeminiApiKeys.Count -eq 0 -and
     -not (Test-Path -LiteralPath (Join-Path (Join-Path $HOME '.gemini\antigravity-cli') 'antigravity-oauth-token'))) {
     Write-Host "No Gemini API key or Antigravity OAuth token found. Configure a candidate in the Gemini API key list." -ForegroundColor Yellow
