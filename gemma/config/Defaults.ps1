@@ -135,6 +135,7 @@ $script:MiraUsageStats = @{
     OutputTokens = 0
     ByProvider = @{}
     LastRequest = $null
+    ProviderRateLimits = @{}
     OpenAIRateLimits = @{}
 }
 
