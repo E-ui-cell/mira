@@ -1,16 +1,6 @@
 function Get-GeminiApiKeys {
-    $raw = @()
-    if (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEYS)) { $raw += ($env:GEMINI_API_KEYS -split '[;,\r\n]+') }
-    foreach ($name in @('GEMINI_API','GEMINI_API_KEY','GEMINI_APIJ')) {
-        $value = [Environment]::GetEnvironmentVariable($name)
-        if (-not [string]::IsNullOrWhiteSpace($value)) { $raw += $value }
-    }
-    $seen = @{}
-    $keys = @(foreach ($item in $raw) {
-        $key = ([string]$item).Trim().Trim('"').Trim("'")
-        if ($key -and -not $seen.ContainsKey($key)) { $seen[$key] = $true; $key }
-    })
-    return $keys
+    # Return only the explicit candidates configured in Defaults.ps1.
+    return @($script:GeminiApiKeys)
 }
 
 function Get-GeminiModels {
