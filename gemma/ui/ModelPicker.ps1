@@ -157,7 +157,7 @@ function Invoke-GeminiModelSwitcher {
     }
 
     try {
-        $availableModels = @(Get-GeminiModels)
+        $availableModels = if ($script:Provider -eq 'openai') { @(Get-GemmaOpenAIModels) } else { @(Get-GeminiModels) }
         if ($availableModels.Count -eq 0) {
             Write-Host '[No models available.]' -ForegroundColor Yellow
             return
