@@ -176,8 +176,11 @@ $script:InApprovedPowerShellTool = $false
 $script:AntigravityProject = $null
 $script:AntigravityWebSearchModelIds = $null
 $script:AntigravityCapabilityProbeAttempted = $false
+$script:GptSession = $null
+$script:GptHarPath = $null
 
 function Get-GeminiModels {
+    if ($script:Provider -eq 'gpt') { return Get-GptModels }
     if ($script:Provider -eq 'antigravity') { return Get-AntigravityModels }
     if ([string]::IsNullOrWhiteSpace($API_KEY)) {
         throw "No Antigravity OAuth token or Gemini API key found. Run .auth login or set GEMINI_API."
@@ -206,16 +209,21 @@ function Invoke-GeminiModelSwitcher {
     # fetch or print the catalogue for an explicit choice.
     if (-not [string]::IsNullOrWhiteSpace($RequestedModel)) {
         $selectedModel = $RequestedModel.Trim() -replace '^models/', ''
+        if ($script:Provider -eq 'gpt' -and $selectedModel -ine 'gpt-6-luna') {
+            Write-Host '[The experimental GPT provider is pinned to gpt-6-luna.]' -ForegroundColor Yellow
+            return
+        }
         $script:MODEL = $selectedModel
         Write-Host "`n[Model switched to: $script:MODEL]" -ForegroundColor Green
         return
     }
 
     try {
-        Write-Host "`nFetching models from Google..." -ForegroundColor DarkGray
+        $catalogSource = if ($script:Provider -eq 'gpt') { 'ChatGPT browser session' } elseif ($script:Provider -eq 'antigravity') { 'Google Antigravity' } else { 'Google Gemini' }
+        Write-Host "`nLoading models from $catalogSource..." -ForegroundColor DarkGray
         $availableModels = @(Get-GeminiModels)
-        if ($availableModels.Count -eq 0) { Write-Host "[Google returned no models supporting generateContent.]" -ForegroundColor Yellow; return }
-        $catalogTitle = if ($script:Provider -eq "antigravity") { "Available Antigravity models (OAuth)" } else { "Available Gemini models (generateContent)" }
+        if ($availableModels.Count -eq 0) { Write-Host "[The provider returned no selectable models.]" -ForegroundColor Yellow; return }
+        $catalogTitle = if ($script:Provider -eq 'gpt') { 'Available ChatGPT browser model aliases (experimental)' } elseif ($script:Provider -eq 'antigravity') { 'Available Antigravity models (OAuth)' } else { 'Available Gemini models (generateContent)' }
         Write-Host "`n${catalogTitle}:" -ForegroundColor Cyan
         for ($i = 0; $i -lt $availableModels.Count; $i++) {
             $item = $availableModels[$i]
@@ -475,13 +483,74 @@ function Get-AntigravityModels {
 
 function Invoke-GemmaAuthCommand {
     param([string]$Argument = '')
-    $action = $Argument.Trim().ToLowerInvariant()
+    $rawArgument = $Argument.Trim()
+
+    if ($rawArgument -match '(?i)^gpt(?:\s+(.*))?$') {
+        $gptArgument = [string]$Matches[1]
+        $gptArgument = $gptArgument.Trim()
+        if ($gptArgument -ieq 'status') {
+            if ($null -eq $script:GptSession) {
+                Write-Host '[ChatGPT browser session: not loaded]' -ForegroundColor Yellow
+                Write-Host 'Run .auth gpt and select a local chatgpt.com.har export.' -ForegroundColor DarkGray
+            } else {
+                $expiry = $script:GptSession.SentinelExpiresUtc.ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss')
+                Write-Host "[ChatGPT browser session: loaded from $($script:GptSession.Path)]" -ForegroundColor Green
+                if ($script:GptSession.SentinelExpiresUtc -le [DateTime]::UtcNow) {
+                    Write-Host "[Captured Sentinel/Turnstile challenge expired at $expiry local time; import a fresh HAR before sending.]" -ForegroundColor Yellow
+                } else {
+                    Write-Host "[Captured Sentinel/Turnstile challenge expires at $expiry local time]" -ForegroundColor DarkGray
+                }
+            }
+            return
+        }
+        if ($gptArgument -ieq 'logout') {
+            $script:GptSession = $null
+            $script:GptHarPath = $null
+            Write-Host '[ChatGPT browser-session credentials cleared from GEMMA memory.]' -ForegroundColor Green
+            return
+        }
+
+        $path = $gptArgument
+        if ([string]::IsNullOrWhiteSpace($path)) {
+            if (-not [string]::IsNullOrWhiteSpace($env:MIRA_GPT_HAR_PATH)) {
+                $path = $env:MIRA_GPT_HAR_PATH
+            } else {
+                $path = Read-Host 'Path to your local chatgpt.com.har export'
+            }
+        }
+        $path = $path.Trim()
+        if ($path.Length -ge 2 -and (($path.StartsWith('"') -and $path.EndsWith('"')) -or ($path.StartsWith("'") -and $path.EndsWith("'")))) {
+            $path = $path.Substring(1, $path.Length - 2)
+        }
+        try {
+            $session = Import-GptHarSession -Path $path
+            $catalog = Get-GptBrowserModels -Session $session
+            $script:GptSession = $session
+            $script:GptHarPath = $session.Path
+            $modelCount = @($catalog.models).Count
+            Write-Host "[ChatGPT browser authentication verified; /backend-api/models returned $modelCount model entries.]" -ForegroundColor Green
+            $expiry = $session.SentinelExpiresUtc.ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss')
+            if ($session.SentinelExpiresUtc -le [DateTime]::UtcNow) {
+                Write-Host "[The browser bearer/cookie session is valid, but the captured Sentinel/Turnstile challenge expired at $expiry local time. Import a fresh HAR before sending.]" -ForegroundColor Yellow
+            } else {
+                Write-Host "[Browser-generated Sentinel/Turnstile challenge is available until $expiry local time.]" -ForegroundColor DarkGray
+            }
+            Write-Host '[Tokens remain in memory only; GEMMA does not write browser credentials to disk.]' -ForegroundColor DarkGray
+        } catch {
+            $script:GptSession = $null
+            $script:GptHarPath = $null
+            Write-Host "[GPT browser authentication failed]: $($_.Exception.Message)" -ForegroundColor Red
+        }
+        return
+    }
+
+    $action = $rawArgument.ToLowerInvariant()
     if ($action -eq 'login') {
-        try { Invoke-AntigravityLogin } catch { Write-Host "`n[OAuth login failed]: $($_.Exception.Message)" -ForegroundColor Red }
+        try { Invoke-AntigravityLogin } catch { Write-Host "[OAuth login failed]: $($_.Exception.Message)" -ForegroundColor Red }
         return
     }
     if ($action -eq 'logout') {
-        try { Invoke-AntigravityLogout } catch { Write-Host "`n[OAuth logout failed]: $($_.Exception.Message)" -ForegroundColor Red }
+        try { Invoke-AntigravityLogout } catch { Write-Host "[OAuth logout failed]: $($_.Exception.Message)" -ForegroundColor Red }
         return
     }
     if ($action -eq 'status' -or [string]::IsNullOrWhiteSpace($action)) {
@@ -490,16 +559,22 @@ function Invoke-GemmaAuthCommand {
             try {
                 $data = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
                 $email = if ($data.email) { [string]$data.email } else { '(account email not recorded)' }
-                Write-Host "`nGoogle Antigravity: signed in ($email)" -ForegroundColor Green
+                Write-Host "Google Antigravity: signed in ($email)" -ForegroundColor Green
                 Write-Host "Token file: $path" -ForegroundColor DarkGray
             } catch { Write-Host '[Saved token file exists but could not be read.]' -ForegroundColor Red }
         } else {
-            Write-Host "`nGoogle Antigravity: not signed in" -ForegroundColor Yellow
+            Write-Host "Google Antigravity: not signed in" -ForegroundColor Yellow
             Write-Host 'Run .auth login to connect.' -ForegroundColor DarkGray
+        }
+        if ($null -ne $script:GptSession) {
+            $expiry = $script:GptSession.SentinelExpiresUtc.ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss')
+            Write-Host "[ChatGPT browser session: loaded; Sentinel expires $expiry local time]" -ForegroundColor DarkGray
+        } else {
+            Write-Host '[ChatGPT browser session: not loaded; use .auth gpt]' -ForegroundColor DarkGray
         }
         return
     }
-    Write-Host 'Usage: .auth login | .auth status | .auth logout' -ForegroundColor Yellow
+    Write-Host 'Usage: .auth login | .auth status | .auth logout | .auth gpt [HAR path | status | logout]' -ForegroundColor Yellow
 }
 
 function Invoke-GemmaSearchCommand {
@@ -988,16 +1063,40 @@ function Invoke-GemmaEffortCommand {
 function Invoke-GemmaProviderCommand {
     param([string]$Argument = '')
     $value = $Argument.Trim().ToLowerInvariant()
-    if (-not $value) { Write-Host "[Provider: $script:Provider | Model: $script:MODEL]" -ForegroundColor Cyan; Write-Host 'Usage: .provider antigravity | .provider gemini' -ForegroundColor DarkGray; return }
-    if ($value -notin @('antigravity','gemini')) { Write-Host 'Usage: .provider antigravity | .provider gemini' -ForegroundColor Yellow; return }
-    if ($value -eq 'antigravity' -and -not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) { Write-Host '[Antigravity is not authenticated. Run .auth login first.]' -ForegroundColor Yellow; return }
-    if ($value -eq 'gemini' -and [string]::IsNullOrWhiteSpace($API_KEY)) { Write-Host '[Gemini API key is not set. Set GEMINI_APIJ before switching.]' -ForegroundColor Yellow; return }
+    if (-not $value) {
+        Write-Host "[Provider: $script:Provider | Model: $script:MODEL]" -ForegroundColor Cyan
+        Write-Host 'Usage: .provider antigravity | .provider gemini | .provider gpt' -ForegroundColor DarkGray
+        return
+    }
+    if ($value -notin @('antigravity','gemini','gpt')) {
+        Write-Host 'Usage: .provider antigravity | .provider gemini | .provider gpt' -ForegroundColor Yellow
+        return
+    }
+    if ($value -eq 'antigravity' -and -not (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
+        Write-Host '[Antigravity is not authenticated. Run .auth login first.]' -ForegroundColor Yellow
+        return
+    }
+    if ($value -eq 'gemini' -and [string]::IsNullOrWhiteSpace($API_KEY)) {
+        Write-Host '[Gemini API key is not set. Set GEMINI_APIJ before switching.]' -ForegroundColor Yellow
+        return
+    }
+    if ($value -eq 'gpt' -and $null -eq $script:GptSession) {
+        Write-Host '[ChatGPT browser session is not loaded. Run .auth gpt first.]' -ForegroundColor Yellow
+        return
+    }
+
+    $previousProvider = $script:Provider
+    if ($value -eq 'gpt') { $script:MODEL = 'gpt-6-luna' }
+    elseif ($previousProvider -eq 'gpt' -and $script:MODEL -eq 'gpt-6-luna') { $script:MODEL = $MIRA_DEFAULT_MODEL }
     $script:Provider = $value
     Write-Host "[Provider switched to: $script:Provider]" -ForegroundColor Green
-    Write-Host '[Model name retained; use .model to select from this provider catalogue.]' -ForegroundColor DarkGray
+    if ($value -eq 'gpt') {
+        Write-Host '[Experimental ChatGPT browser-session transport; no OpenAI API key is used. Text-only; local tools are unavailable.]' -ForegroundColor DarkGray
+    } else {
+        Write-Host '[Model name retained; use .model to select from this provider catalogue.]' -ForegroundColor DarkGray
+    }
     Write-Host "[Reasoning effort: $script:Effort | use .effort low/medium/high to change.]" -ForegroundColor DarkGray
 }
-
 
 function Build-GeminiPayload {
     param(
@@ -1293,14 +1392,14 @@ function Read-GemLineFallback {
             }
 
             if ($b -match '^\.provider\s+(\S*)$') {
-                $m = @('antigravity','gemini' | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })
+                $m = @('antigravity','gemini','gpt' | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })
                 if ($m.Count -eq 1) { $old=$b; $b='.provider '+$m[0]; $c=$b.Length; Redraw $old $b $c }
                 elseif ($m.Count -gt 1) { [Console]::Write("`r`n"+($m -join '  ')+ "`r`nYou: "); $row=[Console]::CursorTop; Redraw '' $b $c }
                 else { [Console]::Beep(700,60) }
                 continue
             }
             if ($b -match '^\.(?:grounding|auth|effort)\s+(\S*)$') {
-                $options = if ($b.StartsWith('.grounding')) { @('on','off','status') } elseif ($b.StartsWith('.effort')) { @('low','medium','high') } else { @('login','status','logout') }
+                $options = if ($b.StartsWith('.grounding')) { @('on','off','status') } elseif ($b.StartsWith('.effort')) { @('low','medium','high') } else { @('login','status','logout','gpt') }
                 $m = @($options | Where-Object { $_.StartsWith($matches[1],[StringComparison]::OrdinalIgnoreCase) })
                 if ($m.Count -eq 1) { $head = if ($b.StartsWith('.grounding')) { '.grounding ' } elseif ($b.StartsWith('.effort')) { '.effort ' } else { '.auth ' }; $old=$b; $b=$head+$m[0]; $c=$b.Length; Redraw $old $b $c }
                 elseif ($m.Count -gt 1) { [Console]::Write("`r`n"+($m -join '  ')+ "`r`nYou: "); $row=[Console]::CursorTop; Redraw '' $b $c }
@@ -1509,7 +1608,7 @@ function Save-GeminiCodeBlocks {
 # Short interactive entry points: -p asks Mira; -e generates a command without running it.
 if (-not $script:OneShot) {
     Clear-Host
-    Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.provider' | '.model' | '.effort' | '.verbose' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '.skills' | '.skill <name>' | '!<cmd>' | '-p <request>' | '-e <command request>'`n" -ForegroundColor DarkGray
+    Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.provider' | '.model' | '.effort' | '.verbose' | '.auth' | '.auth gpt <HAR path>' | '.grounding' | '.ask' | '.autopilot' | '.skills' | '.skill <name>' | '!<cmd>' | '-p <request>' | '-e <command request>'`n" -ForegroundColor DarkGray
 }
 
 # ==============================================================================
@@ -1954,6 +2053,16 @@ while ($true) {
             throw "Tool loop exceeded $maxToolRounds rounds; aborting this turn to prevent an infinite request cycle."
         }
 
+        $usingGptBrowser = ($script:Provider -eq 'gpt')
+        $oldTreatControlCAsInput = $null
+        $runspace = $null
+        $powershell = $null
+
+        if ($usingGptBrowser) {
+            $gptPrompt = ConvertTo-GptPromptText -Parts $userParts -SystemInstruction $SystemInstruction
+            Write-Host "`n[ChatGPT browser-session SSE request...]" -ForegroundColor DarkGray
+            $response = Invoke-GptWebConversation -Session $script:GptSession -Prompt $gptPrompt -Model $MODEL
+        } else {
         $payloadObj = Build-GeminiPayload `
             -SystemInstruction $SystemInstruction `
             -Contents $Contents
@@ -1981,10 +2090,6 @@ while ($true) {
             $url = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL`:generateContent"
             $requestHeaders = @{ "x-goog-api-key" = $API_KEY }
         }
-
-        $oldTreatControlCAsInput = $null
-        $runspace = $null
-        $powershell = $null
 
         try {
             $utf8Bytes = [System.Text.Encoding]::UTF8.GetBytes($jsonPayload)
@@ -2100,6 +2205,7 @@ while ($true) {
                 if ($null -eq $response.response) { throw "Antigravity returned an invalid response envelope." }
                 $response = $response.response
             }
+        }
 
             if ($null -eq $response) {
                 throw "The API returned a null or empty response object."
@@ -2120,7 +2226,9 @@ while ($true) {
 
             if ($response.candidates.Count -gt 0) {
                 $candidate = $response.candidates[0]
-                Write-GemmaGroundingDiagnostics -Candidate $candidate -Provider $script:Provider -Model $script:MODEL -GroundingEnabled $script:GoogleSearchGrounding
+                if ($script:Provider -ne 'gpt') {
+                    Write-GemmaGroundingDiagnostics -Candidate $candidate -Provider $script:Provider -Model $script:MODEL -GroundingEnabled $script:GoogleSearchGrounding
+                }
 
                 if (-not $script:CommandMode -and $null -ne $candidate.finishReason) {
                     Write-Host "[Gemini Finish Reason]: $($candidate.finishReason)" -ForegroundColor DarkGray
