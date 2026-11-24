@@ -107,6 +107,28 @@ try {
     $rsa.Dispose()
 }
 
+# Verify the CurrentUser DPAPI primitive used by the saved OAuth profile under
+# both Windows PowerShell 5.1 and PowerShell 7.
+try {
+    Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+    $dpapiPlain = [System.Text.Encoding]::UTF8.GetBytes('gemma-dpapi-ci')
+    $dpapiProtected = [System.Security.Cryptography.ProtectedData]::Protect(
+        $dpapiPlain,
+        $null,
+        [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+    )
+    $dpapiRestored = [System.Security.Cryptography.ProtectedData]::Unprotect(
+        $dpapiProtected,
+        $null,
+        [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+    )
+    if ([System.Text.Encoding]::UTF8.GetString($dpapiRestored) -ne 'gemma-dpapi-ci') {
+        throw 'DPAPI round-trip returned different bytes.'
+    }
+} catch {
+    throw "Windows CurrentUser DPAPI is unavailable or failed under PowerShell $($PSVersionTable.PSVersion): $($_.Exception.Message)"
+}
+
 if ((Resolve-GptModel -Model 'gpt-model-from-catalog') -ne 'gpt-model-from-catalog') {
     throw 'GPT model resolver changed the model slug.'
 }
