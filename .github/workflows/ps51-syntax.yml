@@ -19,6 +19,6 @@ jobs:
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\gemma.ps1
 
-      - name: Test GPT HAR cookie handling
+      - name: Test Sign in with ChatGPT OAuth
         shell: powershell
-        run: .\tests\Test-GptHarCookieHandling.ps1 -ScriptPath .\gemma\gemma.ps1
+        run: .\tests\Test-GptOAuth.ps1 -ScriptPath .\gemma\gemma.ps1
