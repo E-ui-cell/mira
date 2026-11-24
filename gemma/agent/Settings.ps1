@@ -320,5 +320,5 @@ function Invoke-GemmaUsageCommand {
         Write-Host 'OpenAI rate-limit headers: not observed yet (no probe request is sent).' -ForegroundColor DarkGray
     }
 
-    Write-Host 'Remaining values are rate-window capacity, not billing credits. Session totals use provider-reported tokens; .usage sends no API request.' -ForegroundColor DarkGray
+    Write-Host 'Chat/model calls only. Remaining values are rate-window capacity, not billing credits. Totals use provider-reported tokens; .usage sends no API request.' -ForegroundColor DarkGray
 }
