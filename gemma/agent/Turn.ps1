@@ -41,8 +41,12 @@
         } else {
             $payloadObj = Build-GeminiPayload -SystemInstruction $SystemInstruction -Contents $Contents
         }
-        if ($usingOpenAIResponses) {
-            # Luna uses the Responses API SSE stream; other providers stay unchanged.
+        $streamMode = [string]$script:StreamingMode
+        $streamOpenAIResponses = ($usingOpenAIResponses -and $streamMode -ne 'off')
+        $streamGoogle = (-not $usingOpenAI -and $streamMode -ne 'off')
+        $streamingActive = ($streamOpenAIResponses -or $streamGoogle)
+        if ($streamOpenAIResponses) {
+            # Luna uses the Responses API SSE stream when streaming is enabled.
             $payloadObj.stream = $true
         }
         $usingAntigravityOAuth = ($script:Provider -eq 'antigravity')
@@ -65,7 +69,8 @@
                 requestType = "agent"
             }
             $jsonPayload = $requestEnvelope | ConvertTo-Json -Depth 30
-            $url = "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent"
+            if ($streamGoogle) { $url = "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse" }
+            else { $url = "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent" }
             $requestHeaders = Get-AntigravityHeaders -AccessToken $accessToken
         } elseif ($usingOpenAI) {
             $requestApiKeys = @(Get-GemmaOpenAIApiKeys)
@@ -81,7 +86,8 @@
             if ($requestApiKeys.Count -eq 0) { throw 'Gemini API keys are not configured in the Gemini candidate list in Defaults.ps1.' }
             if ($null -ne $script:MiraGeminiApiKeyIndex) { $requestKeyIndex = [int]($script:MiraGeminiApiKeyIndex % $requestApiKeys.Count) }
             $jsonPayload = $payloadObj | ConvertTo-Json -Depth 30
-            $url = "https://generativelanguage.googleapis.com/v1beta/models/$($MODEL):generateContent"
+            if ($streamGoogle) { $url = "https://generativelanguage.googleapis.com/v1beta/models/$($MODEL):streamGenerateContent?alt=sse" }
+            else { $url = "https://generativelanguage.googleapis.com/v1beta/models/$($MODEL):generateContent" }
             $requestHeaders = @{ 'x-goog-api-key' = $requestApiKeys[$requestKeyIndex] }
         }
 
@@ -97,7 +103,7 @@
 
             $streamQueue = $null
             $streamState = $null
-            if ($usingOpenAIResponses) {
+            if ($streamingActive) {
                 $streamQueue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
                 $streamState = [hashtable]::Synchronized(@{
                     TextStarted = $false
@@ -122,7 +128,363 @@
             $powershell = [Management.Automation.PowerShell]::Create()
             $powershell.Runspace = $runspace
             [void]$powershell.AddScript({
-                param($u, $b, $h, $keyPool, $keyStart, $providerName, $streamResponses, $streamQueue, $streamState)
+                param($u, $b, $h, $keyPool, $keyStart, $providerName, $streamResponses, $streamQueue, $streamState, $streamGoogle, $includeThoughts)
+                if ($streamGoogle) {
+                    $lastFailure = ''
+                    $keyCount = if ($providerName -eq 'gemini') { [int]$keyPool.Count } else { 1 }
+                    if ($keyCount -lt 1) { throw 'Gemini streaming has no configured API key candidates.' }
+
+                    # Replay after recoverable interruptions and suppress the exact
+                    # prefix already shown, avoiding duplicated visible text.
+                    $retryState = @{ Text = ''; ReplayLimit = 0; ReplayOffset = 0 }
+                    $convertFunctionCall = {
+                        param($Call)
+                        $callMap = @{}
+                        $argsSource = $null
+                        if ($Call -is [System.Collections.IDictionary]) {
+                            foreach ($callKey in $Call.Keys) {
+                                if ([string]$callKey -eq 'args') { $argsSource = $Call[$callKey] }
+                                else { $callMap[[string]$callKey] = $Call[$callKey] }
+                            }
+                        } elseif ($null -ne $Call) {
+                            foreach ($callProperty in $Call.PSObject.Properties) {
+                                if ($callProperty.Name -eq 'args') { $argsSource = $callProperty.Value }
+                                else { $callMap[$callProperty.Name] = $callProperty.Value }
+                            }
+                        }
+                        $argsMap = @{}
+                        if ($argsSource -is [System.Collections.IDictionary]) {
+                            foreach ($argKey in $argsSource.Keys) { $argsMap[[string]$argKey] = $argsSource[$argKey] }
+                        } elseif ($null -ne $argsSource) {
+                            foreach ($argProperty in $argsSource.PSObject.Properties) { $argsMap[$argProperty.Name] = $argProperty.Value }
+                        }
+                        $callMap['args'] = $argsMap
+                        return $callMap
+                    }
+                    $emitGoogleText = {
+                        param([string]$Value, [int]$CurrentAttempt)
+                        if ([string]::IsNullOrEmpty($Value)) { return }
+                        if ($retryState.ReplayLimit -gt 0 -and $retryState.ReplayOffset -lt $retryState.ReplayLimit) {
+                            $matched = 0
+                            while ($matched -lt $Value.Length -and
+                                   $retryState.ReplayOffset -lt $retryState.ReplayLimit -and
+                                   $Value[$matched] -ceq $retryState.Text[$retryState.ReplayOffset]) {
+                                $matched++
+                                $retryState.ReplayOffset++
+                            }
+                            if ($matched -gt 0) { $Value = $Value.Substring($matched) }
+                            if ($Value.Length -gt 0 -and $retryState.ReplayOffset -lt $retryState.ReplayLimit) {
+                                # Preserve both streams if regenerated text diverges.
+                                $retryState.ReplayOffset = $retryState.ReplayLimit
+                            }
+                        }
+                        if (-not [string]::IsNullOrEmpty($Value)) {
+                            $retryState.Text += $Value
+                            $streamState.TextStarted = $true
+                            $streamQueue.Enqueue($Value)
+                        }
+                    }
+                    $processGoogleEvent = {
+                        param(
+                            [string]$EventJson,
+                            [hashtable]$ParseState,
+                            [int]$CurrentAttempt,
+                            [scriptblock]$EmitText,
+                            [scriptblock]$ConvertCall,
+                            [bool]$IncludeThoughts
+                        )
+                        $EventJson = $EventJson.Trim()
+                        if ([string]::IsNullOrWhiteSpace($EventJson) -or $EventJson -eq '[DONE]') { return }
+                        try { $eventObject = $EventJson | ConvertFrom-Json -ErrorAction Stop }
+                        catch { throw "Google returned malformed streaming data: $($_.Exception.Message)" }
+
+                        if ($null -ne $eventObject.error) {
+                            $eventMessage = [string]$eventObject.error.message
+                            if ([string]::IsNullOrWhiteSpace($eventMessage)) { $eventMessage = $EventJson }
+                            throw "Google streaming API error: $eventMessage"
+                        }
+
+                        # Public Gemini sends candidates at the top level. Antigravity
+                        # wraps the same GenerateContent response in { response: ... }.
+                        $chunkResponse = $eventObject
+                        if ($null -ne $eventObject.response) { $chunkResponse = $eventObject.response }
+                        if ($null -ne $chunkResponse.error) {
+                            $eventMessage = [string]$chunkResponse.error.message
+                            if ([string]::IsNullOrWhiteSpace($eventMessage)) { $eventMessage = $EventJson }
+                            throw "Google streaming API error: $eventMessage"
+                        }
+
+                        if ($null -ne $chunkResponse.usageMetadata) {
+                            $ParseState.Usage = $chunkResponse.usageMetadata
+                        } elseif ($null -ne $eventObject.usageMetadata) {
+                            $ParseState.Usage = $eventObject.usageMetadata
+                        }
+                        $candidates = @($chunkResponse.candidates)
+                        if ($candidates.Count -eq 0) { return }
+
+                        $candidate = $candidates[0]
+                        if ($null -ne $candidate.content -and -not [string]::IsNullOrWhiteSpace([string]$candidate.content.role)) {
+                            $ParseState.Candidate.content.role = [string]$candidate.content.role
+                        }
+                        if (-not [string]::IsNullOrWhiteSpace([string]$candidate.finishReason)) {
+                            $ParseState.Candidate.finishReason = [string]$candidate.finishReason
+                        }
+                        if (-not [string]::IsNullOrWhiteSpace([string]$candidate.finishMessage)) {
+                            $ParseState.Candidate.finishMessage = [string]$candidate.finishMessage
+                        }
+                        if ($null -ne $candidate.groundingMetadata) {
+                            $ParseState.Candidate.groundingMetadata = $candidate.groundingMetadata
+                        }
+
+                        $incomingParts = @()
+                        if ($null -ne $candidate.content -and $null -ne $candidate.content.parts) {
+                            $incomingParts = @($candidate.content.parts)
+                        }
+                        for ($partIndex = 0; $partIndex -lt $incomingParts.Count; $partIndex++) {
+                            $incomingPart = $incomingParts[$partIndex]
+                            if ($null -eq $incomingPart) { continue }
+
+                            if (-not $ParseState.PartMap.ContainsKey($partIndex)) {
+                                $partCopy = @{}
+                                if ($incomingPart -is [System.Collections.IDictionary]) {
+                                    foreach ($partKey in $incomingPart.Keys) { $partCopy[[string]$partKey] = $incomingPart[$partKey] }
+                                } else {
+                                    foreach ($partProperty in $incomingPart.PSObject.Properties) { $partCopy[$partProperty.Name] = $partProperty.Value }
+                                }
+                                if ($null -ne $incomingPart.functionCall) {
+                                    $partCopy.functionCall = & $ConvertCall $incomingPart.functionCall
+                                    $ParseState.HasToolCall = $true
+                                }
+                                $ParseState.PartMap[$partIndex] = $partCopy
+                                [void]$ParseState.Candidate.content.parts.Add($partCopy)
+                            } else {
+                                $partCopy = $ParseState.PartMap[$partIndex]
+                                if (-not [string]::IsNullOrEmpty([string]$incomingPart.text)) {
+                                    $partCopy.text = [string]$partCopy.text + [string]$incomingPart.text
+                                }
+                                if ([bool]$incomingPart.thought) { $partCopy.thought = $true }
+                                if (-not [string]::IsNullOrWhiteSpace([string]$incomingPart.thoughtSignature)) {
+                                    $partCopy.thoughtSignature = [string]$incomingPart.thoughtSignature
+                                }
+                                if ($null -ne $incomingPart.functionCall) {
+                                    $incomingCallMap = & $ConvertCall $incomingPart.functionCall
+                                    if ($null -eq $partCopy.functionCall) {
+                                        $partCopy.functionCall = $incomingCallMap
+                                    } else {
+                                        if ($partCopy.functionCall -isnot [System.Collections.IDictionary]) {
+                                            $partCopy.functionCall = & $ConvertCall $partCopy.functionCall
+                                        }
+                                        foreach ($callField in @('id','name')) {
+                                            if (-not [string]::IsNullOrWhiteSpace([string]$incomingCallMap[$callField])) {
+                                                $partCopy.functionCall[$callField] = $incomingCallMap[$callField]
+                                            }
+                                        }
+                                        if ($partCopy.functionCall.args -isnot [System.Collections.IDictionary]) {
+                                            $partCopy.functionCall.args = @{}
+                                        }
+                                        foreach ($argKey in $incomingCallMap.args.Keys) {
+                                            $partCopy.functionCall.args[[string]$argKey] = $incomingCallMap.args[$argKey]
+                                        }
+                                    }
+                                    $ParseState.HasToolCall = $true
+                                }
+                            }
+
+                            $isThought = [bool]$incomingPart.thought
+                            if ($isThought) { $ParseState.HasThoughts = $true }
+                            if (-not $isThought -and -not [string]::IsNullOrEmpty([string]$incomingPart.text)) {
+                                $ParseState.HasResponseText = $true
+                            }
+
+                            if (-not [string]::IsNullOrEmpty([string]$incomingPart.text) -and (-not $isThought -or $IncludeThoughts)) {
+                                if ($ParseState.HasDisplayedPart -and [int]$ParseState.LastDisplayedPartIndex -ne $partIndex) {
+                                    & $EmitText ([string][char]10) $CurrentAttempt
+                                }
+                                if ($isThought -and -not $ParseState.ThoughtLabelSent) {
+                                    & $EmitText '[Thought summary]' $CurrentAttempt
+                                    & $EmitText ([string][char]10) $CurrentAttempt
+                                    $ParseState.ThoughtLabelSent = $true
+                                }
+                                & $EmitText ([string]$incomingPart.text) $CurrentAttempt
+                                $ParseState.LastDisplayedPartIndex = $partIndex
+                                $ParseState.HasDisplayedPart = $true
+                            }
+                        }
+                    }
+
+                    for ($keyOffset = 0; $keyOffset -lt $keyCount; $keyOffset++) {
+                        $keyIndex = if ($providerName -eq 'gemini') { ($keyStart + $keyOffset) % $keyCount } else { -1 }
+                        for ($attempt = 0; $attempt -lt 4; $attempt++) {
+                            $httpRequest = $null
+                            $httpResponse = $null
+                            $sseReader = $null
+                            try {
+                                $retryState.ReplayLimit = $retryState.Text.Length
+                                $retryState.ReplayOffset = 0
+                                $parseState = @{
+                                    Candidate = @{
+                                        content = @{
+                                            role = 'model'
+                                            parts = (New-Object System.Collections.ArrayList)
+                                        }
+                                        finishReason = ''
+                                        finishMessage = ''
+                                        groundingMetadata = $null
+                                    }
+                                    PartMap = @{}
+                                    Usage = $null
+                                    HasToolCall = $false
+                                    HasThoughts = $false
+                                    HasResponseText = $false
+                                    HasDisplayedPart = $false
+                                    LastDisplayedPartIndex = -1
+                                    ThoughtLabelSent = $false
+                                }
+
+                                $httpRequest = [System.Net.HttpWebRequest]::Create($u)
+                                $httpRequest.Method = 'POST'
+                                $httpRequest.ContentType = 'application/json; charset=utf-8'
+                                $httpRequest.Accept = 'text/event-stream'
+                                $httpRequest.Timeout = 180000
+                                $httpRequest.ReadWriteTimeout = 180000
+                                $httpRequest.ContentLength = [long]$b.Length
+                                $httpRequest.AllowReadStreamBuffering = $false
+
+                                if ($providerName -eq 'gemini') {
+                                    $httpRequest.Headers['x-goog-api-key'] = [string]$keyPool[$keyIndex]
+                                } else {
+                                    foreach ($headerName in $h.Keys) {
+                                        if ([string]$headerName -ieq 'User-Agent') {
+                                            $httpRequest.UserAgent = [string]$h[$headerName]
+                                        } elseif ([string]$headerName -ieq 'Authorization') {
+                                            $httpRequest.Headers['Authorization'] = [string]$h[$headerName]
+                                        } elseif ([string]$headerName -ieq 'Accept' -or [string]$headerName -ieq 'Content-Type') {
+                                            continue
+                                        } else {
+                                            $httpRequest.Headers[[string]$headerName] = [string]$h[$headerName]
+                                        }
+                                    }
+                                }
+                                $streamState.Request = $httpRequest
+
+                                $requestStream = $httpRequest.GetRequestStream()
+                                try { $requestStream.Write($b, 0, $b.Length) }
+                                finally { $requestStream.Dispose() }
+
+                                $httpResponse = $httpRequest.GetResponse()
+                                if ([int]$httpResponse.StatusCode -ge 300) {
+                                    throw "Google streaming endpoint returned HTTP $([int]$httpResponse.StatusCode) $($httpResponse.StatusDescription)"
+                                }
+                                $responseStream = $httpResponse.GetResponseStream()
+                                $sseReader = New-Object System.IO.StreamReader($responseStream, [System.Text.Encoding]::UTF8, $true)
+                                $eventData = New-Object 'System.Collections.Generic.List[string]'
+
+                                while (($sseLine = $sseReader.ReadLine()) -ne $null) {
+                                    if ($sseLine.Length -eq 0) {
+                                        if ($eventData.Count -eq 0) { continue }
+                                        $eventJson = [string]::Join(([string][char]10), $eventData.ToArray())
+                                        $eventData.Clear()
+                                        & $processGoogleEvent $eventJson $parseState $attempt $emitGoogleText $convertFunctionCall ([bool]$includeThoughts)
+                                    } elseif ($sseLine.StartsWith(':')) {
+                                        continue
+                                    } elseif ($sseLine.StartsWith('data:')) {
+                                        [void]$eventData.Add($sseLine.Substring(5).TrimStart())
+                                    }
+                                }
+                                if ($eventData.Count -gt 0) {
+                                    $eventJson = [string]::Join(([string][char]10), $eventData.ToArray())
+                                    $eventData.Clear()
+                                    & $processGoogleEvent $eventJson $parseState $attempt $emitGoogleText $convertFunctionCall ([bool]$includeThoughts)
+                                }
+
+                                $streamParts = @($parseState.Candidate.content.parts)
+                                if ($streamParts.Count -eq 0) {
+                                    throw 'Google streaming response ended without candidate content.'
+                                }
+                                if (-not $parseState.HasToolCall -and -not $parseState.HasResponseText) {
+                                    if ($parseState.HasThoughts) {
+                                        throw 'Google streaming response contained thought summaries but no final response text.'
+                                    }
+                                    if ([string]$parseState.Candidate.finishReason -match '(?i)MAX_TOKENS') {
+                                        throw 'Google streaming response reached MAX_TOKENS without response text.'
+                                    }
+                                    throw 'Google streaming response finished without response text or function calls.'
+                                }
+
+                                $completedResponse = [pscustomobject]@{
+                                    candidates = @($parseState.Candidate)
+                                    usageMetadata = $parseState.Usage
+                                }
+                                if ($providerName -eq 'gemini') {
+                                    return ($completedResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru)
+                                }
+                                return [pscustomobject]@{ response = $completedResponse }
+                            } catch {
+                                $failure = $_
+                                $responseObject = $failure.Exception.Response
+                                $status = 0
+                                $retryAfter = 0
+                                $errorBody = ''
+                                $errorReason = ''
+                                if ($null -ne $responseObject) {
+                                    try { $status = [int]$responseObject.StatusCode } catch {}
+                                    try { [void][int]::TryParse([string]$responseObject.Headers['Retry-After'],[ref]$retryAfter) } catch {}
+                                    try {
+                                        $errorStream = $responseObject.GetResponseStream()
+                                        if ($null -ne $errorStream) {
+                                            $errorReader = New-Object System.IO.StreamReader($errorStream)
+                                            $errorBody = $errorReader.ReadToEnd()
+                                            $errorReader.Dispose()
+                                            $errorStream.Dispose()
+                                        }
+                                    } catch {}
+                                    try { $responseObject.Close() } catch {}
+                                }
+                                try {
+                                    $errorObject = $errorBody | ConvertFrom-Json -ErrorAction Stop
+                                    $errorReason = [string]$errorObject.error.status
+                                    if ([string]::IsNullOrWhiteSpace($errorReason)) { $errorReason = [string]$errorObject.error.code }
+                                } catch {}
+                                $lastFailure = "HTTP $status $errorReason $($failure.Exception.Message) $errorBody"
+
+                                if ($status -eq 429 -and $errorReason -match '(?i)BILLING_DISABLED') {
+                                    throw $lastFailure
+                                }
+                                $invalidGeminiKey = ($status -eq 401 -or
+                                    ($status -in @(400,403) -and
+                                        ($errorReason -match '(?i)PERMISSION_DENIED|API_KEY_INVALID|API_KEY_SERVICE_BLOCKED' -or
+                                         $errorBody -match '(?i)api.?key|permission denied')))
+                                if ($providerName -eq 'gemini' -and $invalidGeminiKey) {
+                                    if ($keyOffset -lt ($keyCount - 1)) { break }
+                                    throw $lastFailure
+                                }
+                                if ($status -eq 403) { throw $lastFailure }
+
+                                $failureMessage = [string]$failure.Exception.Message
+                                $transient = ($status -in @(0,408,429,499,500,502,503,504)) -or
+                                    ($failureMessage -match '(?i)timeout|connection reset|connection aborted|connection closed|underlying connection was closed|unable to read data from the transport connection|unexpected end|unexpected eof|broken pipe|name resolution|forcibly closed|stream reset|goaway')
+                                if (-not $transient) { throw $lastFailure }
+                                if ($attempt -ge 3) {
+                                    if ($keyOffset -lt ($keyCount - 1)) { break }
+                                    throw $lastFailure
+                                }
+                                if ($retryAfter -gt 0) {
+                                    if ($retryAfter -gt 60) { throw "Google Retry-After is $retryAfter seconds; deferring request. $lastFailure" }
+                                    $delay = $retryAfter
+                                } else {
+                                    $delay = [Math]::Min(8,[Math]::Pow(2,$attempt))
+                                }
+                                Start-Sleep -Seconds ([int]$delay)
+                            } finally {
+                                if ($null -ne $sseReader) { try { $sseReader.Dispose() } catch {} }
+                                if ($null -ne $httpResponse) { try { $httpResponse.Close() } catch {} }
+                                if ($null -ne $httpRequest) { try { $httpRequest.Abort() } catch {} }
+                                if ($null -ne $streamState) { $streamState.Request = $null }
+                            }
+                        }
+                    }
+                    throw "Google streaming request failed with all available credentials. $lastFailure"
+                }
                 if ($providerName -eq 'gemini') {
                     $lastFailure = ''
                     for ($keyOffset = 0; $keyOffset -lt $keyPool.Count; $keyOffset++) {
@@ -320,30 +682,64 @@
                         Start-Sleep -Seconds ([int]$delay)
                     }
                 }
-            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders).AddArgument($requestApiKeys).AddArgument($requestKeyIndex).AddArgument($requestProviderName).AddArgument([bool]$usingOpenAIResponses).AddArgument($streamQueue).AddArgument($streamState)
+            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders).AddArgument($requestApiKeys).AddArgument($requestKeyIndex).AddArgument($requestProviderName).AddArgument([bool]$streamOpenAIResponses).AddArgument($streamQueue).AddArgument($streamState).AddArgument([bool]$streamGoogle).AddArgument([bool]$script:VerboseOutput)
             $asyncResult = $powershell.BeginInvoke()
 
             $cancelled = $false
             $streamTextThisRequest = $false
             $streamDelta = ''
-            while (-not $asyncResult.IsCompleted) {
-                if ($usingOpenAIResponses -and $null -ne $streamQueue) {
-                    while ($streamQueue.TryDequeue([ref]$streamDelta)) {
-                        if (-not $streamTextThisRequest) {
-                            Write-Host (" " * 60) -NoNewline
-                            Write-Host "`r" -NoNewline
-                            $streamTextThisRequest = $true
-                            $turnStreamedText = $true
-                        }
-                        if ($script:CommandMode) {
-                            [Console]::Out.Write($streamDelta)
-                            [Console]::Out.Flush()
-                        } else {
-                            Write-Host $streamDelta -NoNewline -ForegroundColor Cyan
-                        }
+            $streamDisplayState = @{
+                Mode = $streamMode
+                LineBuffer = ''
+                OutputText = ''
+                HasOutput = $false
+                LastChar = [char]0
+                CommandMode = [bool]$script:CommandMode
+            }
+            $writeStreamChunk = {
+                param([string]$Chunk)
+                if ([string]::IsNullOrEmpty($Chunk)) { return }
+                $streamDisplayState.OutputText += $Chunk
+                if ($streamDisplayState.Mode -eq 'delta') {
+                    if (-not $streamDisplayState.HasOutput) {
+                        Write-Host (" " * 60) -NoNewline
+                        Write-Host ([string][char]13) -NoNewline
+                        $streamDisplayState.HasOutput = $true
                     }
+                    if ($streamDisplayState.CommandMode) {
+                        [Console]::Out.Write($Chunk)
+                        [Console]::Out.Flush()
+                    } else {
+                        Write-Host $Chunk -NoNewline -ForegroundColor Cyan
+                    }
+                    $streamDisplayState.LastChar = $Chunk[$Chunk.Length - 1]
+                    return
                 }
 
+                $streamDisplayState.LineBuffer += $Chunk
+                while (($newlineIndex = $streamDisplayState.LineBuffer.IndexOf([char]10)) -ge 0) {
+                    $completeLine = $streamDisplayState.LineBuffer.Substring(0,$newlineIndex + 1)
+                    $streamDisplayState.LineBuffer = $streamDisplayState.LineBuffer.Substring($newlineIndex + 1)
+                    if (-not $streamDisplayState.HasOutput) {
+                        Write-Host (" " * 60) -NoNewline
+                        Write-Host ([string][char]13) -NoNewline
+                        $streamDisplayState.HasOutput = $true
+                    }
+                    if ($streamDisplayState.CommandMode) {
+                        [Console]::Out.Write($completeLine)
+                        [Console]::Out.Flush()
+                    } else {
+                        Write-Host $completeLine.TrimEnd([char]13,[char]10) -ForegroundColor Cyan
+                    }
+                    $streamDisplayState.LastChar = [char]10
+                }
+            }
+            while (-not $asyncResult.IsCompleted) {
+                if ($streamingActive -and $null -ne $streamQueue) {
+                    while ($streamQueue.TryDequeue([ref]$streamDelta)) {
+                        & $writeStreamChunk $streamDelta
+                    }
+                }
                 if ($canReadConsoleKeys -and [Console]::KeyAvailable) {
                     $key = [Console]::ReadKey($true)
                     if ($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)) {
@@ -357,37 +753,52 @@
                     }
                 }
 
-                if (-not $streamTextThisRequest) {
+                if (-not $streamDisplayState.HasOutput) {
                     $frame = $frames[$i % $frames.Length]
                     $elapsed = [int]$sw.ElapsedMilliseconds
                     Write-Host "`r$frame  $([math]::Round($elapsed/1000, 1))s " -NoNewline -ForegroundColor DarkGray
                     $i++
                 }
-                if ($streamTextThisRequest) { Start-Sleep -Milliseconds 25 }
+                if ($streamDisplayState.HasOutput) { Start-Sleep -Milliseconds 25 }
                 else { Start-Sleep -Milliseconds $MIRA_SPINNER_INTERVAL_MS }
             }
 
-            # Drain the last deltas queued just before the worker completed.
-            if ($usingOpenAIResponses -and $null -ne $streamQueue) {
+            # Drain the final chunks queued immediately before worker completion.
+            if (-not $cancelled -and $streamingActive -and $null -ne $streamQueue) {
                 while ($streamQueue.TryDequeue([ref]$streamDelta)) {
-                    if (-not $streamTextThisRequest) {
-                        Write-Host (" " * 60) -NoNewline
-                        Write-Host "`r" -NoNewline
-                        $streamTextThisRequest = $true
-                        $turnStreamedText = $true
-                    }
-                    if ($script:CommandMode) {
-                            [Console]::Out.Write($streamDelta)
-                            [Console]::Out.Flush()
-                        } else {
-                            Write-Host $streamDelta -NoNewline -ForegroundColor Cyan
-                        }
+                    & $writeStreamChunk $streamDelta
                 }
             }
-            if ($streamTextThisRequest) {
-                if ($script:CommandMode) { [Console]::Out.WriteLine() }
-                else { Write-Host "" }
+            if (-not $cancelled -and $streamingActive -and
+                $streamDisplayState.Mode -eq 'line' -and
+                $streamDisplayState.LineBuffer.Length -gt 0) {
+                if (-not $streamDisplayState.HasOutput) {
+                    Write-Host (" " * 60) -NoNewline
+                    Write-Host ([string][char]13) -NoNewline
+                    $streamDisplayState.HasOutput = $true
+                }
+                $remainingLine = $streamDisplayState.LineBuffer
+                $streamDisplayState.LineBuffer = ''
+                if ($streamDisplayState.CommandMode) {
+                    [Console]::Out.Write($remainingLine)
+                    [Console]::Out.WriteLine()
+                    [Console]::Out.Flush()
+                } else {
+                    Write-Host $remainingLine -ForegroundColor Cyan
+                }
+                $streamDisplayState.LastChar = [char]10
             }
+            if ($streamingActive -and $streamDisplayState.HasOutput -and
+                [char]$streamDisplayState.LastChar -ne [char]10) {
+                if ($streamDisplayState.CommandMode) {
+                    [Console]::Out.WriteLine()
+                    [Console]::Out.Flush()
+                } else {
+                    Write-Host ""
+                }
+                $streamDisplayState.LastChar = [char]10
+            }
+            $streamTextThisRequest = [bool]$streamDisplayState.HasOutput
             $sw.Stop()
 
             if ($cancelled) {
@@ -462,10 +873,11 @@
                         throw "$requestProviderLabel request failed with HTTP $failureStatus."
                     }
 
-                    if ($usingOpenAI -and $runspaceErrors.Count -gt 0) {
-                        $openAIWorkerError = [string]$runspaceErrors[$runspaceErrors.Count - 1].Exception.Message
-                        if (-not [string]::IsNullOrWhiteSpace($openAIWorkerError)) {
-                            throw "OpenAI API Failure: $openAIWorkerError"
+                    if (($usingOpenAI -or $streamGoogle) -and $runspaceErrors.Count -gt 0) {
+                        $workerError = [string]$runspaceErrors[$runspaceErrors.Count - 1].Exception.Message
+                        if (-not [string]::IsNullOrWhiteSpace($workerError)) {
+                            $workerLabel = if ($usingAntigravityOAuth) { 'Antigravity' } elseif ($usingOpenAI) { 'OpenAI' } else { 'Gemini' }
+                            throw "$workerLabel API Failure: $workerError"
                         }
                     }
                     throw "HTTP/REST Error: $($responseException.Message)"
@@ -634,13 +1046,15 @@
                         if ($_.thought) { "[Thought summary]`n$([string]$_.text)" } else { [string]$_.text }
                     }
             )
-            if ($usingOpenAIResponses -and $turnStreamedText) {
-                # Keep the stored text identical to what the terminal streamed.
-                $reply = ($replyTextParts -join "`n").Trim()
+            $streamedFinalResponse = ($streamTextThisRequest -and $streamingActive)
+            if ($streamedFinalResponse) {
+                # Store exactly the text emitted by the active stream, including
+                # retry-prefix suppression and the selected display mode.
+                $reply = ([string]$streamDisplayState.OutputText).Trim()
             } else {
                 $reply = Normalize-MiraReply ($replyTextParts -join "`n")
             }
-            if ($script:CommandMode -and -not ($usingOpenAIResponses -and $turnStreamedText)) { $reply = [regex]::Replace($reply.Trim(),'(?s)^```[a-zA-Z0-9_-]*\s*|\s*```$','').Trim() }
+            if ($script:CommandMode -and -not $streamedFinalResponse) { $reply = [regex]::Replace($reply.Trim(),'(?s)^```[a-zA-Z0-9_-]*\s*|\s*```$','').Trim() }
             $script:LastAssistantReply = $reply
 
             try {
@@ -674,7 +1088,7 @@
             $bottomIndent = [Math]::Max(0,[int](($width - $bottomRule.Length) / 2))
             $bottomBoxLine = (' ' * $bottomIndent) + $bottomRule
 
-            if ($usingOpenAIResponses -and $turnStreamedText) {
+            if ($streamedFinalResponse) {
                 # The response body has already been printed incrementally.
                 if (-not $script:CommandMode -and -not $script:OneShot) {
                     Write-Host $topBoxLine -ForegroundColor DarkGray
