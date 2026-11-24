@@ -105,6 +105,9 @@ function Build-GemmaOpenAIChatPayload {
     $tools = @(ConvertTo-GemmaOpenAITools -GeminiTools $GeminiTools)
     if ($tools.Count -gt 0) { $payload.tools = $tools; $payload.tool_choice = 'auto' }
     $effectiveEffort = Get-GemmaRequestEffort -Provider 'openai'
+    if ([string]$script:MODEL -ieq 'gpt-6-luna' -and -not [string]::IsNullOrWhiteSpace([string]$MIRA_OPENAI_LUNA_EFFORT)) {
+        $effectiveEffort = ([string]$MIRA_OPENAI_LUNA_EFFORT).Trim().ToLowerInvariant()
+    }
     $payload.reasoning_effort = $effectiveEffort
     if ($null -ne $MIRA_OPENAI_MAX_COMPLETION_TOKENS) { $payload.max_completion_tokens = [int]$MIRA_OPENAI_MAX_COMPLETION_TOKENS }
     # GPT-6 reasoning requests reject sampling controls such as temperature.
