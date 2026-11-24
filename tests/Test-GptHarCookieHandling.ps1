@@ -16,7 +16,7 @@ if ($errors.Count -gt 0) {
 
 # Load only the four functions under test. This avoids starting the interactive
 # GEMMA loop or making any network request.
-foreach ($functionName in @('Get-GptHarHeaderMap', 'Get-GptHeaderValue', 'Get-GptHarCookieHeader', 'New-GptWebRequest')) {
+foreach ($functionName in @('Get-GptHarHeaderMap', 'Get-GptHeaderValue', 'Get-GptHarCookieHeader', 'New-GptWebRequest', 'Resolve-GptModel', 'Get-GptModels')) {
     $functionAst = $ast.Find({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -28,6 +28,20 @@ foreach ($functionName in @('Get-GptHarHeaderMap', 'Get-GptHeaderValue', 'Get-Gp
     }
 
     . ([scriptblock]::Create($functionAst.Extent.Text))
+}
+
+$script:GptSession = [pscustomobject]@{}
+$gptModels = @(Get-GptModels)
+if ($gptModels.Count -ne 1 -or [string]$gptModels[0].name -ne 'auto') {
+    throw 'The experimental GPT model catalogue must expose only the automatic model selection.'
+}
+if ((Resolve-GptModel -Model 'auto') -ne 'auto') {
+    throw 'The experimental GPT provider did not preserve automatic model routing.'
+}
+$rejectedPinnedModel = $false
+try { [void](Resolve-GptModel -Model 'gpt-6-luna') } catch { $rejectedPinnedModel = $true }
+if (-not $rejectedPinnedModel) {
+    throw 'The experimental GPT provider must not silently pin gpt-6-luna when Auto is selected.'
 }
 
 $cookiePairs = New-Object System.Collections.Generic.List[string]
@@ -89,5 +103,5 @@ if ($fallbackHeader -notmatch 'session=fallback-token' -or $fallbackHeader -notm
     throw 'HAR request.cookies fallback did not reconstruct the cookie header.'
 }
 
-Write-Host 'GPT HAR cookie handling OK: session cookie retained, g_state ignored, 28 cookies supported, request.cookies fallback works.' -ForegroundColor Green
+Write-Host 'GPT provider tests OK: Auto model routing selected; HAR cookie handling retains the session, ignores g_state, supports 28 cookies, and uses request.cookies fallback.' -ForegroundColor Green
 exit 0
