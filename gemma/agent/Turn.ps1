@@ -90,6 +90,16 @@
             $requestHeaders = @{ 'x-goog-api-key' = $requestApiKeys[$requestKeyIndex] }
         }
 
+        $requestStats = [hashtable]::Synchronized(@{
+            HttpAttempts = 0
+            LastKeyIndex = -1
+            KeyCount = [int]$requestApiKeys.Count
+            KeySlotsTried = (New-Object System.Collections.ArrayList)
+            RateLimitHeaders = @{}
+            RequestId = ''
+            HttpStatus = 0
+        })
+
         $oldTreatControlCAsInput = $null
         $runspace = $null
         $powershell = $null
@@ -127,7 +137,28 @@
             $powershell = [Management.Automation.PowerShell]::Create()
             $powershell.Runspace = $runspace
             [void]$powershell.AddScript({
-                param($u, $b, $h, $keyPool, $keyStart, $providerName, $streamResponses, $streamQueue, $streamState, $streamGoogle, $includeThoughts)
+                param($u, $b, $h, $keyPool, $keyStart, $providerName, $streamResponses, $streamQueue, $streamState, $streamGoogle, $includeThoughts, $requestStats)
+                $getOpenAIRateHeaders = {
+                    param($Headers)
+                    $snapshot = @{}
+                    foreach ($headerName in @(
+                        'x-ratelimit-limit-requests',
+                        'x-ratelimit-remaining-requests',
+                        'x-ratelimit-reset-requests',
+                        'x-ratelimit-limit-tokens',
+                        'x-ratelimit-remaining-tokens',
+                        'x-ratelimit-reset-tokens',
+                        'retry-after',
+                        'x-request-id'
+                    )) {
+                        $headerValue = ''
+                        try { $headerValue = [string]$Headers[$headerName] } catch {}
+                        if (-not [string]::IsNullOrWhiteSpace($headerValue)) {
+                            $snapshot[$headerName] = $headerValue
+                        }
+                    }
+                    return $snapshot
+                }
                 if ($streamGoogle) {
                     $lastFailure = ''
                     $keyCount = if ($providerName -eq 'gemini') { [int]$keyPool.Count } else { 1 }
@@ -345,6 +376,12 @@
                     for ($keyOffset = 0; $keyOffset -lt $keyCount; $keyOffset++) {
                         $keyIndex = if ($providerName -eq 'gemini') { ($keyStart + $keyOffset) % $keyCount } else { -1 }
                         for ($attempt = 0; $attempt -lt 4; $attempt++) {
+                            $requestStats.HttpAttempts = [int]$requestStats.HttpAttempts + 1
+                            $requestStats.LastKeyIndex = $keyIndex
+                            $requestStats.KeyCount = $keyCount
+                            if ($keyIndex -ge 0 -and -not $requestStats.KeySlotsTried.Contains($keyIndex + 1)) {
+                                [void]$requestStats.KeySlotsTried.Add($keyIndex + 1)
+                            }
                             $httpRequest = $null
                             $httpResponse = $null
                             $sseReader = $null
@@ -519,6 +556,12 @@
                         $keyIndex = ($keyStart + $keyOffset) % $keyPool.Count
                         $keyHeaders = @{ 'x-goog-api-key' = [string]$keyPool[$keyIndex] }
                         for ($attempt = 0; $attempt -lt 3; $attempt++) {
+                            $requestStats.HttpAttempts = [int]$requestStats.HttpAttempts + 1
+                            $requestStats.LastKeyIndex = $keyIndex
+                            $requestStats.KeyCount = $keyPool.Count
+                            if (-not $requestStats.KeySlotsTried.Contains($keyIndex + 1)) {
+                                [void]$requestStats.KeySlotsTried.Add($keyIndex + 1)
+                            }
                             try { $successResponse = Invoke-RestMethod -Uri $u -Method Post -Headers $keyHeaders -ContentType 'application/json; charset=utf-8' -Body $b -TimeoutSec 180 -ErrorAction Stop; return ($successResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru) }
                             catch {
                                 $failure = $_; $response = $failure.Exception.Response; $status = 0; $retryAfter = 0; $bodyText = ''; $reason = ''
@@ -560,12 +603,37 @@
                         $keyIndex = ($keyStart + $keyOffset) % $keyPool.Count
                         $authHeaders = @{ Authorization = ('Bearer ' + [string]$keyPool[$keyIndex]) }
                         for ($attempt = 0; $attempt -lt 3; $attempt++) {
+                            $requestStats.HttpAttempts = [int]$requestStats.HttpAttempts + 1
+                            $requestStats.LastKeyIndex = $keyIndex
+                            $requestStats.KeyCount = $keyPool.Count
+                            if (-not $requestStats.KeySlotsTried.Contains($keyIndex + 1)) {
+                                [void]$requestStats.KeySlotsTried.Add($keyIndex + 1)
+                            }
                             $httpResponse = $null
                             $httpRequest = $null
                             $sseReader = $null
                             try {
                                 if (-not $streamResponses) {
-                                    $successResponse = Invoke-RestMethod -Uri $u -Method Post -Headers $authHeaders -ContentType 'application/json; charset=utf-8' -Body $b -TimeoutSec 180 -ErrorAction Stop
+                                    $httpRequest = [System.Net.HttpWebRequest]::Create($u)
+                                    $httpRequest.Method = 'POST'
+                                    $httpRequest.ContentType = 'application/json; charset=utf-8'
+                                    $httpRequest.Accept = 'application/json'
+                                    $httpRequest.Headers['Authorization'] = ('Bearer ' + [string]$keyPool[$keyIndex])
+                                    $httpRequest.Timeout = 180000
+                                    $httpRequest.ReadWriteTimeout = 180000
+                                    $httpRequest.ContentLength = [long]$b.Length
+                                    $requestStream = $httpRequest.GetRequestStream()
+                                    try { $requestStream.Write($b,0,$b.Length) }
+                                    finally { $requestStream.Dispose() }
+                                    $httpResponse = $httpRequest.GetResponse()
+                                    $requestStats.HttpStatus = [int]$httpResponse.StatusCode
+                                    $requestStats.RateLimitHeaders = & $getOpenAIRateHeaders $httpResponse.Headers
+                                    $requestStats.RequestId = [string]$httpResponse.Headers['x-request-id']
+                                    $responseStream = $httpResponse.GetResponseStream()
+                                    $responseReader = New-Object System.IO.StreamReader($responseStream,[System.Text.Encoding]::UTF8,$true)
+                                    $responseText = $responseReader.ReadToEnd()
+                                    $responseReader.Dispose()
+                                    $successResponse = $responseText | ConvertFrom-Json -ErrorAction Stop
                                     return ($successResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru)
                                 }
 
@@ -587,6 +655,9 @@
                                 finally { $requestStream.Dispose() }
 
                                 $httpResponse = $httpRequest.GetResponse()
+                                $requestStats.HttpStatus = [int]$httpResponse.StatusCode
+                                $requestStats.RateLimitHeaders = & $getOpenAIRateHeaders $httpResponse.Headers
+                                $requestStats.RequestId = [string]$httpResponse.Headers['x-request-id']
                                 $responseStream = $httpResponse.GetResponseStream()
                                 $sseReader = New-Object System.IO.StreamReader($responseStream, [System.Text.Encoding]::UTF8, $true)
                                 $eventData = New-Object 'System.Collections.Generic.List[string]'
@@ -653,6 +724,11 @@
                                 $status = 0; $retryAfter = 0; $errorCode = ''; $errorBody = ''
                                 if ($null -ne $response) {
                                     try { $status = [int]$response.StatusCode } catch {}
+                                    $requestStats.HttpStatus = $status
+                                    try {
+                                        $requestStats.RateLimitHeaders = & $getOpenAIRateHeaders $response.Headers
+                                        $requestStats.RequestId = [string]$response.Headers['x-request-id']
+                                    } catch {}
                                     try { [void][int]::TryParse([string]$response.Headers['Retry-After'],[ref]$retryAfter) } catch {}
                                     try {
                                         if ($null -ne $failure.Exception.Response) {
@@ -710,7 +786,7 @@
                         Start-Sleep -Seconds ([int]$delay)
                     }
                 }
-            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders).AddArgument($requestApiKeys).AddArgument($requestKeyIndex).AddArgument($requestProviderName).AddArgument([bool]$streamOpenAIResponses).AddArgument($streamQueue).AddArgument($streamState).AddArgument([bool]$streamGoogle).AddArgument([bool]$script:VerboseOutput)
+            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders).AddArgument($requestApiKeys).AddArgument($requestKeyIndex).AddArgument($requestProviderName).AddArgument([bool]$streamOpenAIResponses).AddArgument($streamQueue).AddArgument($streamState).AddArgument([bool]$streamGoogle).AddArgument([bool]$script:VerboseOutput).AddArgument($requestStats)
             $asyncResult = $powershell.BeginInvoke()
 
             $cancelled = $false
@@ -900,6 +976,7 @@
             $runspaceErrors = @($powershell.Streams.Error)
 
             if ($hasRunspaceError) {
+                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus)
                 if ($null -ne $endInvokeFailure) {
                     # EndInvoke may wrap the WebException in one or more
                     # MethodInvocationException/RuntimeException layers.
@@ -1005,6 +1082,8 @@
                 $usedKeyIndex = $requestKeyIndex
                 if ($null -ne $response._gemmaKeyIndex) { $usedKeyIndex = [int]$response._gemmaKeyIndex }
                 $script:MiraOpenAIApiKeyIndex = ($usedKeyIndex + 1) % $requestApiKeys.Count
+                $requestStats.LastKeyIndex = $usedKeyIndex
+                $requestStats.KeyCount = $requestApiKeys.Count
                 if ($usingOpenAIResponses) {
                     $response = ConvertFrom-GemmaOpenAIResponsesResponse -OpenAIResponse $response
                 } else {
@@ -1014,22 +1093,29 @@
                 $usedKeyIndex = $requestKeyIndex
                 if ($null -ne $response._gemmaKeyIndex) { $usedKeyIndex = [int]$response._gemmaKeyIndex }
                 $script:MiraGeminiApiKeyIndex = ($usedKeyIndex + 1) % $requestApiKeys.Count
+                $requestStats.LastKeyIndex = $usedKeyIndex
+                $requestStats.KeyCount = $requestApiKeys.Count
             }
 
             if ($null -eq $response) {
+                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus)
                 throw "The API returned a null or empty response object."
             }
 
-            # Gemini usageMetadata is present on both Gemini API and
-            # Antigravity responses. Accumulate each model/tool round.
+            # Accumulate provider-reported usage for each successful model/tool round.
+            $roundPromptTokens = 0
+            $roundCompletionTokens = 0
             if ($null -ne $response.usageMetadata) {
                 if ($null -ne $response.usageMetadata.promptTokenCount) {
-                    $turnPromptTokens += [int]$response.usageMetadata.promptTokenCount
+                    $roundPromptTokens = [int]$response.usageMetadata.promptTokenCount
+                    $turnPromptTokens += $roundPromptTokens
                 }
                 if ($null -ne $response.usageMetadata.candidatesTokenCount) {
-                    $turnCompletionTokens += [int]$response.usageMetadata.candidatesTokenCount
+                    $roundCompletionTokens = [int]$response.usageMetadata.candidatesTokenCount
+                    $turnCompletionTokens += $roundCompletionTokens
                 }
             }
+            Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $true -InputTokens $roundPromptTokens -OutputTokens $roundCompletionTokens -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus)
 
             if ($null -eq $response.candidates -or $response.candidates.Count -eq 0) {
                 if ($null -ne $response.error) {
