@@ -135,6 +135,7 @@ foreach ($required in @(
     'response.completed',
     'store = $false',
     'stream = $true',
+    'AllowReadStreamBuffering = $false',
     'ProtectedData]::Protect',
     'ProtectedData]::Unprotect'
 )) {
