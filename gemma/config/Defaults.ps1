@@ -104,6 +104,24 @@ $script:OpenAIApiKeys = @(
     ForEach-Object { ([string]$_).Trim() }
 $script:MiraOpenAIApiKeyIndex = 0
 
+# Move to the next configured OpenAI key for these key/account-specific failures.
+# Rate limits and quota are shared by their organization/project, so rotation
+# only helps when another candidate belongs to a different organization/project.
+$script:OpenAIKeyRotationErrorCodes = @(
+    'invalid_api_key'
+    'incorrect_api_key'
+    'authentication_error'
+    'insufficient_permissions'
+    'permission_denied'
+    'rate_limit_exceeded'
+    'insufficient_quota'
+    'credit_balance_exhausted'
+    'organization_usage_limit_exceeded'
+    'organization_spend_limit_exceeded'
+    'project_spend_limit_exceeded'
+    'billing_hard_limit_reached'
+)
+
 # Session-local provider usage. These counters are updated from actual responses;
 # .usage is passive and never sends a probe request.
 $script:MiraUsageStats = @{
