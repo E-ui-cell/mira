@@ -267,8 +267,21 @@
 
             if ($hasRunspaceError) {
                 if ($null -ne $endInvokeFailure) {
+                    # EndInvoke may wrap the WebException in one or more
+                    # MethodInvocationException/RuntimeException layers.
+                    # Walk the full chain so HTTP status and response body are
+                    # not lost (especially important for OpenAI 4xx responses).
                     $responseException = $endInvokeFailure.Exception
-                    $responseObject = $responseException.Response
+                    $responseObject = $null
+                    $exceptionCursor = $responseException
+                    while ($null -ne $exceptionCursor) {
+                        if ($null -ne $exceptionCursor.Response) {
+                            $responseObject = $exceptionCursor.Response
+                            break
+                        }
+                        $exceptionCursor = $exceptionCursor.InnerException
+                    }
+
                     if ($null -ne $responseObject) {
                         $failureStatus = 0
                         $failureBody = ''
@@ -282,7 +295,7 @@
                                 $failureStream.Dispose()
                             }
                         } catch {}
-                        $requestProviderLabel = if ($usingAntigravityOAuth) { 'Antigravity' } else { 'Gemini API' }
+                        $requestProviderLabel = if ($usingAntigravityOAuth) { 'Antigravity' } elseif ($usingOpenAI) { 'OpenAI' } else { 'Gemini API' }
                         if ($failureBody) {
                             Write-Host ("[{0} API Failure]: HTTP {1}" -f $requestProviderLabel,$failureStatus) -ForegroundColor Red
                             Write-Host $failureBody -ForegroundColor Gray
@@ -291,6 +304,7 @@
                         }
                         throw "$requestProviderLabel request failed with HTTP $failureStatus."
                     }
+
                     if ($usingOpenAI -and $runspaceErrors.Count -gt 0) {
                         $openAIWorkerError = [string]$runspaceErrors[$runspaceErrors.Count - 1].Exception.Message
                         if (-not [string]::IsNullOrWhiteSpace($openAIWorkerError)) {
