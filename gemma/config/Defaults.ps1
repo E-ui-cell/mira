@@ -77,21 +77,22 @@ $MIRA_SPINNER_INTERVAL_MS = 150
 $MIRA_CONSOLE_TITLE = 'GEMMA CLI'
 try { $Host.UI.RawUI.WindowTitle = $MIRA_CONSOLE_TITLE } catch {}
 
-# GEMINI_API is canonical. Accept the common GEMINI_API_KEY spelling and
-# the historic GEMINI_APIJ typo as migration aliases.
-$API_KEY = if (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API)) {
-    $env:GEMINI_API.Trim()
-} elseif (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)) {
-    $env:GEMINI_API_KEY.Trim()
-} elseif (-not [string]::IsNullOrWhiteSpace($env:GEMINI_APIJ)) {
-    [string]$env:GEMINI_APIJ
-} elseif (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEYS)) {
-    [string](($env:GEMINI_API_KEYS -split '[;,\r\n]+')[0]).Trim().Trim('"').Trim("'")
-} else { '' }
+# API KEY ROTATION — explicit candidates only. No environment-variable discovery.
+# Each entry is one account/key candidate; order is the rotation order.
+$script:GeminiApiKeys = @(
+    $env:GEMINI_API_KEY  # API 1 — primary account
+    $env:GEMINI_APIJ     # API 2 — Jeroen account
+) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+    ForEach-Object { ([string]$_).Trim() }
 
-if ([string]::IsNullOrWhiteSpace($API_KEY) -and [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEYS) -and
+$script:OpenAIApiKeys = @(
+    $env:OPENAI_API_KEY  # API 1
+) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+    ForEach-Object { ([string]$_).Trim() }
+
+if ($script:GeminiApiKeys.Count -eq 0 -and
     -not (Test-Path -LiteralPath (Join-Path (Join-Path $HOME '.gemini\antigravity-cli') 'antigravity-oauth-token'))) {
-    Write-Host "No Gemini API key or Antigravity OAuth token found. Run .auth login or set GEMINI_API." -ForegroundColor Yellow
+    Write-Host "No Gemini API key or Antigravity OAuth token found. Configure a candidate in the Gemini API key list." -ForegroundColor Yellow
 }
 
 $MODEL = $MIRA_DEFAULT_MODEL
