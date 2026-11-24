@@ -54,11 +54,12 @@ $MIRA_DEFAULT_GROUNDING = $true              # Global master switch for all Goog
 $MIRA_ENABLE_AGENTIC_WEB_SEARCH = $true       # Allow Gemini API models to call web_search through Antigravity OAuth
 $MIRA_DEFAULT_VERBOSE = $false                # Show provider thought summaries only when enabled with .verbose
 
-# OpenAI Chat Completions settings ($null leaves the model's default)
+# OpenAI settings. Luna uses Responses API; other OpenAI models use Chat Completions.
+# Token limit maps to max_output_tokens (Responses) or max_completion_tokens (Chat Completions).
 $MIRA_OPENAI_DEFAULT_MODEL = 'gpt-6-luna'
 $MIRA_OPENAI_MAX_COMPLETION_TOKENS = $null
-$MIRA_OPENAI_TEMPERATURE = $null
-$MIRA_OPENAI_RESPONSE_FORMAT = $null
+$MIRA_OPENAI_TEMPERATURE = $null                 # Chat Completions only
+$MIRA_OPENAI_RESPONSE_FORMAT = $null              # Shared setting; converted to each endpoint's format
 # Antigravity chat sends native googleSearch to the selected model. Gemini API models
 # may call web_search, delegated to the dedicated Antigravity OAuth research model.
 $MIRA_DEFAULT_CACHED_CONTENT = $null
