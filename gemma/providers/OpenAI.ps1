@@ -103,7 +103,7 @@ function ConvertTo-GemmaOpenAITools {
             [void]$declarations.Add(@{ type='function'; function=@{ name=[string]$declaration.name; description=[string]$declaration.description; parameters=$parameters } })
         }
     }
-    return ,@($declarations.ToArray())
+    return $declarations.ToArray()
 }
 
 function Build-GemmaOpenAIChatPayload {
