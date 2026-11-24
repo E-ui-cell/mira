@@ -1,3 +1,22 @@
+function Invoke-GemmaOneShotCommand {
+    param([string]$Argument = '',[System.Collections.ArrayList]$Contents)
+
+    $value = $Argument.Trim().ToLowerInvariant()
+    if (-not $value) {
+        Write-Host ("[One-shot session mode: {0}]" -f $(if ($script:NoSession) { 'ON' } else { 'OFF' })) -ForegroundColor Cyan
+        Write-Host 'Usage: .oneshot on | .oneshot off' -ForegroundColor DarkGray
+        return
+    }
+    if ($value -notin @('on','off')) {
+        Write-Host 'Usage: .oneshot on | .oneshot off' -ForegroundColor Yellow
+        return
+    }
+
+    $script:NoSession = ($value -eq 'on')
+    if ($script:NoSession -and $null -ne $Contents) { $Contents.Clear() }
+    Write-Host ("[One-shot session mode: {0}]" -f $(if ($script:NoSession) { 'ON' } else { 'OFF' })) -ForegroundColor $(if ($script:NoSession) { 'Green' } else { 'Yellow' })
+}
+
 function Invoke-GemmaEffortCommand {
     param([string]$Argument = '')
     $value = $Argument.Trim().ToLowerInvariant()
