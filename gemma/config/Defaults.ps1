@@ -84,11 +84,13 @@ $script:GeminiApiKeys = @(
     $env:GEMINI_APIJ     # API 2 — Jeroen account
 ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
     ForEach-Object { ([string]$_).Trim() }
+$script:MiraGeminiApiKeyIndex = 0
 
 $script:OpenAIApiKeys = @(
     $env:OPENAI_API_KEY  # API 1
 ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
     ForEach-Object { ([string]$_).Trim() }
+$script:MiraOpenAIApiKeyIndex = 0
 
 if ($script:GeminiApiKeys.Count -eq 0 -and
     -not (Test-Path -LiteralPath (Join-Path (Join-Path $HOME '.gemini\antigravity-cli') 'antigravity-oauth-token'))) {
@@ -96,9 +98,6 @@ if ($script:GeminiApiKeys.Count -eq 0 -and
 }
 
 $MODEL = $MIRA_DEFAULT_MODEL
-$script:MiraOpenAIApiKeyIndex = 0
-$script:MiraGeminiApiKeyIndex = 0
-
 $script:ActiveSystemPromptName = 'default'
 $SystemInstruction = @{
     parts = @(
