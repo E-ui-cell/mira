@@ -32,7 +32,10 @@
         }
 
         $usingOpenAI = ($script:Provider -eq 'openai')
-        if ($usingOpenAI) {
+        $usingOpenAIResponses = ($usingOpenAI -and [string]$script:MODEL -ieq 'gpt-6-luna')
+        if ($usingOpenAIResponses) {
+            $payloadObj = Build-GemmaOpenAIResponsesPayload -SystemInstruction $SystemInstruction -Contents $Contents
+        } elseif ($usingOpenAI) {
             $payloadObj = Build-GemmaOpenAIChatPayload -SystemInstruction $SystemInstruction -Contents $Contents
         } else {
             $payloadObj = Build-GeminiPayload -SystemInstruction $SystemInstruction -Contents $Contents
@@ -64,7 +67,8 @@
             if ($requestApiKeys.Count -eq 0) { throw 'OpenAI API key is not configured in the OpenAI candidate list in Defaults.ps1.' }
             if ($null -ne $script:MiraOpenAIApiKeyIndex) { $requestKeyIndex = [int]($script:MiraOpenAIApiKeyIndex % $requestApiKeys.Count) }
             $jsonPayload = $payloadObj | ConvertTo-Json -Depth 30
-            $url = 'https://api.openai.com/v1/chat/completions'
+            if ($usingOpenAIResponses) { $url = 'https://api.openai.com/v1/responses' }
+            else { $url = 'https://api.openai.com/v1/chat/completions' }
             $requestHeaders = @{}
             $requestProviderName = 'openai'
         } else {
@@ -346,7 +350,11 @@
                 $usedKeyIndex = $requestKeyIndex
                 if ($null -ne $response._gemmaKeyIndex) { $usedKeyIndex = [int]$response._gemmaKeyIndex }
                 $script:MiraOpenAIApiKeyIndex = ($usedKeyIndex + 1) % $requestApiKeys.Count
-                $response = ConvertFrom-GemmaOpenAIResponse -OpenAIResponse $response
+                if ($usingOpenAIResponses) {
+                    $response = ConvertFrom-GemmaOpenAIResponsesResponse -OpenAIResponse $response
+                } else {
+                    $response = ConvertFrom-GemmaOpenAIResponse -OpenAIResponse $response
+                }
             } elseif ($requestProviderName -eq 'gemini') {
                 $usedKeyIndex = $requestKeyIndex
                 if ($null -ne $response._gemmaKeyIndex) { $usedKeyIndex = [int]$response._gemmaKeyIndex }
@@ -394,6 +402,9 @@
                 $modelToolTurn = @{
                     role  = "model"
                     parts = $modelParts
+                }
+                if ($usingOpenAIResponses -and $null -ne $response.openaiOutputItems) {
+                    $modelToolTurn.openaiOutputItems = @($response.openaiOutputItems)
                 }
                 [void]$Contents.Add($modelToolTurn)
 
@@ -485,6 +496,9 @@
             elseif ($script:OneShot) { Write-Host $reply -ForegroundColor Cyan }
             else { Write-Host $topBoxLine -ForegroundColor DarkGray; Write-Host $reply -ForegroundColor Cyan; Write-Host $bottomBoxLine -ForegroundColor DarkGray }
             $modelTurn = @{ role = "model"; parts = @( @{ text = $reply } ) }
+            if ($usingOpenAIResponses -and $null -ne $response.openaiOutputItems) {
+                $modelTurn.openaiOutputItems = @($response.openaiOutputItems)
+            }
             [void]$Contents.Add($modelTurn)
             if ($script:OneShot) { $script:OneShotCompleted = $true }
         }
