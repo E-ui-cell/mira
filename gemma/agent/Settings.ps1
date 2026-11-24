@@ -17,6 +17,25 @@ function Invoke-GemmaOneShotCommand {
     Write-Host ("[One-shot session mode: {0}]" -f $(if ($script:NoSession) { 'ON' } else { 'OFF' })) -ForegroundColor $(if ($script:NoSession) { 'Green' } else { 'Yellow' })
 }
 
+function Invoke-GemmaStreamingCommand {
+    param([string]$Argument = '')
+
+    $value = $Argument.Trim().ToLowerInvariant()
+    if (-not $value) {
+        Write-Host "[Response streaming: $($script:StreamingMode.ToUpperInvariant())]" -ForegroundColor Cyan
+        Write-Host 'Usage: .streaming line | .streaming delta | .streaming off' -ForegroundColor DarkGray
+        return
+    }
+    if ($value -notin @('line','delta','off')) {
+        Write-Host 'Usage: .streaming line | .streaming delta | .streaming off' -ForegroundColor Yellow
+        return
+    }
+
+    $script:StreamingMode = $value
+    $color = if ($value -eq 'off') { 'Yellow' } else { 'Green' }
+    Write-Host "[Response streaming set to: $($value.ToUpperInvariant())]" -ForegroundColor $color
+}
+
 function Invoke-GemmaEffortCommand {
     param([string]$Argument = '')
     $value = $Argument.Trim().ToLowerInvariant()
