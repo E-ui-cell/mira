@@ -70,6 +70,13 @@ while ($true) {
         continue
     }
 
+    if ($trimmedInput -ieq ".oneshot" -or $trimmedInput.StartsWith(".oneshot ", [StringComparison]::OrdinalIgnoreCase)) {
+        $oneshotArgument = ""
+        if ($trimmedInput.Length -gt 8) { $oneshotArgument = $trimmedInput.Substring(8).Trim() }
+        Invoke-GemmaOneShotCommand -Argument $oneshotArgument -Contents $Contents
+        continue
+    }
+
     if ($trimmedInput -eq ".effort" -or $trimmedInput.StartsWith(".effort ", [StringComparison]::OrdinalIgnoreCase)) {
         $effortArgument = ""
         if ($trimmedInput.Length -gt 7) { $effortArgument = $trimmedInput.Substring(7).Trim() }
@@ -343,6 +350,9 @@ while ($true) {
 
     # ===========================================================================
 . (Join-Path $PSScriptRoot 'Turn.ps1')
+
+    # Keep this turn, including tool rounds, only until its response completes.
+    if ($script:NoSession) { $Contents.Clear() }
 
 }
 }
