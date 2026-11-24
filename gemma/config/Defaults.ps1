@@ -87,7 +87,7 @@ try { $Host.UI.RawUI.WindowTitle = $MIRA_CONSOLE_TITLE } catch {}
 # Each entry is one account/key candidate; order is the rotation order.
 $script:GeminiApiKeys = @(
     $env:GEMINI_API_KEY  # API 1 — primary account
-    $env:GEMINI_APIJ     # API 2 — Jeroen account
+    $env:GEMINI_APIJ     # API 2
 ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
     ForEach-Object { ([string]$_).Trim() }
 $script:MiraGeminiApiKeyIndex = 0
