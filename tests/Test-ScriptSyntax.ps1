@@ -6,16 +6,18 @@ param(
 )
 
 $resolved = (Resolve-Path -LiteralPath $ScriptPath -ErrorAction Stop).Path
+$version = $PSVersionTable.PSVersion
+$isWindowsPowerShell51 = ($version.Major -eq 5 -and $version.Minor -eq 1)
+$isPowerShell7 = ($version.Major -ge 7)
+if (-not ($isWindowsPowerShell51 -or $isPowerShell7)) {
+    throw "This test supports Windows PowerShell 5.1 and PowerShell 7. Detected: $version"
+}
 
-if ([IO.Path]::GetFileName($resolved) -ieq 'gemma.ps1') {
+if ($isWindowsPowerShell51 -and [IO.Path]::GetFileName($resolved) -ieq 'gemma.ps1') {
     $scriptBytes = [IO.File]::ReadAllBytes($resolved)
     if ($scriptBytes.Length -lt 3 -or $scriptBytes[0] -ne 0xEF -or $scriptBytes[1] -ne 0xBB -or $scriptBytes[2] -ne 0xBF) {
         throw 'gemma.ps1 must be saved as UTF-8 with BOM for Windows PowerShell 5.1.'
     }
-}
-
-if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
-    throw "This test requires Windows PowerShell 5.1. Detected: $($PSVersionTable.PSVersion)"
 }
 
 $tokens = $null
@@ -29,5 +31,5 @@ if ($errors.Count -gt 0) {
     exit 1
 }
 
-Write-Host ("Syntax OK: {0}" -f $resolved)
+Write-Host ("Syntax OK ({0}): {1}" -f $version, $resolved)
 exit 0
