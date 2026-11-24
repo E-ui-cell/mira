@@ -163,7 +163,6 @@
                     $emitGoogleText = {
                         param([string]$Value, [int]$CurrentAttempt)
                         if ([string]::IsNullOrEmpty($Value)) { return }
-                        $Value = $Value.Replace(([string][char]9),'    ')
                         if ($retryState.ReplayLimit -gt 0 -and $retryState.ReplayOffset -lt $retryState.ReplayLimit) {
                             $matched = 0
                             while ($matched -lt $Value.Length -and
@@ -726,6 +725,7 @@
             $writeStreamChunk = {
                 param([string]$Chunk)
                 if ([string]::IsNullOrEmpty($Chunk)) { return }
+                $Chunk = $Chunk.Replace(([string][char]9),'    ')
                 $streamDisplayState.OutputText += $Chunk
                 if ($streamDisplayState.Mode -eq 'delta') {
                     if (-not $streamDisplayState.HasOutput) {
