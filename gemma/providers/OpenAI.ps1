@@ -161,6 +161,9 @@ function ConvertTo-GemmaOpenAIResponsesInput {
     param([object]$SystemInstruction,[System.Collections.IList]$Contents)
 
     $inputItems = New-Object System.Collections.Generic.List[object]
+    # Gemini's functionCall.id and functionResponse.id are optional. When
+    # importing such history into Responses, synthesize a paired ID locally.
+    $pendingCallIdsByName = @{}
     foreach ($turn in $Contents) {
         if ($null -eq $turn -or $null -eq $turn.parts) { continue }
 
@@ -170,8 +173,21 @@ function ConvertTo-GemmaOpenAIResponsesInput {
                 foreach ($part in $toolResponses) {
                     $fr = $part.functionResponse
                     $callId = [string]$fr.id
+                    $callName = [string]$fr.name
                     if ([string]::IsNullOrWhiteSpace($callId)) {
-                        throw "OpenAI Responses API tool output is missing call_id for '$($fr.name)'."
+                        if ($pendingCallIdsByName.ContainsKey($callName) -and $pendingCallIdsByName[$callName].Count -gt 0) {
+                            $callId = [string]$pendingCallIdsByName[$callName][0]
+                            $pendingCallIdsByName[$callName].RemoveAt(0)
+                        } else {
+                            throw "OpenAI Responses API cannot match the previous tool call for '$callName'. Start a new session or use .oneshot."
+                        }
+                    } elseif ($pendingCallIdsByName.ContainsKey($callName)) {
+                        for ($pendingIndex = $pendingCallIdsByName[$callName].Count - 1; $pendingIndex -ge 0; $pendingIndex--) {
+                            if ([string]$pendingCallIdsByName[$callName][$pendingIndex] -eq $callId) {
+                                $pendingCallIdsByName[$callName].RemoveAt($pendingIndex)
+                                break
+                            }
+                        }
                     }
                     $output = $fr.response | ConvertTo-Json -Depth 30 -Compress
                     [void]$inputItems.Add(@{ type='function_call_output'; call_id=$callId; output=$output })
@@ -220,13 +236,18 @@ function ConvertTo-GemmaOpenAIResponsesInput {
                 foreach ($call in $calls) {
                     $callId = [string]$call.id
                     if ([string]::IsNullOrWhiteSpace($callId)) {
-                        throw "Cannot replay '$($call.name)' from prior provider history into OpenAI Responses: the original tool call has no ID. Start a new session or use .oneshot."
+                        $callId = 'call_' + [guid]::NewGuid().ToString('N')
                     }
+                    $callName = [string]$call.name
+                    if (-not $pendingCallIdsByName.ContainsKey($callName)) {
+                        $pendingCallIdsByName[$callName] = New-Object System.Collections.ArrayList
+                    }
+                    [void]$pendingCallIdsByName[$callName].Add($callId)
                     $arguments = $call.args | ConvertTo-Json -Depth 30 -Compress
                     [void]$inputItems.Add(@{
                         type = 'function_call'
                         call_id = $callId
-                        name = [string]$call.name
+                        name = $callName
                         arguments = $arguments
                     })
                 }
