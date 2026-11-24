@@ -19,7 +19,7 @@
     //   gpt-6-sol
     //   gpt-6-astra
     //   auto
-    const TARGET_MODEL = "gpt-5.6-luna";
+    const TARGET_MODEL = "gpt-5.6-luna-wm";
     const TARGET_MODEL_SLUG = "gpt-5.6-luna-wm";
     const TARGET_THINKING_EFFORT = "extended";
 
