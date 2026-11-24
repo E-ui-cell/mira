@@ -415,6 +415,11 @@ function Invoke-GemmaModelPicker {
     $requestedId = $requested
 
     if (-not [string]::IsNullOrWhiteSpace($requested)) {
+        if ($requested -match '^(openai|antigravity|gemini|google-ai-studio|googleai|aistudio)[:/]?$') {
+            Write-Host '[A provider prefix needs a model ID. Run .model to browse all providers.]' -ForegroundColor Yellow
+            return
+        }
+
         $providerMatch = [regex]::Match(
             $requested,
             '^(openai|antigravity|gemini|google-ai-studio|googleai|aistudio)[:/](.+)$',
