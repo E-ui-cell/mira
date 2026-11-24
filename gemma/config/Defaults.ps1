@@ -61,6 +61,7 @@ $MIRA_OPENAI_DEFAULT_MODEL = 'gpt-6-luna'
 $MIRA_OPENAI_MAX_COMPLETION_TOKENS = $null
 $MIRA_OPENAI_TEMPERATURE = $null                 # Chat Completions only
 $MIRA_OPENAI_RESPONSE_FORMAT = $null              # Shared setting; converted to each endpoint's format
+# GPT-6 Luna uses OpenAI-hosted web_search directly in the Responses API.
 # Antigravity chat sends native googleSearch to the selected model. Gemini API models
 # may call web_search, delegated to the dedicated Antigravity OAuth research model.
 $MIRA_DEFAULT_CACHED_CONTENT = $null
