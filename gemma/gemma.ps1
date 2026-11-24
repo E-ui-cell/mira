@@ -1821,10 +1821,9 @@ function Invoke-GemmaProviderCommand {
     Write-Host "[Provider switched to: $script:Provider]" -ForegroundColor Green
     if ($value -eq 'gpt') {
         Write-Host '[Official Sign in with ChatGPT OAuth; public Responses API; streaming; no HAR, browser cookies, or private ChatGPT endpoints. Local tools are unavailable.]' -ForegroundColor DarkGray
-        if ($script:MODEL) {
-            Write-Host "[ChatGPT model: $script:MODEL]" -ForegroundColor DarkGray
-        } else {
-            Write-Host '[No ChatGPT model selected automatically. Use .model to choose from this account’s available models.]' -ForegroundColor Yellow
+        Write-Host "[ChatGPT model: $script:MODEL]" -ForegroundColor DarkGray
+        if ([string]::IsNullOrWhiteSpace([string]$script:MODEL)) {
+            Write-Host '[No ChatGPT model selected automatically. Use .model to choose from this account available models.]' -ForegroundColor Yellow
         }
     } else {
         Write-Host '[Model name retained; use .model to select from this provider catalogue.]' -ForegroundColor DarkGray
