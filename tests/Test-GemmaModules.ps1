@@ -163,6 +163,10 @@ foreach ($requiredRotationCode in @(
 if ($rotationCodes -contains 'slow_down' -or $rotationCodes -contains 'server_is_overloaded') {
     throw 'Transient OpenAI ramp/overload errors must retry the same key before rotating.'
 }
+if ($turnSource -notmatch '\$retryErrorCodes\s*=\s*@\(' -or
+    $turnSource -notmatch '\$retryErrorCodes -contains \$errorType\.ToLowerInvariant\(\)') {
+    throw 'OpenAI transient error codes/types are not wired to the same-key retry path.'
+}
 
 # Verify the Responses SSE worker extracts failure codes and can replay without
 # printing an already-visible prefix twice.
