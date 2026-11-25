@@ -45,6 +45,7 @@ $script:MenuItems = @()
 $script:MenuIndex = 0
 $script:MenuKind = ''
 $script:MenuCommand = ''
+$script:PendingTuiKeys = New-Object 'System.Collections.Generic.Queue[object]'
 $script:RenderRows = 1
 $script:LastStatusRow = -1
 $script:LastStatusText = ''
@@ -281,6 +282,9 @@ function Width() {
 }
 
 function Read-Key() {
+    if ($null -ne $script:PendingTuiKeys -and $script:PendingTuiKeys.Count -gt 0) {
+        return $script:PendingTuiKeys.Dequeue()
+    }
     # Return the native ConsoleKeyInfo whenever possible.
     # History navigation reads .Key directly in Read-Line.
     try {
@@ -4056,7 +4060,8 @@ function Read-Line {
         # Interactive .model completion menu owns Up/Down/Tab/Enter/Esc while active.
         if($script:ModelMenuActive){
             if($key.Key -eq [ConsoleKey]::Tab){
-                Move-ModelMenu 1 $PromptRow ([ref]$buffer) ([ref]$cursor)
+                $direction=if($shift){-1}else{1}
+                Move-ModelMenu $direction $PromptRow ([ref]$buffer) ([ref]$cursor)
                 continue
             }
             if($key.Key -eq [ConsoleKey]::UpArrow){
@@ -4424,9 +4429,17 @@ function Read-Line {
             if(Available){
                 while(Available){
                     $p=Read-Key
-                    if($p.Key -eq [ConsoleKey]::Enter){$buffer=$buffer.Insert($cursor,"`n");++$cursor;continue}
-                    if($p.Key -eq [ConsoleKey]::Tab){$buffer=$buffer.Insert($cursor,"`t");++$cursor;continue}
-                    if(-not [Char]::IsControl($p.KeyChar)){$buffer=$buffer.Insert($cursor,[string]$p.KeyChar);++$cursor}
+                    if($p.Key -eq [ConsoleKey]::Enter -or $p.KeyChar -eq [char]13 -or $p.KeyChar -eq [char]10){
+                        if($p.KeyChar -eq [char]10 -and $buffer.EndsWith("`n")){continue}
+                        if($buffer.EndsWith("`r")){$buffer=$buffer.TrimEnd([char]13)}
+                        $buffer=$buffer.Insert($cursor,"`n");++$cursor;continue
+                    }
+                    if([Char]::IsControl($p.KeyChar)){
+                        if($null -eq $script:PendingTuiKeys){$script:PendingTuiKeys=New-Object 'System.Collections.Generic.Queue[object]'}
+                        [void]$script:PendingTuiKeys.Enqueue($p)
+                        break
+                    }
+                    $buffer=$buffer.Insert($cursor,[string]$p.KeyChar);++$cursor
                 }
             }
             Redraw $buffer $cursor $PromptRow
@@ -6321,7 +6334,8 @@ function Read-Line {
         # Interactive .model completion menu owns Up/Down/Tab/Enter/Esc while active.
         if($script:ModelMenuActive){
             if($key.Key -eq [ConsoleKey]::Tab){
-                Move-ModelMenu 1 $PromptRow ([ref]$buffer) ([ref]$cursor)
+                $direction=if($shift){-1}else{1}
+                Move-ModelMenu $direction $PromptRow ([ref]$buffer) ([ref]$cursor)
                 continue
             }
             if($key.Key -eq [ConsoleKey]::UpArrow){
@@ -6689,9 +6703,17 @@ function Read-Line {
             if(Available){
                 while(Available){
                     $p=Read-Key
-                    if($p.Key -eq [ConsoleKey]::Enter){$buffer=$buffer.Insert($cursor,"`n");++$cursor;continue}
-                    if($p.Key -eq [ConsoleKey]::Tab){$buffer=$buffer.Insert($cursor,"`t");++$cursor;continue}
-                    if(-not [Char]::IsControl($p.KeyChar)){$buffer=$buffer.Insert($cursor,[string]$p.KeyChar);++$cursor}
+                    if($p.Key -eq [ConsoleKey]::Enter -or $p.KeyChar -eq [char]13 -or $p.KeyChar -eq [char]10){
+                        if($p.KeyChar -eq [char]10 -and $buffer.EndsWith("`n")){continue}
+                        if($buffer.EndsWith("`r")){$buffer=$buffer.TrimEnd([char]13)}
+                        $buffer=$buffer.Insert($cursor,"`n");++$cursor;continue
+                    }
+                    if([Char]::IsControl($p.KeyChar)){
+                        if($null -eq $script:PendingTuiKeys){$script:PendingTuiKeys=New-Object 'System.Collections.Generic.Queue[object]'}
+                        [void]$script:PendingTuiKeys.Enqueue($p)
+                        break
+                    }
+                    $buffer=$buffer.Insert($cursor,[string]$p.KeyChar);++$cursor
                 }
             }
             Redraw $buffer $cursor $PromptRow
