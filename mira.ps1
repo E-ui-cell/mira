@@ -50,6 +50,7 @@ $script:MiraSettings = [ordered]@{
         UserAgent = 'antigravity/hub/2.17.0 (aidev_client; os_type=windows; arch=amd64; cl=986210228)'
         ApiClient = 'google-cloud-sdk vscode_cloudshelleditor/0.1'
         ClientMetadata = '{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}'
+        SystemInstruction = 'You are a helpful assistant.'
     }
 }
 
@@ -1244,6 +1245,12 @@ function New-MiraAntigravityEnvelope {
             $value=$instruction
         }
         $requestPayload[$key]=$value
+    }
+    if(-not $requestPayload.Contains('systemInstruction')){
+        $requestPayload.systemInstruction=[ordered]@{
+            role='user'
+            parts=@([ordered]@{text=[string]$script:MiraSettings.AntigravityOAuth.SystemInstruction})
+        }
     }
     return [ordered]@{
         project=$Project
