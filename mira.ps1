@@ -15,7 +15,23 @@ $script:MiraSettings = [ordered]@{
 
     UiRendering = $false
     Streaming = $true
-    ShowReasoning = $false
+
+    # Display provider-supplied thought summaries. NVIDIA thinking is disabled when false.
+    ReasoningOutput = [ordered]@{
+        gemini = $true
+        antigravity = $true
+        openrouter = $false
+        groq = $false
+        openai = $false
+        nvidia = $false
+        deepseek = $false
+        mistral = $false
+        together = $false
+        fireworks = $false
+        xai = $false
+        perplexity = $false
+    }
+    NvidiaReasoningBudget = 4096
 
     # Start each run with RAM-only conversation context; false keeps one-shot mode.
     SessionEnabled = $false
@@ -134,7 +150,27 @@ $script:CliArgsNotImplemented = @('-m, --model <name>','-h, --help','--')
 $script:UiRenderEnabled = [bool]$script:MiraSettings.UiRendering
 $script:CompressThreshold = if($env:MIRA_COMPRESS_THRESHOLD){[int]$env:MIRA_COMPRESS_THRESHOLD}else{[int]$script:MiraSettings.CompressThreshold}
 $script:StreamResponses = [bool]$script:MiraSettings.Streaming
-$script:ShowReasoning = [bool]$script:MiraSettings.ShowReasoning
+function Get-MiraReasoningOutputEnabled {
+    param([string]$ProviderName = '')
+    if([string]::IsNullOrWhiteSpace($ProviderName)){$ProviderName=[string]$script:CurrentProviderName}
+    $map=$script:MiraSettings.ReasoningOutput
+    if($null -eq $map -or -not ($map -is [System.Collections.IDictionary])){return $false}
+    $key=$ProviderName.Trim().ToLowerInvariant()
+    if($map.Contains($key)){return [bool]$map[$key]}
+    return $false
+}
+
+function Set-MiraReasoningOutputEnabled {
+    param([string]$ProviderName,[bool]$Enabled)
+    if([string]::IsNullOrWhiteSpace($ProviderName)){return $false}
+    $map=$script:MiraSettings.ReasoningOutput
+    if($null -eq $map -or -not ($map -is [System.Collections.IDictionary])){return $false}
+    $key=$ProviderName.Trim().ToLowerInvariant()
+    if(-not $map.Contains($key)){return $false}
+    $map[$key]=[bool]$Enabled
+    return $true
+}
+
 # Persistent history defaults to the editable setting; MIRA_PERSIST_HISTORY overrides it.
 $script:PersistHistory = [bool]$script:MiraSettings.PersistHistory
 if($env:MIRA_PERSIST_HISTORY -eq '0' -or $env:MIRA_PERSIST_HISTORY -eq 'false' -or $env:MIRA_PERSIST_HISTORY -eq 'off'){$script:PersistHistory=$false}
@@ -2033,7 +2069,7 @@ function Complete-Model($buffer,$row){
     return (Open-ModelMenu $buffer $row)
 }
 
-function Build-GeminiPayload($messages,$summary){
+function Build-GeminiPayload($messages,$summary,[string]$providerName='gemini'){
     $contents=@()
     foreach($m in $messages){
         $role=if([string]$m.role -eq 'assistant'){'model'}else{'user'}
@@ -2058,6 +2094,11 @@ function Build-GeminiPayload($messages,$summary){
     }
     if(-not [string]::IsNullOrWhiteSpace($summary)){
         $payload.systemInstruction=[ordered]@{parts=@([ordered]@{text=$summary})}
+    }
+    if(Get-MiraReasoningOutputEnabled $providerName){
+        $payload.generationConfig=[ordered]@{
+            thinkingConfig=[ordered]@{includeThoughts=$true}
+        }
     }
     return $payload
 }
@@ -2089,13 +2130,16 @@ function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary){
         $msg += $entry
     }
     $payload=[ordered]@{model=$model;messages=$msg;stream=$script:StreamResponses}
-    if($script:ShowReasoning){
-        if(([string]$provider.name -ieq 'nvidia') -and ([string]$model -ieq 'nvidia/nemotron-3.5-lightning-30b-a3b')){
-            $payload.chat_template_kwargs=[ordered]@{enable_thinking=$true}
-            $payload.reasoning_budget=16384
-        }elseif([string]$provider.name -ine 'nvidia'){
-            $payload.reasoning=[ordered]@{enabled=$true}
+    $reasoningOutput=Get-MiraReasoningOutputEnabled ([string]$provider.name)
+    if(([string]$provider.name -ieq 'nvidia') -and ([string]$model -ieq 'nvidia/nemotron-3.5-lightning-30b-a3b')){
+        # Nemotron 3.5 Lightning reasons by default. Explicitly disable thinking
+        # when hidden so reasoning tokens do not consume the visible answer budget.
+        $payload.chat_template_kwargs=[ordered]@{enable_thinking=[bool]$reasoningOutput}
+        if($reasoningOutput){
+            $payload.reasoning_budget=[int]$script:MiraSettings.NvidiaReasoningBudget
         }
+    }elseif($reasoningOutput -and [string]$provider.name -ine 'nvidia'){
+        $payload.reasoning=[ordered]@{enabled=$true}
     }
     return $payload
 }
@@ -2311,7 +2355,7 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
             elseif($null -ne $delta.reasoning -and -not [string]::IsNullOrEmpty([string]$delta.reasoning)){$rText=[string]$delta.reasoning}
             if(-not [string]::IsNullOrEmpty($rText)){
                 [void]$reasoning.Append($rText)
-                if($script:ShowReasoning){
+                if(Get-MiraReasoningOutputEnabled ([string]$provider.name)){
                     if(-not $startedOutput){Suspend-MiraRequestUi;$startedOutput=$true}
                     if(-not $showThought){W '[THOUGHT]' DarkGray;$showThought=$true}
                     [Console]::Write($rText)
@@ -2360,6 +2404,7 @@ function ConvertFrom-MiraGoogleStreamEvent {
     $chunk=$EventJson | ConvertFrom-Json -ErrorAction Stop
     if($null -ne $chunk.response){$chunk=$chunk.response}
     $text=New-Object Text.StringBuilder
+    $reasoning=New-Object Text.StringBuilder
     $finish=''
     $tokensIn=0
     $tokensOut=0
@@ -2378,15 +2423,18 @@ function ConvertFrom-MiraGoogleStreamEvent {
         $candidate=$candidates[0]
         $finish=[string]$candidate.finishReason
         foreach($part in @($candidate.content.parts)){
-            # Do not display internal thought-summary parts as answer text.
-            if($null -ne $part.thought -and [bool]$part.thought){continue}
             if($null -ne $part.text -and -not [string]::IsNullOrEmpty([string]$part.text)){
-                [void]$text.Append([string]$part.text)
+                if($null -ne $part.thought -and [bool]$part.thought){
+                    [void]$reasoning.Append([string]$part.text)
+                }else{
+                    [void]$text.Append([string]$part.text)
+                }
             }
         }
     }
     return [pscustomobject]@{
         Text=[string]$text.ToString()
+        Reasoning=[string]$reasoning.ToString()
         FinishReason=$finish
         PromptTokens=$tokensIn
         CompletionTokens=$tokensOut
@@ -2397,6 +2445,7 @@ function ConvertFrom-MiraGoogleStreamEvent {
 
 function Send-GoogleStream($provider,$model,$payload){
     $type=[string]$provider.type
+    $reasoningOutput=Get-MiraReasoningOutputEnabled ([string]$provider.name)
     $requestBody=$payload
     $headers=@{}
     if($type -eq 'gemini'){
@@ -2505,6 +2554,7 @@ function Send-GoogleStream($provider,$model,$payload){
             Stop-MiraRequestUi ([int]$result.PromptTokens) ([int]$result.CompletionTokens)
             return [pscustomobject]@{
                 Text=[string]$result.Text
+                Reasoning=[string]$result.Reasoning
                 Display=[string]$result.Display
                 FinishReason=[string]$result.FinishReason
                 PromptTokens=[int]$result.PromptTokens
@@ -2517,6 +2567,8 @@ function Send-GoogleStream($provider,$model,$payload){
         $reader=New-Object IO.StreamReader($responseStream,[Text.Encoding]::UTF8)
         $readWatch=[Diagnostics.Stopwatch]::StartNew()
         $answer=New-Object Text.StringBuilder
+        $reasoning=New-Object Text.StringBuilder
+        $showThought=$false
         $finish=''
         $tokensIn=0
         $tokensOut=0
@@ -2567,8 +2619,17 @@ function Send-GoogleStream($provider,$model,$payload){
                         if($event.CompletionTokens -gt 0){$tokensOut=[int]$event.CompletionTokens}
                         if($event.FinishReason){$finish=[string]$event.FinishReason}
                         if($null -ne $event.PromptFeedback){$promptFeedback=$event.PromptFeedback}
+                        if(-not [string]::IsNullOrEmpty([string]$event.Reasoning)){
+                            [void]$reasoning.Append([string]$event.Reasoning)
+                            if($reasoningOutput){
+                                if(-not $startedOutput){Suspend-MiraRequestUi;$startedOutput=$true}
+                                if(-not $showThought){W '[THOUGHT]' DarkGray;$showThought=$true}
+                                [Console]::Write([string]$event.Reasoning)
+                            }
+                        }
                         if(-not [string]::IsNullOrEmpty([string]$event.Text)){
                             if(-not $startedOutput){Suspend-MiraRequestUi;$startedOutput=$true}
+                            if($showThought -and $answer.Length -eq 0){[Console]::Write(([Environment]::NewLine)+'[ANSWER] ')}
                             [void]$answer.Append([string]$event.Text)
                             [Console]::Write([string]$event.Text)
                         }
@@ -2596,8 +2657,17 @@ function Send-GoogleStream($provider,$model,$payload){
                 if($event.CompletionTokens -gt 0){$tokensOut=[int]$event.CompletionTokens}
                 if($event.FinishReason){$finish=[string]$event.FinishReason}
                 if($null -ne $event.PromptFeedback){$promptFeedback=$event.PromptFeedback}
+                if(-not [string]::IsNullOrEmpty([string]$event.Reasoning)){
+                    [void]$reasoning.Append([string]$event.Reasoning)
+                    if($reasoningOutput){
+                        if(-not $startedOutput){Suspend-MiraRequestUi;$startedOutput=$true}
+                        if(-not $showThought){W '[THOUGHT]' DarkGray;$showThought=$true}
+                        [Console]::Write([string]$event.Reasoning)
+                    }
+                }
                 if(-not [string]::IsNullOrEmpty([string]$event.Text)){
                     if(-not $startedOutput){Suspend-MiraRequestUi;$startedOutput=$true}
+                    if($showThought -and $answer.Length -eq 0){[Console]::Write(([Environment]::NewLine)+'[ANSWER] ')}
                     [void]$answer.Append([string]$event.Text)
                     [Console]::Write([string]$event.Text)
                 }
@@ -2613,6 +2683,7 @@ function Send-GoogleStream($provider,$model,$payload){
             $answerText += [Environment]::NewLine+[Environment]::NewLine+'[WARNING: Response truncated due to token limit]'
         }
         if($startedOutput){
+            if($showThought -and [string]::IsNullOrWhiteSpace([string]$answer.ToString())){[Console]::Write(([Environment]::NewLine)+$answerText)}
             if($finish -eq 'MAX_TOKENS'){[Console]::Write(([Environment]::NewLine)+('[WARNING: Response truncated due to token limit]'))}
             Write-Host ''
             if($script:RequestUiStopwatch.IsRunning){$script:RequestUiStopwatch.Stop()}
@@ -2631,6 +2702,7 @@ function Send-GoogleStream($provider,$model,$payload){
         if([string]::IsNullOrWhiteSpace($finish)){$finish='STOP'}
         return [pscustomobject]@{
             Text=$answerText
+            Reasoning=[string]$reasoning.ToString()
             Display='[Tokens: '+$tokensIn+' in, '+$tokensOut+' out]'
             FinishReason=$finish
             PromptTokens=$tokensIn
@@ -4278,14 +4350,28 @@ function Show-Response($response,$providerType){
         }
         $candidate=$candidates[0]
         $reply=''
-        if($null -ne $candidate.content -and $null -ne $candidate.content.parts){$reply=(@($candidate.content.parts | ForEach-Object {[string]$_.text}) -join '')}
+        $reasoning=''
+        if($null -ne $candidate.content -and $null -ne $candidate.content.parts){
+            $answerParts=New-Object Text.StringBuilder
+            $thoughtParts=New-Object Text.StringBuilder
+            foreach($part in @($candidate.content.parts)){
+                if($null -eq $part.text -or [string]::IsNullOrEmpty([string]$part.text)){continue}
+                if($null -ne $part.thought -and [bool]$part.thought){
+                    [void]$thoughtParts.Append([string]$part.text)
+                }else{
+                    [void]$answerParts.Append([string]$part.text)
+                }
+            }
+            $reply=[string]$answerParts.ToString()
+            $reasoning=[string]$thoughtParts.ToString()
+        }
         $finish=[string]$candidate.finishReason
         if($finish -eq 'MAX_TOKENS'){$reply += "`n`n[WARNING: Response truncated due to token limit]"}
         elseif($finish -eq 'SAFETY'){
             $reply='[BLOCKED BY SAFETY FILTERS]'
             if($null -ne $candidate.safetyRatings){foreach($rating in $candidate.safetyRatings){$reply += "`n$($rating.category): $($rating.probability)"}}
         }
-        return [pscustomobject]@{Text=$reply;Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+        return [pscustomobject]@{Text=$reply;Reasoning=$reasoning;Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
     }
 
     if($null -ne $response.usage){
@@ -4337,7 +4423,7 @@ function Invoke-Provider($text,$parts=$null){
     if($null -ne $parts){$user.parts=@($parts)}
     $messages+=$user
     $type=[string]$provider.type
-    if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $messages $script:SessionSummary}
+    if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $messages $script:SessionSummary $script:CurrentProviderName}
     elseif($type -eq 'openai-compatible'){$payload=Build-OpenAICompatiblePayload $provider $messages $script:CurrentModel $script:SessionSummary}
     else{W ('[provider error] unsupported type: '+$type) Red;return $false}
 
@@ -4379,7 +4465,8 @@ function Invoke-Provider($text,$parts=$null){
             $result=Show-Response $response $responseType
         }
 
-        if($type -eq 'openai-compatible' -and $script:ShowReasoning -and $result.Reasoning){
+        $reasoningOutput=Get-MiraReasoningOutputEnabled ([string]$provider.name)
+        if($reasoningOutput -and -not $streamedOutput -and -not [string]::IsNullOrWhiteSpace([string]$result.Reasoning)){
             W '[THOUGHT]' DarkGray
             W ([string]$result.Reasoning) DarkGray
         }
@@ -4466,7 +4553,7 @@ function Help(){
     W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
     W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
     Show-ApiKeyStatus
-    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <provider>         refresh one provider model list' DarkGray; W '  .models <Tab>              refresh all configured providers; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live Gemini/Antigravity, NVIDIA NIM, and other OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
+    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <provider>         refresh one provider model list' DarkGray; W '  .models <Tab>              refresh all configured providers; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live Gemini/Antigravity, NVIDIA NIM, and other OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          toggle current provider thought output' DarkGray; W '  .reasoning <provider> on|off  set a provider independently' DarkGray; W ''
 }
 
 function Add-Message($role,$text,$reasoningDetails=$null,$parts=$null){
@@ -4747,8 +4834,29 @@ function Handle($line){
     if($t -eq '.grab' -or $t.StartsWith('.grab ')){Grab-LastMessage $script:LastText (($t.Substring(5)).Trim());return}
     if($t -eq '.stream'){W ('[stream] '+$(if($script:StreamResponses){'on'}else{'off'})+' (Gemini, Antigravity, OpenAI-compatible)') Cyan;return}
     if($t -in @('.stream on','.stream off')){$script:StreamResponses=($t -eq '.stream on');W ('[stream '+$(if($script:StreamResponses){'on'}else{'off'})+']') Cyan;return}
-    if($t -eq '.reasoning'){W ('[reasoning] '+$(if($script:ShowReasoning){'on'}else{'off'})) Cyan;return}
-    if($t -in @('.reasoning on','.reasoning off')){$script:ShowReasoning=($t -eq '.reasoning on');W ('[reasoning '+$(if($script:ShowReasoning){'on'}else{'off'})+']') Cyan;return}
+    if($t -eq '.reasoning'){
+        $providerName=[string]$script:CurrentProviderName
+        $state=if(Get-MiraReasoningOutputEnabled $providerName){'on'}else{'off'}
+        W ('[reasoning output: '+$providerName+' '+$state+']') Cyan
+        return
+    }
+    if($t -in @('.reasoning on','.reasoning off')){
+        $enabled=($t -eq '.reasoning on')
+        [void](Set-MiraReasoningOutputEnabled $script:CurrentProviderName $enabled)
+        $state=if($enabled){'on'}else{'off'}
+        W ('[reasoning output '+$script:CurrentProviderName+' '+$state+']') Cyan
+        return
+    }
+    if($t -match '^\.reasoning\s+([a-z0-9_-]+)\s+(on|off)$'){
+        $target=$Matches[1].ToLowerInvariant()
+        $enabled=($Matches[2] -eq 'on')
+        if(-not (Set-MiraReasoningOutputEnabled $target $enabled)){
+            W ('[reasoning error] no setting for provider: '+$target) Yellow
+            return
+        }
+        W ('[reasoning output '+$target+' '+$(if($enabled){'on'}else{'off'})+']') Cyan
+        return
+    }
     if($t -eq '.enable-session'){Start-Session '';return}
     if($t.StartsWith('.enable-session ')){Start-Session ($t.Substring(16));return}
     if($t -eq '.export-session' -or $t.StartsWith('.export-session ')){[void](Export-Session (($t.Substring(15)).Trim()));return}
@@ -5435,7 +5543,7 @@ W 'MIRA-TUI / SLIM PROVIDERS' Cyan
 W ('Own readline • no PSReadLine • Tab • history • multiline • attachments • model: ' + $script:CurrentProviderName + ':' + $script:CurrentModel) DarkGray
 W ('Session: ' + $(if($script:SessionActive){'ON (RAM only)'}else{'off (one-shot requests)'}) + ' • .enable-session / .delete session • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
 W ('History persistence: ' + $(if($script:PersistHistory){$script:HistoryFile}else{'OFF (RAM only)'}) + ' • loaded last ' + $script:HistoryLoadLimit + ' entries • .history persist on/off') DarkGray
-W ('Streaming (Gemini/Antigravity/OpenAI-compatible): ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning: ' + $(if($script:ShowReasoning){'on'}else{'off'})) DarkGray
+W ('Streaming (Gemini/Antigravity/OpenAI-compatible): ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning output: ' + $script:CurrentProviderName + '=' + $(if(Get-MiraReasoningOutputEnabled $script:CurrentProviderName){'on'}else{'off'}) + ' • .reasoning on/off') DarkGray
 W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
 W ('Used models: ' + $script:UsedModelsCacheFile + ' • learned from successful text replies/probes') DarkGray
 W ''
@@ -6584,14 +6692,28 @@ function Show-Response($response,$providerType){
         }
         $candidate=$candidates[0]
         $reply=''
-        if($null -ne $candidate.content -and $null -ne $candidate.content.parts){$reply=(@($candidate.content.parts | ForEach-Object {[string]$_.text}) -join '')}
+        $reasoning=''
+        if($null -ne $candidate.content -and $null -ne $candidate.content.parts){
+            $answerParts=New-Object Text.StringBuilder
+            $thoughtParts=New-Object Text.StringBuilder
+            foreach($part in @($candidate.content.parts)){
+                if($null -eq $part.text -or [string]::IsNullOrEmpty([string]$part.text)){continue}
+                if($null -ne $part.thought -and [bool]$part.thought){
+                    [void]$thoughtParts.Append([string]$part.text)
+                }else{
+                    [void]$answerParts.Append([string]$part.text)
+                }
+            }
+            $reply=[string]$answerParts.ToString()
+            $reasoning=[string]$thoughtParts.ToString()
+        }
         $finish=[string]$candidate.finishReason
         if($finish -eq 'MAX_TOKENS'){$reply += "`n`n[WARNING: Response truncated due to token limit]"}
         elseif($finish -eq 'SAFETY'){
             $reply='[BLOCKED BY SAFETY FILTERS]'
             if($null -ne $candidate.safetyRatings){foreach($rating in $candidate.safetyRatings){$reply += "`n$($rating.category): $($rating.probability)"}}
         }
-        return [pscustomobject]@{Text=$reply;Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+        return [pscustomobject]@{Text=$reply;Reasoning=$reasoning;Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
     }
 
     if($null -ne $response.usage){
@@ -6643,7 +6765,7 @@ function Invoke-Provider($text,$parts=$null){
     if($null -ne $parts){$user.parts=@($parts)}
     $messages+=$user
     $type=[string]$provider.type
-    if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $messages $script:SessionSummary}
+    if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $messages $script:SessionSummary $script:CurrentProviderName}
     elseif($type -eq 'openai-compatible'){$payload=Build-OpenAICompatiblePayload $provider $messages $script:CurrentModel $script:SessionSummary}
     else{W ('[provider error] unsupported type: '+$type) Red;return $false}
 
@@ -6685,7 +6807,8 @@ function Invoke-Provider($text,$parts=$null){
             $result=Show-Response $response $responseType
         }
 
-        if($type -eq 'openai-compatible' -and $script:ShowReasoning -and $result.Reasoning){
+        $reasoningOutput=Get-MiraReasoningOutputEnabled ([string]$provider.name)
+        if($reasoningOutput -and -not $streamedOutput -and -not [string]::IsNullOrWhiteSpace([string]$result.Reasoning)){
             W '[THOUGHT]' DarkGray
             W ([string]$result.Reasoning) DarkGray
         }
@@ -6772,7 +6895,7 @@ function Help(){
     W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
     W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
     Show-ApiKeyStatus
-    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <provider>         refresh one provider model list' DarkGray; W '  .models <Tab>              refresh all configured providers; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live Gemini/Antigravity, NVIDIA NIM, and other OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
+    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <provider>         refresh one provider model list' DarkGray; W '  .models <Tab>              refresh all configured providers; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live Gemini/Antigravity, NVIDIA NIM, and other OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          toggle current provider thought output' DarkGray; W '  .reasoning <provider> on|off  set a provider independently' DarkGray; W ''
 }
 
 function Add-Message($role,$text,$reasoningDetails=$null,$parts=$null){
@@ -7054,8 +7177,29 @@ function Handle($line){
     if($t -eq '.grab' -or $t.StartsWith('.grab ')){Grab-LastMessage $script:LastText (($t.Substring(5)).Trim());return}
     if($t -eq '.stream'){W ('[stream] '+$(if($script:StreamResponses){'on'}else{'off'})+' (Gemini, Antigravity, OpenAI-compatible)') Cyan;return}
     if($t -in @('.stream on','.stream off')){$script:StreamResponses=($t -eq '.stream on');W ('[stream '+$(if($script:StreamResponses){'on'}else{'off'})+']') Cyan;return}
-    if($t -eq '.reasoning'){W ('[reasoning] '+$(if($script:ShowReasoning){'on'}else{'off'})) Cyan;return}
-    if($t -in @('.reasoning on','.reasoning off')){$script:ShowReasoning=($t -eq '.reasoning on');W ('[reasoning '+$(if($script:ShowReasoning){'on'}else{'off'})+']') Cyan;return}
+    if($t -eq '.reasoning'){
+        $providerName=[string]$script:CurrentProviderName
+        $state=if(Get-MiraReasoningOutputEnabled $providerName){'on'}else{'off'}
+        W ('[reasoning output: '+$providerName+' '+$state+']') Cyan
+        return
+    }
+    if($t -in @('.reasoning on','.reasoning off')){
+        $enabled=($t -eq '.reasoning on')
+        [void](Set-MiraReasoningOutputEnabled $script:CurrentProviderName $enabled)
+        $state=if($enabled){'on'}else{'off'}
+        W ('[reasoning output '+$script:CurrentProviderName+' '+$state+']') Cyan
+        return
+    }
+    if($t -match '^\.reasoning\s+([a-z0-9_-]+)\s+(on|off)$'){
+        $target=$Matches[1].ToLowerInvariant()
+        $enabled=($Matches[2] -eq 'on')
+        if(-not (Set-MiraReasoningOutputEnabled $target $enabled)){
+            W ('[reasoning error] no setting for provider: '+$target) Yellow
+            return
+        }
+        W ('[reasoning output '+$target+' '+$(if($enabled){'on'}else{'off'})+']') Cyan
+        return
+    }
     if($t -eq '.enable-session'){Start-Session '';return}
     if($t.StartsWith('.enable-session ')){Start-Session ($t.Substring(16));return}
     if($t -eq '.export-session' -or $t.StartsWith('.export-session ')){[void](Export-Session (($t.Substring(15)).Trim()));return}
@@ -7678,7 +7822,7 @@ W 'MIRA-TUI / SLIM PROVIDERS' Cyan
 W ('Own readline • no PSReadLine • Tab • history • multiline • attachments • model: ' + $script:CurrentProviderName + ':' + $script:CurrentModel) DarkGray
 W ('Session: ' + $(if($script:SessionActive){'ON (RAM only)'}else{'off (one-shot requests)'}) + ' • .enable-session / .delete session • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
 W ('History persistence: ' + $(if($script:PersistHistory){$script:HistoryFile}else{'OFF (RAM only)'}) + ' • loaded last ' + $script:HistoryLoadLimit + ' entries • .history persist on/off') DarkGray
-W ('Streaming (Gemini/Antigravity/OpenAI-compatible): ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning: ' + $(if($script:ShowReasoning){'on'}else{'off'})) DarkGray
+W ('Streaming (Gemini/Antigravity/OpenAI-compatible): ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning output: ' + $script:CurrentProviderName + '=' + $(if(Get-MiraReasoningOutputEnabled $script:CurrentProviderName){'on'}else{'off'}) + ' • .reasoning on/off') DarkGray
 W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
 W ('Used models: ' + $script:UsedModelsCacheFile + ' • learned from successful text replies/probes') DarkGray
 W ''
