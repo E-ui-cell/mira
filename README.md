@@ -49,7 +49,15 @@ Default model:
 gemini-flash-lite-latest
 ```
 
-Set the API key:
+To use Google Antigravity instead, sign in and load its account-specific model list:
+
+```text
+.auth login
+.models antigravity
+.model antigravity:<model>
+```
+
+Set the Gemini API key:
 
 ```powershell
 $env:GEMINI_API_KEY="YOUR_KEY"
@@ -93,7 +101,7 @@ or:
 .models <provider><Tab>
 ```
 
-The refresh only uses providers that have a non-empty API-key environment variable.
+Refresh uses providers with a non-empty API-key environment variable. Antigravity is refreshed separately when its OAuth token is present.
 
 MIRA filters returned catalogs using provider metadata when available and keeps a local cache.
 
@@ -119,9 +127,10 @@ It probes candidate models, skips obvious non-chat families, handles rate limits
 
 Built-in providers:
 
-| Provider | API key environment variable |
+| Provider | Authentication |
 |---|---|
-| Gemini | `GEMINI_API_KEY` |
+| Gemini | API key: `GEMINI_API_KEY` |
+| Antigravity | Google OAuth: `.auth login` (no API key) |
 | OpenRouter | `OPENROUTER_API_KEY` |
 | Groq | `GROQ_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
@@ -293,7 +302,7 @@ MIRA renders common Markdown directly in the Windows console:
 - JSON
 - semantic terminal formatting
 
-Disable the renderer and show the raw model response:
+Markdown rendering is **off by default**. Enable it to use the terminal renderer, or leave it off to show the raw model response:
 
 ```text
 .ui off
@@ -313,7 +322,7 @@ Check state:
 
 ### Streaming and reasoning
 
-OpenAI-compatible streaming can be enabled with:
+OpenAI-compatible streaming is **on by default**. Toggle it with:
 
 ```text
 .stream on
@@ -393,6 +402,7 @@ Show the raw JSON request:
 | `.models <provider><Tab>` | Refresh provider model list |
 | `.models test` | Probe candidate models |
 | `.providers` | Show built-in providers |
+| `.auth login/status/logout` | Sign in to or inspect Google Antigravity OAuth |
 | `.request` | Show last request summary |
 | `.request json` | Show raw last request JSON |
 | `.save [name]` | Save fenced code blocks |
@@ -463,7 +473,7 @@ Supported values are `cmd` and `powershell`.
 
 There is no provider JSON configuration file.
 
-Provider definitions are built into the script.
+Provider definitions are built into the script. The editable defaults and API-key environment-variable names are grouped near the beginning of `mira.ps1`. Add alternative environment-variable names to a provider's array there; the first non-empty variable is used. Antigravity uses the OAuth settings in that same block rather than an API key.
 
 API keys use environment variables:
 
