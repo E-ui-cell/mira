@@ -17,6 +17,9 @@ $script:MiraSettings = [ordered]@{
     Streaming = $true
     ShowReasoning = $false
 
+    # Start each run with RAM-only conversation context; false keeps one-shot mode.
+    SessionEnabled = $false
+
     PersistHistory = $true
     HistoryLoadLimit = 50
     CompressThreshold = 4000
@@ -114,8 +117,8 @@ $defaultModelEnvName = [string]$script:MiraSettings.DefaultModelEnvironmentVaria
 $defaultModelEnvValue = if(-not [string]::IsNullOrWhiteSpace($defaultModelEnvName)){[Environment]::GetEnvironmentVariable($defaultModelEnvName)}else{$null}
 $script:CurrentModel = if(-not [string]::IsNullOrWhiteSpace([string]$defaultModelEnvValue)){[string]$defaultModelEnvValue}else{[string]$script:MiraSettings.DefaultModel}
 $script:MiraAntigravityProject = $null
-$script:SessionActive = $false
-$script:SessionName = ''
+$script:SessionActive = [bool]$script:MiraSettings.SessionEnabled
+$script:SessionName = if($script:SessionActive){'temp'}else{''}
 $script:SessionSummary = ''
 $script:LastPromptTokens = 0
 $script:LastRequestElapsedMs = 0
@@ -5430,7 +5433,7 @@ Load-Providers
 Load-TuiHistory
 W 'MIRA-TUI / SLIM PROVIDERS' Cyan
 W ('Own readline • no PSReadLine • Tab • history • multiline • attachments • model: ' + $script:CurrentProviderName + ':' + $script:CurrentModel) DarkGray
-W ('Session: off (one-shot requests) • .enable-session enables RAM context • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
+W ('Session: ' + $(if($script:SessionActive){'ON (RAM only)'}else{'off (one-shot requests)'}) + ' • .enable-session / .delete session • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
 W ('History persistence: ' + $(if($script:PersistHistory){$script:HistoryFile}else{'OFF (RAM only)'}) + ' • loaded last ' + $script:HistoryLoadLimit + ' entries • .history persist on/off') DarkGray
 W ('Streaming (Gemini/Antigravity/OpenAI-compatible): ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning: ' + $(if($script:ShowReasoning){'on'}else{'off'})) DarkGray
 W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
@@ -7673,7 +7676,7 @@ Load-Providers
 Load-TuiHistory
 W 'MIRA-TUI / SLIM PROVIDERS' Cyan
 W ('Own readline • no PSReadLine • Tab • history • multiline • attachments • model: ' + $script:CurrentProviderName + ':' + $script:CurrentModel) DarkGray
-W ('Session: off (one-shot requests) • .enable-session enables RAM context • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
+W ('Session: ' + $(if($script:SessionActive){'ON (RAM only)'}else{'off (one-shot requests)'}) + ' • .enable-session / .delete session • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
 W ('History persistence: ' + $(if($script:PersistHistory){$script:HistoryFile}else{'OFF (RAM only)'}) + ' • loaded last ' + $script:HistoryLoadLimit + ' entries • .history persist on/off') DarkGray
 W ('Streaming (Gemini/Antigravity/OpenAI-compatible): ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning: ' + $(if($script:ShowReasoning){'on'}else{'off'})) DarkGray
 W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
