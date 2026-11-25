@@ -2332,6 +2332,293 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
     }
 }
 
+function ConvertFrom-MiraGoogleStreamEvent {
+    param([string]$EventJson)
+    $chunk=$EventJson | ConvertFrom-Json -ErrorAction Stop
+    if($null -ne $chunk.response){$chunk=$chunk.response}
+    $text=New-Object Text.StringBuilder
+    $finish=''
+    $tokensIn=0
+    $tokensOut=0
+    $promptFeedback=$chunk.promptFeedback
+    $errorMessage=''
+    if($null -ne $chunk.error){
+        $errorMessage=[string]$chunk.error.message
+        if([string]::IsNullOrWhiteSpace($errorMessage)){$errorMessage=$chunk.error | ConvertTo-Json -Depth 8 -Compress}
+    }
+    if($null -ne $chunk.usageMetadata){
+        if($null -ne $chunk.usageMetadata.promptTokenCount){$tokensIn=[int]$chunk.usageMetadata.promptTokenCount}
+        if($null -ne $chunk.usageMetadata.candidatesTokenCount){$tokensOut=[int]$chunk.usageMetadata.candidatesTokenCount}
+    }
+    $candidates=@($chunk.candidates)
+    if($candidates.Count -gt 0){
+        $candidate=$candidates[0]
+        $finish=[string]$candidate.finishReason
+        foreach($part in @($candidate.content.parts)){
+            # Do not display internal thought-summary parts as answer text.
+            if($null -ne $part.thought -and [bool]$part.thought){continue}
+            if($null -ne $part.text -and -not [string]::IsNullOrEmpty([string]$part.text)){
+                [void]$text.Append([string]$part.text)
+            }
+        }
+    }
+    return [pscustomobject]@{
+        Text=[string]$text.ToString()
+        FinishReason=$finish
+        PromptTokens=$tokensIn
+        CompletionTokens=$tokensOut
+        PromptFeedback=$promptFeedback
+        ErrorMessage=$errorMessage
+    }
+}
+
+function Send-GoogleStream($provider,$model,$payload){
+    $type=[string]$provider.type
+    $requestBody=$payload
+    $headers=@{}
+    if($type -eq 'gemini'){
+        $apiKey=Get-ProviderKey $provider
+        if([string]::IsNullOrWhiteSpace($apiKey)){throw 'Gemini API key is missing.'}
+        $url=([string]$provider.api_base).TrimEnd('/')+'/models/'+[uri]::EscapeDataString([string]$model)+':streamGenerateContent?alt=sse'
+        $headers['x-goog-api-key']=$apiKey
+    }elseif($type -eq 'antigravity'){
+        $accessToken=Get-MiraAntigravityAccessToken
+        $project=Get-MiraAntigravityProject
+        $requestBody=New-MiraAntigravityEnvelope -Payload $payload -Model $model -Project $project
+        $url=([string]$provider.api_base).TrimEnd('/')+':streamGenerateContent?alt=sse'
+        $headers=Get-MiraAntigravityHeaders -AccessToken $accessToken
+        $script:LastRequest=$requestBody | ConvertTo-Json -Depth 40
+    }else{
+        throw ('Google streaming is not supported for provider type: '+$type)
+    }
+
+    $json=$requestBody | ConvertTo-Json -Depth 40
+    $bytes=[Text.Encoding]::UTF8.GetBytes($json)
+    $request=[Net.HttpWebRequest]::Create($url)
+    $request.Method='POST'
+    $request.ContentType='application/json'
+    $request.Accept='text/event-stream'
+    $request.ContentLength=$bytes.Length
+    $request.Timeout=120000
+    $request.ReadWriteTimeout=600000
+    $request.KeepAlive=$false
+    try{$request.ServicePoint.Expect100Continue=$false}catch{}
+    $request.AllowReadStreamBuffering=$false
+    if($type -eq 'antigravity'){
+        $request.UserAgent=[string]$script:MiraSettings.AntigravityOAuth.UserAgent
+        foreach($name in $headers.Keys){$request.Headers[[string]$name]=[string]$headers[$name]}
+    }else{
+        $request.UserAgent='Mira-TUI/1.0.5'
+        $request.Headers['x-goog-api-key']=$apiKey
+    }
+
+    $oldTreatControlCAsInput=$null
+    $reqStream=$null
+    $response=$null
+    $reader=$null
+    $responseAsync=$null
+    $cancelled=$false
+    $startedOutput=$false
+    try{
+        try{$oldTreatControlCAsInput=[Console]::TreatControlCAsInput;[Console]::TreatControlCAsInput=$true}catch{}
+        Start-MiraRequestUi
+        $reqStream=$request.GetRequestStream()
+        $reqStream.Write($bytes,0,$bytes.Length)
+        $reqStream.Close()
+        $reqStream=$null
+
+        $responseAsync=$request.BeginGetResponse($null,$null)
+        while(-not $responseAsync.IsCompleted){
+            try{
+                if([Console]::KeyAvailable){
+                    while([Console]::KeyAvailable){
+                        $key=[Console]::ReadKey($true)
+                        if($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)){
+                            $cancelled=$true
+                            try{$request.Abort()}catch{}
+                            break
+                        }
+                    }
+                }
+            }catch{}
+            if($cancelled){break}
+            Update-MiraRequestUi
+            Start-Sleep -Milliseconds 100
+        }
+        if($cancelled){
+            try{$request.Abort()}catch{}
+            W '[Request cancelled]' Yellow
+            throw 'Request cancelled.'
+        }
+
+        try{$response=$request.EndGetResponse($responseAsync)}catch [Net.WebException]{
+            $webException=$_.Exception
+            if($webException.Status -eq [Net.WebExceptionStatus]::RequestCanceled){throw 'Request cancelled.'}
+            $detail=$webException.Message
+            if($null -ne $webException.Response){
+                $errorResponse=$webException.Response
+                $errorBody=''
+                try{
+                    $errorStream=$errorResponse.GetResponseStream()
+                    if($null -ne $errorStream){
+                        $errorReader=New-Object IO.StreamReader($errorStream)
+                        try{$errorBody=$errorReader.ReadToEnd()}finally{$errorReader.Dispose();$errorStream.Dispose()}
+                    }
+                }catch{}
+                if($errorBody){$detail='HTTP '+[int]$errorResponse.StatusCode+' '+[string]$errorResponse.StatusDescription+[Environment]::NewLine+$errorBody}
+            }
+            throw $detail
+        }
+
+        $responseStream=$response.GetResponseStream()
+        $contentType=[string]$response.ContentType
+        if($contentType -and $contentType -notlike 'text/event-stream*'){
+            $reader=New-Object IO.StreamReader($responseStream,[Text.Encoding]::UTF8)
+            $body=$reader.ReadToEnd()
+            if([string]::IsNullOrWhiteSpace($body)){throw 'Google streaming endpoint returned an empty response.'}
+            $fullResponse=$body | ConvertFrom-Json -ErrorAction Stop
+            if($type -eq 'antigravity' -and $null -ne $fullResponse.response){$fullResponse=$fullResponse.response}
+            $result=Show-Response $fullResponse 'gemini'
+            Stop-MiraRequestUi ([int]$result.PromptTokens) ([int]$result.CompletionTokens)
+            return [pscustomobject]@{
+                Text=[string]$result.Text
+                Display=[string]$result.Display
+                FinishReason=[string]$result.FinishReason
+                PromptTokens=[int]$result.PromptTokens
+                CompletionTokens=[int]$result.CompletionTokens
+            }
+        }
+
+        try{$responseStream.ReadTimeout=500}catch{}
+        $reader=New-Object IO.StreamReader($responseStream,[Text.Encoding]::UTF8)
+        $readWatch=[Diagnostics.Stopwatch]::StartNew()
+        $answer=New-Object Text.StringBuilder
+        $finish=''
+        $tokensIn=0
+        $tokensOut=0
+        $promptFeedback=$null
+        $eventData=New-Object System.Collections.Generic.List[string]
+        $lineTask=$reader.ReadLineAsync()
+        $done=$false
+
+        while(-not $done){
+            Update-MiraRequestUi
+            try{
+                if([Console]::KeyAvailable){
+                    while([Console]::KeyAvailable){
+                        $key=[Console]::ReadKey($true)
+                        if($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0)){
+                            $cancelled=$true
+                            try{$request.Abort()}catch{}
+                            break
+                        }
+                    }
+                }
+            }catch{}
+            if($cancelled){throw 'Request cancelled.'}
+            if(-not $lineTask.IsCompleted){
+                if($readWatch.ElapsedMilliseconds -ge 120000){
+                    try{$request.Abort()}catch{}
+                    throw 'Google streaming response timed out while waiting for data.'
+                }
+                Start-Sleep -Milliseconds 50
+                continue
+            }
+            try{$line=$lineTask.GetAwaiter().GetResult()}catch{
+                if($cancelled){throw 'Request cancelled.'}
+                throw $_.Exception
+            }
+            if($null -eq $line){break}
+            $readWatch.Restart()
+
+            if($line.Length -eq 0){
+                if($eventData.Count -gt 0){
+                    $eventJson=[string]::Join(([string][char]10),$eventData.ToArray())
+                    $eventData.Clear()
+                    if($eventJson.Trim() -eq '[DONE]'){$done=$true}
+                    else{
+                        try{$event=ConvertFrom-MiraGoogleStreamEvent -EventJson $eventJson}catch{throw ('Could not parse Google streaming event: '+$_.Exception.Message)}
+                        if($event.ErrorMessage){throw $event.ErrorMessage}
+                        if($event.PromptTokens -gt 0){$tokensIn=[int]$event.PromptTokens}
+                        if($event.CompletionTokens -gt 0){$tokensOut=[int]$event.CompletionTokens}
+                        if($event.FinishReason){$finish=[string]$event.FinishReason}
+                        if($null -ne $event.PromptFeedback){$promptFeedback=$event.PromptFeedback}
+                        if(-not [string]::IsNullOrEmpty([string]$event.Text)){
+                            if(-not $startedOutput){Suspend-MiraRequestUi;$startedOutput=$true}
+                            [void]$answer.Append([string]$event.Text)
+                            [Console]::Write([string]$event.Text)
+                        }
+                    }
+                }
+                $lineTask=$reader.ReadLineAsync()
+                continue
+            }
+            if($line.StartsWith(':')){
+                $lineTask=$reader.ReadLineAsync()
+                continue
+            }
+            if($line.StartsWith('data:')){
+                [void]$eventData.Add($line.Substring(5).TrimStart())
+            }
+            $lineTask=$reader.ReadLineAsync()
+        }
+
+        if($eventData.Count -gt 0){
+            $eventJson=[string]::Join(([string][char]10),$eventData.ToArray())
+            if($eventJson.Trim() -ne '[DONE]'){
+                $event=ConvertFrom-MiraGoogleStreamEvent -EventJson $eventJson
+                if($event.ErrorMessage){throw $event.ErrorMessage}
+                if($event.PromptTokens -gt 0){$tokensIn=[int]$event.PromptTokens}
+                if($event.CompletionTokens -gt 0){$tokensOut=[int]$event.CompletionTokens}
+                if($event.FinishReason){$finish=[string]$event.FinishReason}
+                if($null -ne $event.PromptFeedback){$promptFeedback=$event.PromptFeedback}
+                if(-not [string]::IsNullOrEmpty([string]$event.Text)){
+                    if(-not $startedOutput){Suspend-MiraRequestUi;$startedOutput=$true}
+                    [void]$answer.Append([string]$event.Text)
+                    [Console]::Write([string]$event.Text)
+                }
+            }
+        }
+
+        $readWatch.Stop()
+        $answerText=[string]$answer.ToString()
+        if([string]::IsNullOrWhiteSpace($answerText)){
+            if($finish -eq 'SAFETY' -or ($null -ne $promptFeedback -and $promptFeedback.blockReason)){$answerText='[BLOCKED BY SAFETY FILTERS]'}
+            else{$answerText='[NO CANDIDATES RETURNED]'}
+        }elseif($finish -eq 'MAX_TOKENS'){
+            $answerText += [Environment]::NewLine+[Environment]::NewLine+'[WARNING: Response truncated due to token limit]'
+        }
+        if($startedOutput){
+            Write-Host ''
+            if($script:RequestUiStopwatch.IsRunning){$script:RequestUiStopwatch.Stop()}
+            $script:LastRequestElapsedMs=[int]$script:RequestUiStopwatch.ElapsedMilliseconds
+            if([string]::IsNullOrWhiteSpace($script:LastRequestFrame)){$script:LastRequestFrame='... '}
+            $bullet=if($script:SessionActive){'  ●'}else{''}
+            $script:LastStatusText=$script:LastRequestFrame+'  '+([math]::Round($script:LastRequestElapsedMs/1000,1))+'s      ↑ '+$tokensIn+'  ↓ '+$tokensOut+$bullet
+            $script:LastStatusHasBullet=$script:SessionActive
+            W $script:LastStatusText DarkGray
+            $script:RequestUiActive=$false
+            $script:RequestUiLineOpen=$false
+        }else{
+            Stop-MiraRequestUi $tokensIn $tokensOut
+        }
+        if([string]::IsNullOrWhiteSpace($finish)){$finish='STOP'}
+        return [pscustomobject]@{
+            Text=$answerText
+            Display='[Tokens: '+$tokensIn+' in, '+$tokensOut+' out]'
+            FinishReason=$finish
+            PromptTokens=$tokensIn
+            CompletionTokens=$tokensOut
+        }
+    }finally{
+        if($null -ne $reader){try{$reader.Dispose()}catch{}}
+        if($null -ne $response){try{$response.Dispose()}catch{}}
+        if($null -ne $reqStream){try{$reqStream.Dispose()}catch{}}
+        if($null -ne $oldTreatControlCAsInput){try{[Console]::TreatControlCAsInput=$oldTreatControlCAsInput}catch{}}
+        if($script:RequestUiActive){try{Stop-MiraRequestUi 0 0}catch{}}
+    }
+}
+
 function Send-ProviderPayload($provider,$model,$payload){
     $apiKey=Get-ProviderKey $provider
     $type=[string]$provider.type
