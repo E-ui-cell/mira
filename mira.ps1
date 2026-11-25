@@ -2767,7 +2767,8 @@ function Send-GoogleStream($provider,$model,$payload){
         $readWatch.Stop()
         $answerText=[string]$answer.ToString()
         if([string]::IsNullOrWhiteSpace($answerText)){
-            if($finish -eq 'SAFETY' -or ($null -ne $promptFeedback -and $promptFeedback.blockReason)){$answerText='[BLOCKED BY SAFETY FILTERS]'}
+            if($toolCalls.Count -gt 0){$answerText=''}
+            elseif($finish -eq 'SAFETY' -or ($null -ne $promptFeedback -and $promptFeedback.blockReason)){$answerText='[BLOCKED BY SAFETY FILTERS]'}
             else{$answerText='[NO CANDIDATES RETURNED]'}
         }elseif($finish -eq 'MAX_TOKENS'){
             $answerText += [Environment]::NewLine+[Environment]::NewLine+'[WARNING: Response truncated due to token limit]'
