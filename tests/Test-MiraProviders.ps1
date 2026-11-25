@@ -50,6 +50,9 @@ Assert-MiraTest ($script:MiraSettings.DefaultProvider -eq 'gemini') 'default pro
 Assert-MiraTest ($script:MiraSettings.DefaultModel -eq 'gemini-flash-lite-latest') 'default model changed unexpectedly'
 Assert-MiraTest ($script:MiraSettings.UiRendering -eq $false) 'UI rendering must default off'
 Assert-MiraTest ($script:MiraSettings.Streaming -eq $true) 'streaming must default on'
+Assert-MiraTest ($script:MiraSettings.SessionEnabled -eq $false) 'RAM session must remain disabled by default'
+Assert-MiraTest ($source.Contains('$script:SessionActive = [bool]$script:MiraSettings.SessionEnabled')) 'startup session state must follow SessionEnabled'
+Assert-MiraTest ($source.Contains("`$script:SessionName = if(`$script:SessionActive){'temp'}else{''}")) 'enabled startup session must receive the default temp name'
 Assert-MiraTest (@($script:MiraSettings.ApiKeyEnvironmentVariables['nvidia']).Count -eq 1 -and $script:MiraSettings.ApiKeyEnvironmentVariables['nvidia'][0] -eq 'NVIDIA_API_KEY') 'NVIDIA_API_KEY must be editable in the settings block'
 $configText = $source.Substring($configStart,$configEnd-$configStart)
 foreach($match in [regex]::Matches($source,"'[A-Z0-9_]+_API_KEY'")){
