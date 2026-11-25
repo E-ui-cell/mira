@@ -511,7 +511,7 @@ No PS7-specific runtime requirement.
 
 ### Functional
 
-The current beta includes the native readline/TUI, built-in providers, API-key based configuration, one-shot requests, RAM-only sessions that can be enabled on demand and exported to a file, session compression, persistent history, model-list caching and refresh, model probing, Markdown rendering, file/text/image input, clipboard screenshots, diffs, output saving/copying, Google and OpenAI-compatible streaming, reasoning display, request inspection and raw-response mode.
+The current beta includes the native readline/TUI, built-in providers, API-key and Antigravity OAuth authentication, one-shot requests, RAM-only sessions that can be enabled on demand and exported to a file, session compression, persistent history, model-list caching and refresh, model probing, Markdown rendering, file/text/image input, clipboard screenshots, diffs, output saving/copying, Google and OpenAI-compatible streaming, reasoning display, request inspection and raw-response mode.
 
 ### Not yet done
 
