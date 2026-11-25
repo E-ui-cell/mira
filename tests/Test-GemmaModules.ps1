@@ -277,6 +277,55 @@ try {
     Remove-Variable -Name TestAntigravityTokenPath -Scope Script -ErrorAction SilentlyContinue
 }
 
+# OpenAI Responses turns retain native output items for Luna, but those
+# provider-only fields must never leak into Gemini Developer API or
+# Antigravity Content objects. The shared history must remain intact so a
+# later switch back to Luna can still use its native response items.
+$oldCrossProvider = @{
+    Provider = $script:Provider
+    Model = $script:MODEL
+    Effort = $script:Effort
+}
+try {
+    $script:Provider = 'antigravity'
+    $script:MODEL = 'gemini-3-flash'
+    $crossProviderHistory = [System.Collections.ArrayList]::new()
+    [void]$crossProviderHistory.Add(@{
+        role = 'user'
+        parts = @(@{ text = 'Earlier question' })
+    })
+    [void]$crossProviderHistory.Add(@{
+        role = 'model'
+        parts = @(
+            @{ text = 'Earlier answer' }
+            @{ functionCall = @{ id = 'call_test_1'; name = 'test_tool'; args = @{ value = 'kept' } } }
+        )
+        openaiOutputItems = @(
+            @{ type = 'reasoning'; id = 'rs_test_1'; summary = @() }
+            @{ type = 'function_call'; call_id = 'call_test_1'; name = 'test_tool'; arguments = '{"value":"kept"}' }
+        )
+    })
+
+    $geminiPayload = Build-GeminiPayload -SystemInstruction $null -Contents $crossProviderHistory
+    $serializedGeminiPayload = $geminiPayload | ConvertTo-Json -Depth 30 -Compress
+    if ($serializedGeminiPayload -match '"openaiOutputItems"') {
+        throw 'Gemini/Antigravity payload leaked OpenAI-only openaiOutputItems history metadata.'
+    }
+    if ($geminiPayload.contents.Count -ne 2 -or
+        $geminiPayload.contents[1].role -ne 'model' -or
+        $geminiPayload.contents[1].parts.Count -ne 2 -or
+        $geminiPayload.contents[1].parts[1].functionCall.name -ne 'test_tool') {
+        throw 'Gemini/Antigravity history projection did not preserve the model role and Gemini function-call parts.'
+    }
+    if (-not $crossProviderHistory[1].ContainsKey('openaiOutputItems')) {
+        throw 'Building a Gemini/Antigravity payload mutated shared history and discarded Luna native output items.'
+    }
+} finally {
+    $script:Provider = $oldCrossProvider.Provider
+    $script:MODEL = $oldCrossProvider.Model
+    $script:Effort = $oldCrossProvider.Effort
+}
+
 $turnRoutingSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\agent\Turn.ps1') -Raw -Encoding UTF8
 if ($turnRoutingSource -notmatch '\$usingOpenAI\s*=\s*\(\$script:Provider -eq ''openai''\)' -or
     $turnRoutingSource -notmatch '\$usingAntigravityOAuth\s*=\s*\(\$script:Provider -eq ''antigravity''\)' -or
