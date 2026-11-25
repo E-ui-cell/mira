@@ -28,6 +28,7 @@ $functionNames = @(
     'Get-ProviderKey',
     'Get-ProviderRefreshKey',
     'New-MiraAntigravityEnvelope',
+    'ConvertFrom-MiraGoogleStreamEvent',
     'Get-MiraAntigravityModels',
     'Show-Response'
 )
@@ -89,6 +90,16 @@ Assert-MiraTest ($null -eq $envelope.request.safetySettings) 'Gemini API safetyS
 Assert-MiraTest ($envelope.request.systemInstruction.role -eq 'user') 'Antigravity systemInstruction role was not normalized'
 Assert-MiraTest ($null -eq $geminiPayload.systemInstruction.role) 'envelope normalization mutated MIRA original systemInstruction'
 Assert-MiraTest ($null -ne $geminiPayload.safetySettings) 'envelope normalization mutated MIRA original safetySettings'
+$payloadWithoutSummary = [ordered]@{contents=@([ordered]@{role='user';parts=@([ordered]@{text='hello'})})}
+$defaultEnvelope = New-MiraAntigravityEnvelope -Payload $payloadWithoutSummary -Model 'test-model' -Project 'test-project'
+Assert-MiraTest ($defaultEnvelope.request.systemInstruction.role -eq 'user') 'default Antigravity system instruction is missing'
+Assert-MiraTest ($defaultEnvelope.request.systemInstruction.parts[0].text -eq $script:MiraSettings.AntigravityOAuth.SystemInstruction) 'default Antigravity system instruction does not match configuration'
+
+$eventJson = '{"candidates":[{"content":{"parts":[{"text":"Hello"},{"text":" world"},{"text":"hidden thought","thought":true}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":2}}'
+$event = ConvertFrom-MiraGoogleStreamEvent -EventJson $eventJson
+Assert-MiraTest ($event.Text -eq 'Hello world') 'Google SSE parser did not assemble text parts or filtered thought text incorrectly'
+Assert-MiraTest ($event.FinishReason -eq 'STOP') 'Google SSE parser did not read finishReason'
+Assert-MiraTest ($event.PromptTokens -eq 11 -and $event.CompletionTokens -eq 2) 'Google SSE parser did not read usage metadata'
 
 # Stub the three network/auth dependencies to test account model-catalog parsing
 # without contacting Google or requiring user credentials.
