@@ -2200,8 +2200,8 @@ function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary,[bool
             working_directory=[ordered]@{type='string';description='Optional working directory. Defaults to the current MIRA directory.'}
         };required=@('command')}
         $payload.tools=@(
-            [ordered]@{type='function';function=[ordered]@{name='cmd';description='Run a command through Windows cmd.exe.';parameters=$parameters}},
-            [ordered]@{type='function';function=[ordered]@{name='ps';description='Run a script through Windows PowerShell 5.1. Use for Windows management, files, processes, registry and system configuration.';parameters=$parameters}}
+            [ordered]@{type='function';'function'=[ordered]@{name='cmd';description='Run a command through Windows cmd.exe.';parameters=$parameters}},
+            [ordered]@{type='function';'function'=[ordered]@{name='ps';description='Run a script through Windows PowerShell 5.1. Use for Windows management, files, processes, registry and system configuration.';parameters=$parameters}}
         )
         $payload.tool_choice='auto'
     }
@@ -2477,7 +2477,7 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
         foreach($toolEntry in @($toolCallsByIndex.Values | Sort-Object Index)){
             $callId=[string]$toolEntry.Id;if([string]::IsNullOrWhiteSpace($callId)){$callId='call_'+[guid]::NewGuid().ToString('N')}
             $arguments=[string]$toolEntry.Arguments;if([string]::IsNullOrWhiteSpace($arguments)){$arguments='{}'}
-            [void]$toolCalls.Add([pscustomobject]@{id=$callId;type='function';function=[pscustomobject]@{name=[string]$toolEntry.Name;arguments=$arguments}})
+            [void]$toolCalls.Add([pscustomobject]@{id=$callId;type='function';'function'=[pscustomobject]@{name=[string]$toolEntry.Name;arguments=$arguments}})
         }
         return [pscustomobject]@{Text=[string]$answer.ToString();Reasoning=[string]$reasoning.ToString();ReasoningDetails=$reasoningDetails.ToArray();ToolCalls=$toolCalls.ToArray();Display='[Tokens: '+$tokensIn+' in, '+$tokensOut+' out]';FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut;ReasoningTokens=$reasoningTokens;Streamed=$true}
     }finally{
@@ -2515,7 +2515,7 @@ function ConvertFrom-MiraGoogleStreamEvent {
             if($null -ne $part.functionCall){
                 $fc=$part.functionCall;$arguments='{}'
                 if($null -ne $fc.args){$arguments=$fc.args | ConvertTo-Json -Depth 20 -Compress}
-                [void]$toolCalls.Add([pscustomobject]@{id='call_'+[guid]::NewGuid().ToString('N');type='function';function=[pscustomobject]@{name=[string]$fc.name;arguments=$arguments}})
+                [void]$toolCalls.Add([pscustomobject]@{id='call_'+[guid]::NewGuid().ToString('N');type='function';'function'=[pscustomobject]@{name=[string]$fc.name;arguments=$arguments}})
             }
         }
     }
@@ -6798,7 +6798,7 @@ function Show-Response($response,$providerType){
                 if($null -ne $part.functionCall){
                     $fc=$part.functionCall;$arguments='{}'
                     if($null -ne $fc.args){$arguments=$fc.args | ConvertTo-Json -Depth 20 -Compress}
-                    [void]$toolCalls.Add([pscustomobject]@{id='call_'+[guid]::NewGuid().ToString('N');type='function';function=[pscustomobject]@{name=[string]$fc.name;arguments=$arguments}})
+                    [void]$toolCalls.Add([pscustomobject]@{id='call_'+[guid]::NewGuid().ToString('N');type='function';'function'=[pscustomobject]@{name=[string]$fc.name;arguments=$arguments}})
                 }
             }
             $reply=[string]$answerParts.ToString()
