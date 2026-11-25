@@ -34,9 +34,24 @@ function Build-GeminiPayload {
         [object]$Contents
     )
 
+    # OpenAI Responses history can carry provider-only fields such as
+    # openaiOutputItems. Gemini Content accepts only role/parts at this level.
+    # Project each turn into the Gemini schema without mutating the shared
+    # history: the original OpenAI items are still needed if the user switches
+    # back to GPT-6 Luna later.
+    $geminiContents = @(
+        foreach ($turn in $Contents) {
+            if ($null -eq $turn) { continue }
+            [ordered]@{
+                role  = [string]$turn.role
+                parts = @($turn.parts)
+            }
+        }
+    )
+
     $payload = [ordered]@{
         systemInstruction = $SystemInstruction
-        contents          = $Contents
+        contents          = $geminiContents
     }
 
     if ($null -ne $GeminiTools) {
