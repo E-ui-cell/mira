@@ -23,6 +23,7 @@ Invoke-Expression $source.Substring($configStart,$configEnd-$configStart)
 
 $functionNames = @(
     'New-BuiltinProviders',
+    'ConvertFrom-MiraModelSpec',
     'Get-Provider',
     'Get-ProviderKeyEnvironmentNames',
     'Get-ProviderKey',
@@ -49,8 +50,15 @@ foreach($functionName in $functionNames){
     Invoke-Expression $functionAst.Extent.Text
 }
 
-Assert-MiraTest ($script:MiraSettings.DefaultProvider -eq 'gemini') 'default provider changed unexpectedly'
-Assert-MiraTest ($script:MiraSettings.DefaultModel -eq 'gemini-flash-lite-latest') 'default model changed unexpectedly'
+Assert-MiraTest ($script:MiraSettings.DefaultModel -eq 'gemini:gemini-3.5-flash-lite') 'default selector must use provider:model syntax'
+Assert-MiraTest ($null -eq $script:MiraSettings['DefaultProvider']) 'separate DefaultProvider setting must be removed'
+Assert-MiraTest ($null -eq $script:MiraSettings['DefaultModelEnvironmentVariable']) 'separate model environment-variable setting must be removed'
+$defaultModel = ConvertFrom-MiraModelSpec ([string]$script:MiraSettings.DefaultModel)
+Assert-MiraTest ($defaultModel.Provider -eq 'gemini') 'default selector parsed the wrong provider'
+Assert-MiraTest ($defaultModel.Model -eq 'gemini-3.5-flash-lite') 'default selector parsed the wrong model'
+$antigravityDefault = ConvertFrom-MiraModelSpec 'antigravity:gemini-3.1-flash-lite'
+Assert-MiraTest ($antigravityDefault.Provider -eq 'antigravity' -and $antigravityDefault.Model -eq 'gemini-3.1-flash-lite') 'Antigravity provider:model selector did not parse correctly'
+Assert-MiraTest ($source.Contains('$defaultModelSelection=ConvertFrom-MiraModelSpec ([string]$script:MiraSettings.DefaultModel)')) 'startup does not initialize from the combined selector'
 Assert-MiraTest ($script:MiraSettings.UiRendering -eq $false) 'UI rendering must default off'
 Assert-MiraTest ($script:MiraSettings.Streaming -eq $true) 'streaming must default on'
 Assert-MiraTest ($script:MiraSettings.ReasoningOutput['gemini'] -eq $true) 'Google AI Studio thought output must be enabled in provider settings'
