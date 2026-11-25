@@ -996,10 +996,16 @@ if (-not [Char]::IsControl($k.KeyChar)) {
         # Preserve CR/LF delivered as part of a multiline paste.
         if ($pk.Key -eq [ConsoleKey]::Enter -or $pk.KeyChar -eq [char]13 -or $pk.KeyChar -eq [char]10) {
             if ($pk.KeyChar -eq [char]10 -and $b.EndsWith("`n")) { continue }
-            if ($b.EndsWith("`r")) { $b = $b.TrimEnd([char]13) }
-            $b = $b.Insert($c,"`n")
-            ++$c
-            continue
+            # A queued CR/LF followed by more input is a multiline-paste separator.
+            # Otherwise replay Enter so the main loop submits the prompt.
+            if ([Console]::KeyAvailable) {
+                if ($b.EndsWith("`r")) { $b = $b.TrimEnd([char]13) }
+                $b = $b.Insert($c,"`n")
+                ++$c
+                continue
+            }
+            [void]$pendingKeys.Enqueue($pk)
+            break
         }
 
         if ([Char]::IsControl($pk.KeyChar)) {
