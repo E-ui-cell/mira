@@ -15,6 +15,10 @@ jobs:
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\mira.ps1
 
+      - name: Test MIRA provider configuration and Antigravity adapter
+        shell: powershell
+        run: .\tests\Test-MiraProviders.ps1
+
       - name: Parse gemma.ps1 with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\gemma\gemma.ps1
