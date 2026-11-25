@@ -1219,6 +1219,42 @@ function Get-MiraAntigravityModels {
     return @($result | Sort-Object name)
 }
 
+function New-MiraAntigravityEnvelope {
+    param(
+        [System.Collections.IDictionary]$Payload,
+        [string]$Model,
+        [string]$Project
+    )
+    # MIRA builds a normal Gemini Content payload. Antigravity wraps it in its
+    # Cloud Code Assist envelope and does not accept Gemini API safetySettings.
+    # Copy the payload so provider-specific normalization never mutates MIRA's
+    # original request object.
+    $requestPayload=[ordered]@{}
+    foreach($key in $Payload.Keys){
+        if([string]$key -ieq 'safetySettings'){continue}
+        $value=$Payload[$key]
+        if([string]$key -ieq 'systemInstruction' -and $null -ne $value){
+            $instruction=[ordered]@{}
+            if($value -is [System.Collections.IDictionary]){
+                foreach($instructionKey in $value.Keys){$instruction[$instructionKey]=$value[$instructionKey]}
+            }else{
+                foreach($property in $value.PSObject.Properties){$instruction[[string]$property.Name]=$property.Value}
+            }
+            $instruction.role='user'
+            $value=$instruction
+        }
+        $requestPayload[$key]=$value
+    }
+    return [ordered]@{
+        project=$Project
+        requestId='agent-'+[guid]::NewGuid().ToString('N')
+        request=$requestPayload
+        model=[string]$Model
+        userAgent='antigravity'
+        requestType='agent'
+    }
+}
+
 function Invoke-MiraAntigravityAuthCommand {
     param([string]$Argument = '')
     $action = $Argument.Trim().ToLowerInvariant()
@@ -2301,16 +2337,7 @@ function Send-ProviderPayload($provider,$model,$payload){
     }elseif($type -eq 'antigravity'){
         $accessToken=Get-MiraAntigravityAccessToken
         $project=Get-MiraAntigravityProject
-        if($null -ne $payload.systemInstruction){$payload.systemInstruction.role='user'}
-        if($payload -is [System.Collections.IDictionary] -and $payload.Contains('safetySettings')){[void]$payload.Remove('safetySettings')}
-        $requestBody=[ordered]@{
-            project=$project
-            requestId='agent-'+[guid]::NewGuid().ToString('N')
-            request=$payload
-            model=[string]$model
-            userAgent='antigravity'
-            requestType='agent'
-        }
+        $requestBody=New-MiraAntigravityEnvelope -Payload $payload -Model $model -Project $project
         $url=([string]$provider.api_base).TrimEnd('/')+':generateContent'
         $headers=Get-MiraAntigravityHeaders -AccessToken $accessToken
     }elseif($type -eq 'openai-compatible'){
@@ -2321,6 +2348,7 @@ function Send-ProviderPayload($provider,$model,$payload){
     }else{throw ('unsupported provider type: '+$type)}
 
     $json=$requestBody | ConvertTo-Json -Depth 40
+    if($type -eq 'antigravity'){$script:LastRequest=$json}
     $bytes=[Text.Encoding]::UTF8.GetBytes($json)
     $params=@{Uri=$url;Method='Post';ContentType='application/json';Body=$bytes;TimeoutSec=120;ErrorAction='Stop'}
     if($type -eq 'antigravity'){$params.UserAgent=[string]$script:MiraSettings.AntigravityOAuth.UserAgent}
