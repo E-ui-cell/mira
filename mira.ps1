@@ -6913,7 +6913,7 @@ function Invoke-MiraToolCall($ToolCall){
     return ($result | ConvertTo-Json -Depth 8 -Compress)
 }
 
-function Invoke-Provider($text,$parts=$null){
+function Invoke-Provider($text,$parts=$null,[bool]$EnableTools=$true){
     $provider=Get-Provider $script:CurrentProviderName
     if($null -eq $provider){W ('[provider error] unknown provider: '+$script:CurrentProviderName) Red;return $false}
     if($script:SessionActive -and $script:LastPromptTokens -ge $script:CompressThreshold){[void](Compress-Session)}
@@ -6929,8 +6929,8 @@ function Invoke-Provider($text,$parts=$null){
     $finalResult=$null;$finalStreamedOutput=$false
     $toolLoopWatch=[Diagnostics.Stopwatch]::StartNew()
     for($round=0;$round -lt [int]$script:MiraToolMaxRounds;++$round){
-        if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $messages $script:SessionSummary $script:CurrentProviderName $true}
-        else{$payload=Build-OpenAICompatiblePayload $provider $messages $script:CurrentModel $script:SessionSummary $true}
+        if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $messages $script:SessionSummary $script:CurrentProviderName $EnableTools}
+        else{$payload=Build-OpenAICompatiblePayload $provider $messages $script:CurrentModel $script:SessionSummary $EnableTools}
         $jsonPayload=$payload|ConvertTo-Json -Depth 40;$script:LastRequest=$jsonPayload
         if($script:DryRunMode){
             W '[dry-run] no request sent' Yellow;W ('provider : '+$script:CurrentProviderName) Gray
@@ -7046,6 +7046,7 @@ function Help(){
     W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
     W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
     Show-ApiKeyStatus
+    W '  LLM tools: cmd, ps | permission: ask (MIRA_TOOL_PERMISSION=auto|ask|deny)' DarkGray
     W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <provider>         refresh one provider model list' DarkGray; W '  .models <Tab>              refresh all configured providers; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live Gemini/Antigravity, NVIDIA NIM, and other OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          toggle current provider thought output' DarkGray; W '  .reasoning <provider> on|off  set a provider independently' DarkGray; W ''
 }
 
@@ -7889,7 +7890,7 @@ Rules:
 "@
 
     W ('[execute] '+$shellName+' / '+$os) DarkGray
-    [void](Invoke-Provider $prompt)
+    [void](Invoke-Provider $prompt $null $false)
 
     try{
         $command=Get-MiraExecuteCommand $script:LastText
