@@ -4330,16 +4330,24 @@ function Invoke-Provider($text,$parts=$null){
     }
 
     try{
-        if($type -eq 'openai-compatible' -and $script:StreamResponses){
+        $streamedOutput=$false
+        if($script:StreamResponses -and $type -in @('openai-compatible','gemini','antigravity')){
             try{
-                $result=Send-OpenAICompatibleStream $provider $script:CurrentModel $payload
+                if($type -eq 'openai-compatible'){
+                    $result=Send-OpenAICompatibleStream $provider $script:CurrentModel $payload
+                }else{
+                    $result=Send-GoogleStream $provider $script:CurrentModel $payload
+                }
+                $streamedOutput=($null -ne $result.Streamed -and [bool]$result.Streamed)
             }catch{
                 if($_.Exception.Message -eq 'Request cancelled.'){throw}
                 W ('[stream error] '+$_.Exception.Message) Yellow
                 W '[stream fallback] retrying non-stream request...' DarkGray
-                $payload.stream=$false
+                if($type -eq 'openai-compatible'){$payload.stream=$false}
                 $response=Send-ProviderPayload $provider $script:CurrentModel $payload
-                $result=Show-Response $response $type
+                $responseType=if($type -eq 'antigravity'){'gemini'}else{$type}
+                $result=Show-Response $response $responseType
+                $streamedOutput=$false
             }
         }else{
             $response=Send-ProviderPayload $provider $script:CurrentModel $payload
@@ -4381,7 +4389,7 @@ function Invoke-Provider($text,$parts=$null){
     $script:LastStatusText=$statusFrame+'  '+$elapsedSec+'s      ↑ '+$tokensIn+'  ↓ '+$tokensOut+$bullet
     $script:LastStatusHasBullet=$script:SessionActive
 
-    if($type -eq 'gemini' -or $type -eq 'antigravity' -or -not $script:StreamResponses){
+    if(-not $streamedOutput){
         try{
             Write-MarkupText ([string]$result.Text)
         }catch{
@@ -6626,16 +6634,24 @@ function Invoke-Provider($text,$parts=$null){
     }
 
     try{
-        if($type -eq 'openai-compatible' -and $script:StreamResponses){
+        $streamedOutput=$false
+        if($script:StreamResponses -and $type -in @('openai-compatible','gemini','antigravity')){
             try{
-                $result=Send-OpenAICompatibleStream $provider $script:CurrentModel $payload
+                if($type -eq 'openai-compatible'){
+                    $result=Send-OpenAICompatibleStream $provider $script:CurrentModel $payload
+                }else{
+                    $result=Send-GoogleStream $provider $script:CurrentModel $payload
+                }
+                $streamedOutput=($null -ne $result.Streamed -and [bool]$result.Streamed)
             }catch{
                 if($_.Exception.Message -eq 'Request cancelled.'){throw}
                 W ('[stream error] '+$_.Exception.Message) Yellow
                 W '[stream fallback] retrying non-stream request...' DarkGray
-                $payload.stream=$false
+                if($type -eq 'openai-compatible'){$payload.stream=$false}
                 $response=Send-ProviderPayload $provider $script:CurrentModel $payload
-                $result=Show-Response $response $type
+                $responseType=if($type -eq 'antigravity'){'gemini'}else{$type}
+                $result=Show-Response $response $responseType
+                $streamedOutput=$false
             }
         }else{
             $response=Send-ProviderPayload $provider $script:CurrentModel $payload
@@ -6677,7 +6693,7 @@ function Invoke-Provider($text,$parts=$null){
     $script:LastStatusText=$statusFrame+'  '+$elapsedSec+'s      ↑ '+$tokensIn+'  ↓ '+$tokensOut+$bullet
     $script:LastStatusHasBullet=$script:SessionActive
 
-    if($type -eq 'gemini' -or $type -eq 'antigravity' -or -not $script:StreamResponses){
+    if(-not $streamedOutput){
         try{
             Write-MarkupText ([string]$result.Text)
         }catch{
