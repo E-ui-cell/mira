@@ -37,7 +37,7 @@ The status line shows request time and token counts. When a session is enabled, 
 
 Markdown-aware TUI renderer with code, math, tables, quotes and JSON.
 
-Native file/image input, diff sending, on-demand sessions with export, model discovery and OpenAI-compatible streaming.
+Native file/image input, diff sending, on-demand sessions with export, model discovery and Google/OpenAI-compatible streaming.
 
 ## Quickstart
 
@@ -95,10 +95,10 @@ Press **Tab** after `.models` to explicitly refresh provider model lists from th
 .models
 ```
 
-or:
+Or refresh one provider directly:
 
 ```text
-.models <provider><Tab>
+.models antigravity
 ```
 
 Refresh uses providers with a non-empty API-key environment variable. Antigravity is refreshed separately when its OAuth token is present.
@@ -399,7 +399,7 @@ Show the raw JSON request:
 | `.model` | Show current provider/model |
 | `.model <provider:model>` | Switch provider/model |
 | `.models` | Show cached text-chat models |
-| `.models <provider><Tab>` | Refresh provider model list |
+| `.models <provider>` | Refresh that provider's model list |
 | `.models test` | Probe candidate models |
 | `.providers` | Show built-in providers |
 | `.auth login/status/logout` | Sign in to or inspect Google Antigravity OAuth |
