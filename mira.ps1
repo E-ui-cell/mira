@@ -4114,19 +4114,22 @@ function Show-ApiKeyStatus(){
             if(-not [string]::IsNullOrWhiteSpace($value) -and -not $names.Contains($value)){[void]$names.Add($value)}
         }
     }
-    foreach($name in @(
-        [string]$script:MiraSettings.AntigravityOAuth.ClientIdEnvironmentVariable,
-        [string]$script:MiraSettings.AntigravityOAuth.ClientSecretEnvironmentVariable
-    )){
-        if(-not [string]::IsNullOrWhiteSpace($name) -and -not $names.Contains($name)){[void]$names.Add($name)}
-    }
     foreach($name in $names){
         $value=[string][Environment]::GetEnvironmentVariable([string]$name)
         if([string]::IsNullOrWhiteSpace($value)){W ($name+' = <empty>') DarkGray}
         else{W ($name+' = <set>') DarkGray}
     }
+    $clientIdEnv=[string]$script:MiraSettings.AntigravityOAuth.ClientIdEnvironmentVariable
+    $clientSecretEnv=[string]$script:MiraSettings.AntigravityOAuth.ClientSecretEnvironmentVariable
+    foreach($name in @($clientIdEnv,$clientSecretEnv)){
+        if([string]::IsNullOrWhiteSpace([string][Environment]::GetEnvironmentVariable($name))){
+            W ($name+' = <optional override; built-in client used>') DarkGray
+        }else{
+            W ($name+' = <custom override set>') DarkGray
+        }
+    }
     $tokenPath=Get-MiraAntigravityTokenPath
-    W ('ANTIGRAVITY_OAUTH = '+$(if(Test-Path -LiteralPath $tokenPath){'signed in'}else{'not signed in'})) DarkGray
+    W ('ANTIGRAVITY_OAUTH = '+$(if(Test-Path -LiteralPath $tokenPath){'saved token present'}else{'not signed in'})) DarkGray
 }
 
 function Help(){
@@ -6407,19 +6410,22 @@ function Show-ApiKeyStatus(){
             if(-not [string]::IsNullOrWhiteSpace($value) -and -not $names.Contains($value)){[void]$names.Add($value)}
         }
     }
-    foreach($name in @(
-        [string]$script:MiraSettings.AntigravityOAuth.ClientIdEnvironmentVariable,
-        [string]$script:MiraSettings.AntigravityOAuth.ClientSecretEnvironmentVariable
-    )){
-        if(-not [string]::IsNullOrWhiteSpace($name) -and -not $names.Contains($name)){[void]$names.Add($name)}
-    }
     foreach($name in $names){
         $value=[string][Environment]::GetEnvironmentVariable([string]$name)
         if([string]::IsNullOrWhiteSpace($value)){W ($name+' = <empty>') DarkGray}
         else{W ($name+' = <set>') DarkGray}
     }
+    $clientIdEnv=[string]$script:MiraSettings.AntigravityOAuth.ClientIdEnvironmentVariable
+    $clientSecretEnv=[string]$script:MiraSettings.AntigravityOAuth.ClientSecretEnvironmentVariable
+    foreach($name in @($clientIdEnv,$clientSecretEnv)){
+        if([string]::IsNullOrWhiteSpace([string][Environment]::GetEnvironmentVariable($name))){
+            W ($name+' = <optional override; built-in client used>') DarkGray
+        }else{
+            W ($name+' = <custom override set>') DarkGray
+        }
+    }
     $tokenPath=Get-MiraAntigravityTokenPath
-    W ('ANTIGRAVITY_OAUTH = '+$(if(Test-Path -LiteralPath $tokenPath){'signed in'}else{'not signed in'})) DarkGray
+    W ('ANTIGRAVITY_OAUTH = '+$(if(Test-Path -LiteralPath $tokenPath){'saved token present'}else{'not signed in'})) DarkGray
 }
 
 function Help(){
