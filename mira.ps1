@@ -2,6 +2,57 @@
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# -----------------------------------------------------------------------------
+# EDITABLE MIRA DEFAULTS
+# Change defaults and credential environment-variable names here.
+# Add alternate API-key variable names to a provider's array; first non-empty wins.
+# Antigravity uses OAuth, not an API key.
+# -----------------------------------------------------------------------------
+$script:MiraSettings = [ordered]@{
+    DefaultProvider = 'gemini'
+    DefaultModel = 'gemini-flash-lite-latest'
+    DefaultModelEnvironmentVariable = 'GEMINI_MODEL'
+
+    UiRendering = $false
+    Streaming = $true
+    ShowReasoning = $false
+
+    PersistHistory = $true
+    HistoryLoadLimit = 50
+    CompressThreshold = 4000
+    HistoryDirectoryName = 'Mira-TUI'
+    HistoryFileName = 'history.json'
+    ModelCacheDirectoryName = 'Mira-TUI'
+    UsedModelsFileName = 'used.list'
+
+    ApiKeyEnvironmentVariables = [ordered]@{
+        gemini      = @('GEMINI_API_KEY')
+        openrouter  = @('OPENROUTER_API_KEY')
+        groq        = @('GROQ_API_KEY')
+        openai      = @('OPENAI_API_KEY')
+        deepseek    = @('DEEPSEEK_API_KEY')
+        mistral     = @('MISTRAL_API_KEY')
+        together    = @('TOGETHER_API_KEY')
+        fireworks   = @('FIREWORKS_API_KEY')
+        xai         = @('XAI_API_KEY')
+        perplexity  = @('PERPLEXITY_API_KEY')
+    }
+
+    AntigravityOAuth = [ordered]@{
+        ClientIdEnvironmentVariable = 'AGY_GOOGLE_CLIENT_ID'
+        ClientSecretEnvironmentVariable = 'AGY_GOOGLE_CLIENT_SECRET'
+        TokenRelativePath = '.gemini\antigravity-cli\antigravity-oauth-token'
+        AuthorizationEndpoint = 'https://accounts.google.com/o/oauth2/v2/auth'
+        TokenEndpoint = 'https://oauth2.googleapis.com/token'
+        RedirectUri = 'https://antigravity.google/oauth-callback'
+        Scopes = 'https://www.googleapis.com/auth/aicode https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs openid'
+        ApiBase = 'https://daily-cloudcode-pa.googleapis.com/v1internal'
+        UserAgent = 'antigravity/hub/2.17.0 (aidev_client; os_type=windows; arch=amd64; cl=986210228)'
+        ApiClient = 'google-cloud-sdk vscode_cloudshelleditor/0.1'
+        ClientMetadata = '{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}'
+    }
+}
+
 # Normalize the Windows 7 Explorer "Run with PowerShell" argument wrapper
 # before normal MIRA CLI argument parsing. No process relaunch is required.
 function Get-MiraCliArgs {
@@ -29,7 +80,7 @@ $script:MiraBuild = 'b90879230'
 
 # MIRA-TUI BETA 0.1.0-beta.3 / BUILD b90879230
 # Own readline + fish-like history + completion + multiline + file/read/diff/image sending.
-# Native Gemini + built-in OpenAI-compatible providers. No provider JSON config.
+# Native Gemini + Antigravity OAuth + built-in OpenAI-compatible providers. No provider JSON config.
 # No PSReadLine. No external modules.
 
 $script:History = New-Object System.Collections.Generic.List[string]
@@ -56,8 +107,11 @@ $script:LastRequest = ''
 $script:ResponseAnchorRow = -1
 $script:Conversation = New-Object System.Collections.Generic.List[object]
 $script:Providers = @()
-$script:CurrentProviderName = 'gemini'
-$script:CurrentModel = if($env:GEMINI_MODEL){$env:GEMINI_MODEL}else{'gemini-flash-lite-latest'}
+$script:CurrentProviderName = [string]$script:MiraSettings.DefaultProvider
+$defaultModelEnvName = [string]$script:MiraSettings.DefaultModelEnvironmentVariable
+$defaultModelEnvValue = if(-not [string]::IsNullOrWhiteSpace($defaultModelEnvName)){[Environment]::GetEnvironmentVariable($defaultModelEnvName)}else{$null}
+$script:CurrentModel = if(-not [string]::IsNullOrWhiteSpace([string]$defaultModelEnvValue)){[string]$defaultModelEnvValue}else{[string]$script:MiraSettings.DefaultModel}
+$script:MiraAntigravityProject = $null
 $script:SessionActive = $false
 $script:SessionName = ''
 $script:SessionSummary = ''
@@ -72,28 +126,29 @@ $script:CliArgsNotImplemented = @('-m, --model <name>','-h, --help','--')
 # UI RUNTIME SWITCHES
 # These affect only the visual renderer. Raw .copy/.grab/.save data is unchanged.
 # -----------------------------------------------------------------------------
-$script:UiRenderEnabled = $true
-$script:CompressThreshold = if($env:MIRA_COMPRESS_THRESHOLD){[int]$env:MIRA_COMPRESS_THRESHOLD}else{4000}
-$script:OpenRouterApiKey = 'PASTE_OPENROUTER_KEY_HERE'
-$script:StreamResponses = $false
-$script:ShowReasoning = $false
-# Persistent history is ON by default. Set MIRA_PERSIST_HISTORY=0/false/off to disable it.
-$script:PersistHistory = -not ($env:MIRA_PERSIST_HISTORY -eq '0' -or $env:MIRA_PERSIST_HISTORY -eq 'false' -or $env:MIRA_PERSIST_HISTORY -eq 'off')
-$script:HistoryLoadLimit = if($env:MIRA_HISTORY_LOAD_LIMIT){[Math]::Max(1,[int]$env:MIRA_HISTORY_LOAD_LIMIT)}else{50}
-$script:HistoryFile = if($env:MIRA_HISTORY_FILE){$env:MIRA_HISTORY_FILE}else{Join-Path (Join-Path $env:LOCALAPPDATA 'Mira-TUI') 'history.json'}
+$script:UiRenderEnabled = [bool]$script:MiraSettings.UiRendering
+$script:CompressThreshold = if($env:MIRA_COMPRESS_THRESHOLD){[int]$env:MIRA_COMPRESS_THRESHOLD}else{[int]$script:MiraSettings.CompressThreshold}
+$script:StreamResponses = [bool]$script:MiraSettings.Streaming
+$script:ShowReasoning = [bool]$script:MiraSettings.ShowReasoning
+# Persistent history defaults to the editable setting; MIRA_PERSIST_HISTORY overrides it.
+$script:PersistHistory = [bool]$script:MiraSettings.PersistHistory
+if($env:MIRA_PERSIST_HISTORY -eq '0' -or $env:MIRA_PERSIST_HISTORY -eq 'false' -or $env:MIRA_PERSIST_HISTORY -eq 'off'){$script:PersistHistory=$false}
+elseif(-not [string]::IsNullOrWhiteSpace($env:MIRA_PERSIST_HISTORY)){$script:PersistHistory=$true}
+$script:HistoryLoadLimit = if($env:MIRA_HISTORY_LOAD_LIMIT){[Math]::Max(1,[int]$env:MIRA_HISTORY_LOAD_LIMIT)}else{[int]$script:MiraSettings.HistoryLoadLimit}
+$script:HistoryFile = if($env:MIRA_HISTORY_FILE){$env:MIRA_HISTORY_FILE}else{Join-Path (Join-Path $env:LOCALAPPDATA $script:MiraSettings.HistoryDirectoryName) $script:MiraSettings.HistoryFileName}
 if([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)){ $script:HistoryFile = Join-Path (Get-Location).Path 'mira-history.json' }
 # Model-list cache lives in TEMP5 when defined, otherwise standard TEMP.
 # Startup and .model completion never fetch. used.list is the completion pool when present;
 # without it, completion falls back to the local provider model lists.
-$script:ModelCacheRoot = if(-not [string]::IsNullOrWhiteSpace($env:TEMP5)){Join-Path $env:TEMP5 'Mira-TUI'}elseif(-not [string]::IsNullOrWhiteSpace($env:TEMP)){Join-Path $env:TEMP 'Mira-TUI'}else{Join-Path (Get-Location).Path '.mira-tmp'}
-$script:UsedModelsCacheFile = Join-Path $script:ModelCacheRoot 'used.list'
+$script:ModelCacheRoot = if(-not [string]::IsNullOrWhiteSpace($env:TEMP5)){Join-Path $env:TEMP5 $script:MiraSettings.ModelCacheDirectoryName}elseif(-not [string]::IsNullOrWhiteSpace($env:TEMP)){Join-Path $env:TEMP $script:MiraSettings.ModelCacheDirectoryName}else{Join-Path (Get-Location).Path '.mira-tmp'}
+$script:UsedModelsCacheFile = Join-Path $script:ModelCacheRoot $script:MiraSettings.UsedModelsFileName
 $script:ModelMenuActive = $false
 $script:ModelMenuItems = @()
 $script:ModelMenuIndex = 0
 $script:ModelMenuTyped = ''
 
 $script:Commands = @(
-    '.help','.clear','.clear history','.history','.history persist on','.history persist off','.file','.read','.diff','.shot','.model','.models','.models test','.providers','.request','.request json','.save','.copy','.grab','.ui','.stream','.reasoning','.enable-session','.export-session','.empty session','.compress session','.delete session','.q',':q',':wq'
+    '.help','.clear','.clear history','.history','.history persist on','.history persist off','.file','.read','.diff','.shot','.model','.models','.models test','.providers','.auth','.auth login','.auth status','.auth logout','.request','.request json','.save','.copy','.grab','.ui','.stream','.reasoning','.enable-session','.export-session','.empty session','.compress session','.delete session','.q',':q',':wq'
 )
 
 # -----------------------------------------------------------------------------
@@ -846,8 +901,9 @@ function Reset-TuiHistorySearch(){
 
 
 function New-BuiltinProviders(){
+    $keys = $script:MiraSettings.ApiKeyEnvironmentVariables
     @(
-        [pscustomobject]@{name='gemini';     type='gemini';            api_base='https://generativelanguage.googleapis.com/v1beta'; api_key_env='GEMINI_API_KEY'; safetySettings=@(
+        [pscustomobject]@{name='gemini';     type='gemini';            api_base='https://generativelanguage.googleapis.com/v1beta'; api_key_env=([string]$keys['gemini'][0]);     api_key_envs=@($keys['gemini']); safetySettings=@(
             [pscustomobject]@{category='HARM_CATEGORY_HARASSMENT';threshold='BLOCK_NONE'}
             [pscustomobject]@{category='HARM_CATEGORY_HATE_SPEECH';threshold='BLOCK_NONE'}
             [pscustomobject]@{category='HARM_CATEGORY_SEXUALLY_EXPLICIT';threshold='BLOCK_NONE'}
@@ -855,15 +911,16 @@ function New-BuiltinProviders(){
             [pscustomobject]@{category='HARM_CATEGORY_CIVIC_INTEGRITY';threshold='BLOCK_NONE'}
             [pscustomobject]@{category='HARM_CATEGORY_JAILBREAK';threshold='BLOCK_NONE'}
         ); models=@([pscustomobject]@{name='gemini-flash-lite-latest'})}
-        [pscustomobject]@{name='openrouter'; type='openai-compatible'; api_base='https://openrouter.ai/api/v1';                     api_key_env='OPENROUTER_API_KEY'; headers=[pscustomobject]@{'HTTP-Referer'='http://localhost';'X-Title'='Mira-TUI'}; models=@([pscustomobject]@{name='nvidia/nemotron-3-super-120b-a12b:free'})}
-        [pscustomobject]@{name='groq';      type='openai-compatible'; api_base='https://api.groq.com/openai/v1';                    api_key_env='GROQ_API_KEY';      models=@([pscustomobject]@{name='openai/gpt-oss-120b'})}
-        [pscustomobject]@{name='openai';    type='openai-compatible'; api_base='https://api.openai.com/v1';                         api_key_env='OPENAI_API_KEY';       models=@()}
-        [pscustomobject]@{name='deepseek';  type='openai-compatible'; api_base='https://api.deepseek.com';                         api_key_env='DEEPSEEK_API_KEY'; models=@([pscustomobject]@{name='deepseek-flash'})}
-        [pscustomobject]@{name='mistral';   type='openai-compatible'; api_base='https://api.mistral.ai/v1';                         api_key_env='MISTRAL_API_KEY';  models=@([pscustomobject]@{name='mistral-large-latest'})}
-        [pscustomobject]@{name='together';  type='openai-compatible'; api_base='https://api.together.xyz/v1';                      api_key_env='TOGETHER_API_KEY'; models=@()}
-        [pscustomobject]@{name='fireworks'; type='openai-compatible'; api_base='https://api.fireworks.ai/inference/v1';           api_key_env='FIREWORKS_API_KEY'; models=@()}
-        [pscustomobject]@{name='xai';       type='openai-compatible'; api_base='https://api.x.ai/v1';                              api_key_env='XAI_API_KEY';       models=@([pscustomobject]@{name='grok-4.7'})}
-        [pscustomobject]@{name='perplexity';type='openai-compatible'; api_base='https://api.perplexity.ai';                         api_key_env='PERPLEXITY_API_KEY';models=@([pscustomobject]@{name='sonar'})}
+        [pscustomobject]@{name='antigravity';type='antigravity';api_base=[string]$script:MiraSettings.AntigravityOAuth.ApiBase;api_key_env='';api_key_envs=@();models=@()}
+        [pscustomobject]@{name='openrouter'; type='openai-compatible'; api_base='https://openrouter.ai/api/v1';                     api_key_env=([string]$keys['openrouter'][0]); api_key_envs=@($keys['openrouter']); headers=[pscustomobject]@{'HTTP-Referer'='http://localhost';'X-Title'='Mira-TUI'}; models=@([pscustomobject]@{name='nvidia/nemotron-3-super-120b-a12b:free'})}
+        [pscustomobject]@{name='groq';      type='openai-compatible'; api_base='https://api.groq.com/openai/v1';                    api_key_env=([string]$keys['groq'][0]);      api_key_envs=@($keys['groq']);      models=@([pscustomobject]@{name='openai/gpt-oss-120b'})}
+        [pscustomobject]@{name='openai';    type='openai-compatible'; api_base='https://api.openai.com/v1';                         api_key_env=([string]$keys['openai'][0]);    api_key_envs=@($keys['openai']);    models=@()}
+        [pscustomobject]@{name='deepseek';  type='openai-compatible'; api_base='https://api.deepseek.com';                         api_key_env=([string]$keys['deepseek'][0]);  api_key_envs=@($keys['deepseek']);  models=@([pscustomobject]@{name='deepseek-flash'})}
+        [pscustomobject]@{name='mistral';   type='openai-compatible'; api_base='https://api.mistral.ai/v1';                         api_key_env=([string]$keys['mistral'][0]);   api_key_envs=@($keys['mistral']);   models=@([pscustomobject]@{name='mistral-large-latest'})}
+        [pscustomobject]@{name='together';  type='openai-compatible'; api_base='https://api.together.xyz/v1';                      api_key_env=([string]$keys['together'][0]);  api_key_envs=@($keys['together']);  models=@()}
+        [pscustomobject]@{name='fireworks'; type='openai-compatible'; api_base='https://api.fireworks.ai/inference/v1';           api_key_env=([string]$keys['fireworks'][0]); api_key_envs=@($keys['fireworks']); models=@()}
+        [pscustomobject]@{name='xai';       type='openai-compatible'; api_base='https://api.x.ai/v1';                              api_key_env=([string]$keys['xai'][0]);       api_key_envs=@($keys['xai']);       models=@([pscustomobject]@{name='grok-4.7'})}
+        [pscustomobject]@{name='perplexity';type='openai-compatible'; api_base='https://api.perplexity.ai';                         api_key_env=([string]$keys['perplexity'][0]);api_key_envs=@($keys['perplexity']);models=@([pscustomobject]@{name='sonar'})}
     )
 }
 
@@ -880,34 +937,316 @@ function Get-Provider([string]$name){
 
 function Test-ProviderUsable($provider){
     if($null -eq $provider){return $false}
+    # The generic parallel model probe currently handles API-key providers only.
+    if([string]$provider.type -eq 'antigravity'){return $false}
     return -not [string]::IsNullOrWhiteSpace((Get-ProviderKey $provider))
 }
 
-function Get-ProviderKey($provider){
+function Get-ProviderKeyEnvironmentNames($provider){
     $envNames=New-Object System.Collections.Generic.List[string]
-    if($null -ne $provider.api_key_env -and -not [string]::IsNullOrWhiteSpace([string]$provider.api_key_env)){[void]$envNames.Add([string]$provider.api_key_env)}
-
-    # Backward-compatible aliases used by earlier Mira-TUI builds.
-    switch -Regex ([string]$provider.name){
-        '^openrouter$' {foreach($n in @('OPENROUTER_API_KEY','OPENROUTER_API_KEY')){if(-not $envNames.Contains($n)){[void]$envNames.Add($n)}}}
-        '^openai$'     {if(-not $envNames.Contains('OPENAI_API_KEY')){[void]$envNames.Add('OPENAI_API_KEY')}}
-        '^gemini$'     {foreach($n in @('GEMINI_API_KEY','GEMINI_API_KEY')){if(-not $envNames.Contains($n)){[void]$envNames.Add($n)}}}
+    if($null -ne $provider.PSObject.Properties['api_key_envs']){
+        foreach($name in @($provider.api_key_envs)){
+            $value=[string]$name
+            if(-not [string]::IsNullOrWhiteSpace($value) -and -not $envNames.Contains($value)){[void]$envNames.Add($value)}
+        }
     }
+    if($null -ne $provider.PSObject.Properties['api_key_env']){
+        $value=[string]$provider.api_key_env
+        if(-not [string]::IsNullOrWhiteSpace($value) -and -not $envNames.Contains($value)){[void]$envNames.Add($value)}
+    }
+    return @($envNames.ToArray())
+}
 
-    foreach($envName in $envNames){
-        $value=[string](Get-Item -Path ('Env:'+ $envName) -ErrorAction SilentlyContinue).Value
+function Get-ProviderKey($provider){
+    foreach($envName in @(Get-ProviderKeyEnvironmentNames $provider)){
+        $value=[string][Environment]::GetEnvironmentVariable([string]$envName)
         if(-not [string]::IsNullOrWhiteSpace($value)){return $value}
     }
-
     if($null -ne $provider.api_key -and -not [string]::IsNullOrWhiteSpace([string]$provider.api_key)){return [string]$provider.api_key}
-
-    if([string]$provider.name -ieq 'openrouter' -and
-       -not [string]::IsNullOrWhiteSpace($script:OpenRouterApiKey) -and
-       $script:OpenRouterApiKey -ne 'PASTE_OPENROUTER_KEY_HERE'){
-        return [string]$script:OpenRouterApiKey
-    }
-
     return ''
+}
+
+function Get-ProviderRefreshKey($provider){
+    foreach($envName in @(Get-ProviderKeyEnvironmentNames $provider)){
+        $value=[string][Environment]::GetEnvironmentVariable([string]$envName)
+        if(-not [string]::IsNullOrWhiteSpace($value)){
+            return [pscustomobject]@{Name=[string]$envName;Value=$value}
+        }
+    }
+    return $null
+}
+
+function Get-MiraAntigravityClientCredentials {
+    # Public installed-client credentials. User access/refresh tokens are stored separately.
+    $settings = $script:MiraSettings.AntigravityOAuth
+    $idBytes = @(49,48,55,49,48,48,54,48,54,48,53,57,49,45,116,109,104,115,115,105,110,50,104,50,49,108,99,114,101,50,51,53,118,116,111,108,111,106,104,52,103,52,48,51,101,112,46,97,112,112,115,46,103,111,111,103,108,101,117,115,101,114,99,111,110,116,101,110,116,46,99,111,109)
+    $secretBytes = @(71,79,67,83,80,88,45,75,53,56,70,87,82,52,56,54,76,100,76,74,49,109,76,66,56,115,88,67,52,122,54,113,68,65,102)
+    $idEnv = [string]$settings.ClientIdEnvironmentVariable
+    $secretEnv = [string]$settings.ClientSecretEnvironmentVariable
+    $clientId = if($idEnv){[Environment]::GetEnvironmentVariable($idEnv)}else{$null}
+    $clientSecret = if($secretEnv){[Environment]::GetEnvironmentVariable($secretEnv)}else{$null}
+    if([string]::IsNullOrWhiteSpace([string]$clientId)){$clientId = -join ([char[]]$idBytes)}
+    if([string]::IsNullOrWhiteSpace([string]$clientSecret)){$clientSecret = -join ([char[]]$secretBytes)}
+    return @{ClientId=[string]$clientId;ClientSecret=[string]$clientSecret}
+}
+
+function Get-MiraAntigravityHomeDirectory {
+    $homePath = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+    if([string]::IsNullOrWhiteSpace($homePath)){$homePath=[string]$env:USERPROFILE}
+    if([string]::IsNullOrWhiteSpace($homePath)){$homePath=[string]$HOME}
+    if([string]::IsNullOrWhiteSpace($homePath)){throw 'Could not determine the current Windows user profile directory.'}
+    return [IO.Path]::GetFullPath($homePath)
+}
+
+function Get-MiraAntigravityTokenPath {
+    $homePath = Get-MiraAntigravityHomeDirectory
+    return [IO.Path]::Combine($homePath,[string]$script:MiraSettings.AntigravityOAuth.TokenRelativePath)
+}
+
+function ConvertTo-MiraBase64Url {
+    param([byte[]]$Bytes)
+    return [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+','-').Replace('/','_')
+}
+
+function New-MiraRandomString {
+    param([int]$ByteCount = 32)
+    $bytes = New-Object byte[] $ByteCount
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try{$rng.GetBytes($bytes)}finally{$rng.Dispose()}
+    return ConvertTo-MiraBase64Url -Bytes $bytes
+}
+
+function Save-MiraAntigravityToken {
+    param([hashtable]$TokenData)
+    $path = Get-MiraAntigravityTokenPath
+    $directory = Split-Path -Parent $path
+    if(-not (Test-Path -LiteralPath $directory)){New-Item -ItemType Directory -Path $directory -Force | Out-Null}
+    $json = $TokenData | ConvertTo-Json -Depth 8
+    $temp = $path + '.tmp-' + [guid]::NewGuid().ToString('N')
+    $backup = $null
+    try{
+        [IO.File]::WriteAllText($temp,$json,(New-Object Text.UTF8Encoding($false)))
+        if(Test-Path -LiteralPath $path){
+            $backup = $path + '.bak-' + [guid]::NewGuid().ToString('N')
+            [IO.File]::Replace($temp,$path,$backup)
+            if(Test-Path -LiteralPath $backup){Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue}
+        }else{
+            [IO.File]::Move($temp,$path)
+        }
+    }finally{
+        if(Test-Path -LiteralPath $temp){Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}
+        if($backup -and (Test-Path -LiteralPath $backup)){Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue}
+    }
+}
+
+function Invoke-MiraAntigravityTokenRequest {
+    param([hashtable]$Form)
+    $pairs = New-Object System.Collections.Generic.List[string]
+    foreach($key in $Form.Keys){
+        [void]$pairs.Add(([uri]::EscapeDataString([string]$key)+'='+[uri]::EscapeDataString([string]$Form[$key])))
+    }
+    $body = [string]::Join('&',$pairs)
+    try{
+        return Invoke-RestMethod -Uri ([string]$script:MiraSettings.AntigravityOAuth.TokenEndpoint) -Method Post -ContentType 'application/x-www-form-urlencoded' -Body $body -ErrorAction Stop
+    }catch{
+        throw "Google OAuth token request failed: $($_.Exception.Message)"
+    }
+}
+
+function Invoke-MiraAntigravityLogin {
+    $credentials = Get-MiraAntigravityClientCredentials
+    if([string]::IsNullOrWhiteSpace($credentials.ClientId) -or [string]::IsNullOrWhiteSpace($credentials.ClientSecret)){throw 'Antigravity OAuth client credentials are unavailable.'}
+    $settings = $script:MiraSettings.AntigravityOAuth
+    $state = New-MiraRandomString -ByteCount 32
+    $verifier = New-MiraRandomString -ByteCount 64
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try{$challengeBytes=$sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($verifier))}finally{$sha.Dispose()}
+    $challenge = ConvertTo-MiraBase64Url -Bytes $challengeBytes
+    $parameters = [ordered]@{
+        client_id = $credentials.ClientId
+        redirect_uri = [string]$settings.RedirectUri
+        response_type = 'code'
+        scope = [string]$settings.Scopes
+        access_type = 'offline'
+        prompt = 'consent'
+        state = $state
+        code_challenge = $challenge
+        code_challenge_method = 'S256'
+    }
+    $query = @($parameters.Keys | ForEach-Object {[uri]::EscapeDataString([string]$_)+'='+[uri]::EscapeDataString([string]$parameters[$_])}) -join '&'
+    $authUrl = [string]$settings.AuthorizationEndpoint + '?' + $query
+    Write-Host ([Environment]::NewLine + 'Opening Google Antigravity sign-in in your browser...') -ForegroundColor Cyan
+    Write-Host 'If the browser does not open, copy this URL:' -ForegroundColor DarkGray
+    Write-Host $authUrl -ForegroundColor Gray
+    try{Start-Process $authUrl -ErrorAction Stop}catch{Write-Host '[Could not launch browser automatically; open the URL above.]' -ForegroundColor Yellow}
+    Write-Host ([Environment]::NewLine + 'After approval, paste the authorization code or the full callback URL.') -ForegroundColor Yellow
+    $inputCode = Read-Host 'Authorization code'
+    if([string]::IsNullOrWhiteSpace($inputCode)){throw 'Authorization code was empty; sign-in cancelled.'}
+    $code = $inputCode.Trim()
+    if($code -match '^https?://'){
+        Add-Type -AssemblyName System.Web
+        $callback = [uri]$code
+        $queryValues = [System.Web.HttpUtility]::ParseQueryString($callback.Query)
+        if($queryValues['error']){throw "Google authorization failed: $($queryValues['error'])"}
+        if($queryValues['state'] -and $queryValues['state'] -cne $state){throw 'OAuth state validation failed. Restart .auth login.'}
+        $code = [string]$queryValues['code']
+    }
+    if([string]::IsNullOrWhiteSpace($code)){throw 'The callback did not contain an authorization code.'}
+    $form = @{
+        code = $code
+        client_id = $credentials.ClientId
+        client_secret = $credentials.ClientSecret
+        redirect_uri = [string]$settings.RedirectUri
+        grant_type = 'authorization_code'
+        code_verifier = $verifier
+    }
+    $token = Invoke-MiraAntigravityTokenRequest -Form $form
+    if([string]::IsNullOrWhiteSpace([string]$token.access_token) -or [string]::IsNullOrWhiteSpace([string]$token.refresh_token)){throw 'Google did not return both access_token and refresh_token.'}
+    $tokenData = @{
+        auth_method = 'consumer'
+        token = @{
+            access_token = [string]$token.access_token
+            token_type = if($token.token_type){[string]$token.token_type}else{'Bearer'}
+            refresh_token = [string]$token.refresh_token
+            expiry = [DateTimeOffset]::UtcNow.AddSeconds([int]$token.expires_in).ToString('o')
+        }
+    }
+    Save-MiraAntigravityToken -TokenData $tokenData
+    $script:MiraAntigravityProject = $null
+    Write-Host ([Environment]::NewLine + '[Google Antigravity OAuth saved in your home directory.]') -ForegroundColor Green
+}
+
+function Get-MiraAntigravityAccessToken {
+    $path = Get-MiraAntigravityTokenPath
+    if(-not (Test-Path -LiteralPath $path)){throw "Not signed in to Google Antigravity. Run .auth login. Token path: $path"}
+    $data = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if($null -eq $data.token){throw 'Antigravity token file has an invalid format.'}
+    $token = $data.token
+    $expiry = [DateTimeOffset]::MinValue
+    if($token.expiry){[void][DateTimeOffset]::TryParse([string]$token.expiry,[ref]$expiry)}
+    if(-not [string]::IsNullOrWhiteSpace([string]$token.access_token) -and $expiry -gt [DateTimeOffset]::UtcNow.AddMinutes(1)){return [string]$token.access_token}
+    if([string]::IsNullOrWhiteSpace([string]$token.refresh_token)){throw 'Antigravity access token expired and no refresh token is stored. Run .auth login.'}
+    $credentials = Get-MiraAntigravityClientCredentials
+    $form = @{
+        refresh_token = [string]$token.refresh_token
+        client_id = $credentials.ClientId
+        client_secret = $credentials.ClientSecret
+        grant_type = 'refresh_token'
+    }
+    $refreshed = Invoke-MiraAntigravityTokenRequest -Form $form
+    if([string]::IsNullOrWhiteSpace([string]$refreshed.access_token)){throw 'Google OAuth refresh returned no access token.'}
+    $token.access_token = [string]$refreshed.access_token
+    if($refreshed.refresh_token){$token.refresh_token=[string]$refreshed.refresh_token}
+    if($refreshed.token_type){$token.token_type=[string]$refreshed.token_type}
+    $token.expiry = [DateTimeOffset]::UtcNow.AddSeconds([int]$refreshed.expires_in).ToString('o')
+    Save-MiraAntigravityToken -TokenData @{auth_method='consumer';token=$token}
+    return [string]$token.access_token
+}
+
+function Invoke-MiraAntigravityLogout {
+    $path = Get-MiraAntigravityTokenPath
+    if(Test-Path -LiteralPath $path){
+        Remove-Item -LiteralPath $path -Force
+        Write-Host '[Google Antigravity OAuth token removed.]' -ForegroundColor Green
+    }else{
+        Write-Host '[No saved Google Antigravity OAuth token.]' -ForegroundColor Yellow
+    }
+    $script:MiraAntigravityProject = $null
+}
+
+function Get-MiraAntigravityHeaders {
+    param([string]$AccessToken)
+    $settings = $script:MiraSettings.AntigravityOAuth
+    return @{
+        Authorization = 'Bearer ' + $AccessToken
+        'User-Agent' = [string]$settings.UserAgent
+        'X-Goog-Api-Client' = [string]$settings.ApiClient
+        'Client-Metadata' = [string]$settings.ClientMetadata
+    }
+}
+
+function Invoke-MiraAntigravityPost {
+    param([string]$Method,[hashtable]$Body,[string]$AccessToken)
+    $url = ([string]$script:MiraSettings.AntigravityOAuth.ApiBase).TrimEnd('/') + ':' + $Method
+    $headers = Get-MiraAntigravityHeaders -AccessToken $AccessToken
+    return Invoke-RestMethod -Uri $url -Method Post -Headers $headers -ContentType 'application/json' -Body ($Body | ConvertTo-Json -Depth 30) -ErrorAction Stop
+}
+
+function Get-MiraAntigravityProject {
+    if(-not [string]::IsNullOrWhiteSpace([string]$script:MiraAntigravityProject)){return [string]$script:MiraAntigravityProject}
+    $token = Get-MiraAntigravityAccessToken
+    $body = @{metadata=@{ideType='ANTIGRAVITY';platform='PLATFORM_UNSPECIFIED';pluginType='GEMINI'}}
+    $loaded = Invoke-MiraAntigravityPost -Method 'loadCodeAssist' -Body $body -AccessToken $token
+    $project = [string]$loaded.cloudaicompanionProject
+    if([string]::IsNullOrWhiteSpace($project)){throw 'Google loadCodeAssist did not return cloudaicompanionProject.'}
+    $script:MiraAntigravityProject = $project
+    return $project
+}
+
+function Get-MiraAntigravityModels {
+    $token = Get-MiraAntigravityAccessToken
+    $project = Get-MiraAntigravityProject
+    $catalog = Invoke-MiraAntigravityPost -Method 'fetchAvailableModels' -Body @{project=$project} -AccessToken $token
+    $items = $null
+    foreach($key in @('models','modelInfos','availableModels','availableModelInfos')){
+        $property = $catalog.PSObject.Properties[$key]
+        if($null -ne $property -and $null -ne $property.Value){$items=$property.Value;break}
+    }
+    if($null -eq $items){throw 'Antigravity model catalogue did not contain a recognized models collection.'}
+    $result = New-Object System.Collections.Generic.List[object]
+    if($items -is [System.Array] -or $items -is [System.Collections.IList]){
+        foreach($item in $items){
+            if($item -is [string]){$id=[string]$item;$display=$id}
+            else{
+                $id='';$display=''
+                foreach($field in @('catalogId','catalogID','modelId','modelID','id','slug','model','name')){
+                    if($item.PSObject.Properties[$field] -and $item.$field){$id=[string]$item.$field;break}
+                }
+                foreach($field in @('displayName','display_name','label','title')){
+                    if($item.PSObject.Properties[$field] -and $item.$field){$display=[string]$item.$field;break}
+                }
+                if(-not $display){$display=$id}
+            }
+            if($id){[void]$result.Add([pscustomobject]@{name=($id -replace '^models/','');displayName=$display})}
+        }
+    }else{
+        foreach($property in $items.PSObject.Properties){
+            $id=[string]$property.Name;$display=$id
+            if($property.Value -and $property.Value.PSObject.Properties['displayName']){$display=[string]$property.Value.displayName}
+            if($id){[void]$result.Add([pscustomobject]@{name=($id -replace '^models/','');displayName=$display})}
+        }
+    }
+    if($result.Count -eq 0){throw 'Antigravity returned no selectable models.'}
+    return @($result | Sort-Object name)
+}
+
+function Invoke-MiraAntigravityAuthCommand {
+    param([string]$Argument = '')
+    $action = $Argument.Trim().ToLowerInvariant()
+    if($action -eq 'login'){
+        try{Invoke-MiraAntigravityLogin}catch{Write-Host ("[OAuth login failed]: " + $_.Exception.Message) -ForegroundColor Red}
+        return
+    }
+    if($action -eq 'logout'){
+        try{Invoke-MiraAntigravityLogout}catch{Write-Host ("[OAuth logout failed]: " + $_.Exception.Message) -ForegroundColor Red}
+        return
+    }
+    if($action -eq 'status' -or [string]::IsNullOrWhiteSpace($action)){
+        $path = Get-MiraAntigravityTokenPath
+        if(Test-Path -LiteralPath $path){
+            try{
+                $data = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+                $email = if($data.email){[string]$data.email}else{'(account email not recorded)'}
+                Write-Host ("Google Antigravity: signed in (" + $email + ")") -ForegroundColor Green
+                Write-Host ("Token file: " + $path) -ForegroundColor DarkGray
+            }catch{Write-Host '[Saved token file exists but could not be read.]' -ForegroundColor Red}
+        }else{
+            Write-Host 'Google Antigravity: not signed in' -ForegroundColor Yellow
+            Write-Host 'Run .auth login to connect.' -ForegroundColor DarkGray
+        }
+        return
+    }
+    Write-Host 'Usage: .auth login | .auth status | .auth logout' -ForegroundColor Yellow
 }
 
 function Read-UsedModels(){
@@ -1072,11 +1411,18 @@ function Test-TextChatModel($item){
 
 function Refresh-ProviderModelList($provider){
     $name=[string]$provider.name
+    $type=[string]$provider.type
+    $models=New-Object System.Collections.Generic.List[string]
+    if($type -eq 'antigravity'){
+        foreach($item in @(Get-MiraAntigravityModels)){
+            if(-not [string]::IsNullOrWhiteSpace([string]$item.name)){[void]$models.Add([string]$item.name)}
+        }
+        $path=Write-ProviderModelCache $provider $models.ToArray()
+        return [pscustomobject]@{Provider=$name;Count=$models.Count;Path=$path;KeyName='Antigravity OAuth'}
+    }
     $refreshKey=Get-ProviderRefreshKey $provider
     if($null -eq $refreshKey){return $null}
     $apiKey=[string]$refreshKey.Value
-    $type=[string]$provider.type
-    $models=New-Object System.Collections.Generic.List[string]
     $headers=Get-ModelListHeaders $provider $apiKey
 
     if($name -ieq 'openrouter'){
@@ -1191,6 +1537,18 @@ function Refresh-ModelCaches([string]$onlyProvider=''){
         $targets=@($p)
     }
     foreach($provider in $targets){
+        if([string]$provider.type -eq 'antigravity'){
+            if(-not (Test-Path -LiteralPath (Get-MiraAntigravityTokenPath))){
+                W '[models] antigravity: skipped (run .auth login)' DarkGray
+                continue
+            }
+            try{
+                W '[models] refreshing antigravity ...' DarkGray
+                $r=Refresh-ProviderModelList $provider
+                if($null -ne $r){W ('[models] '+$r.Provider+': '+$r.Count+' models → '+$r.Path) Green}
+            }catch{W ('[models] antigravity refresh error: '+$_.Exception.Message) Red}
+            continue
+        }
         $refreshKey=Get-ProviderRefreshKey $provider
         if($null -eq $refreshKey){
             $envName=[string]$provider.api_key_env
@@ -1241,6 +1599,9 @@ function Test-CachedModels(){
     foreach($u in $alreadyUsed){$usedSet[[string]$u]=$true}
 
     foreach($provider in $script:Providers){
+        # Antigravity's account model catalogue is fetched through OAuth; the
+        # generic parallel API-key probe below intentionally does not probe it.
+        if([string]$provider.type -eq 'antigravity'){continue}
         if(-not (Test-ProviderUsable $provider)){continue}
         $queue=New-Object 'System.Collections.Generic.Queue[object]'
         foreach($model in @(Get-CachedProviderModels $provider)){
@@ -1932,11 +2293,27 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
 function Send-ProviderPayload($provider,$model,$payload){
     $apiKey=Get-ProviderKey $provider
     $type=[string]$provider.type
+    $requestBody=$payload
     if($type -eq 'gemini'){
         $base=[string]$provider.api_base
         $url=$base.TrimEnd('/')+'/models/'+$model+':generateContent'
         if(-not [string]::IsNullOrWhiteSpace($apiKey)){$url += '?key='+[uri]::EscapeDataString($apiKey)}
         $headers=@{}
+    }elseif($type -eq 'antigravity'){
+        $accessToken=Get-MiraAntigravityAccessToken
+        $project=Get-MiraAntigravityProject
+        if($null -ne $payload.systemInstruction){$payload.systemInstruction.role='user'}
+        if($payload -is [System.Collections.IDictionary] -and $payload.Contains('safetySettings')){[void]$payload.Remove('safetySettings')}
+        $requestBody=[ordered]@{
+            project=$project
+            requestId='agent-'+[guid]::NewGuid().ToString('N')
+            request=$payload
+            model=[string]$model
+            userAgent='antigravity'
+            requestType='agent'
+        }
+        $url=([string]$provider.api_base).TrimEnd('/')+':generateContent'
+        $headers=Get-MiraAntigravityHeaders -AccessToken $accessToken
     }elseif($type -eq 'openai-compatible'){
         $url=([string]$provider.api_base).TrimEnd('/')+'/chat/completions'
         $headers=@{}
@@ -1944,7 +2321,7 @@ function Send-ProviderPayload($provider,$model,$payload){
         if($null -ne $provider.headers){foreach($prop in $provider.headers.PSObject.Properties){$headers[[string]$prop.Name]=[string]$prop.Value}}
     }else{throw ('unsupported provider type: '+$type)}
 
-    $json=$payload | ConvertTo-Json -Depth 30
+    $json=$requestBody | ConvertTo-Json -Depth 40
     $bytes=[Text.Encoding]::UTF8.GetBytes($json)
     $params=@{Uri=$url;Method='Post';ContentType='application/json';Body=$bytes;TimeoutSec=120;ErrorAction='Stop'}
     if($headers.Count -gt 0){$params.Headers=$headers}
@@ -1989,9 +2366,14 @@ function Send-ProviderPayload($provider,$model,$payload){
             throw [string]$err.Exception.Message
         }
         if($response.Count -eq 0 -or $null -eq $response[0]){throw 'The provider returned an empty response.'}
-        $final=$response[0];$tokensIn=0;$tokensOut=0
+        $final=$response[0]
+        if($type -eq 'antigravity'){
+            if($null -eq $final.response){throw 'Antigravity returned no response object.'}
+            $final=$final.response
+        }
+        $tokensIn=0;$tokensOut=0
         try{
-            if($type -eq 'gemini'){if($null -ne $final.usageMetadata){if($null -ne $final.usageMetadata.promptTokenCount){$tokensIn=[int]$final.usageMetadata.promptTokenCount};if($null -ne $final.usageMetadata.candidatesTokenCount){$tokensOut=[int]$final.usageMetadata.candidatesTokenCount}}}
+            if($type -eq 'gemini' -or $type -eq 'antigravity'){if($null -ne $final.usageMetadata){if($null -ne $final.usageMetadata.promptTokenCount){$tokensIn=[int]$final.usageMetadata.promptTokenCount};if($null -ne $final.usageMetadata.candidatesTokenCount){$tokensOut=[int]$final.usageMetadata.candidatesTokenCount}}}
             else{if($null -ne $final.usage){if($null -ne $final.usage.prompt_tokens){$tokensIn=[int]$final.usage.prompt_tokens};if($null -ne $final.usage.completion_tokens){$tokensOut=[int]$final.usage.completion_tokens}}}
         }catch{}
         Stop-MiraRequestUi $tokensIn $tokensOut
@@ -2020,11 +2402,12 @@ function Compress-Session(){
     $summaryMessages=@([pscustomobject]@{role='user';text=$prompt})
     try{
         $type=[string]$provider.type
-        if($type -eq 'gemini'){$payload=Build-GeminiPayload $summaryMessages ''}
+        if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $summaryMessages ''}
         elseif($type -eq 'openai-compatible'){$payload=Build-OpenAICompatiblePayload $provider $summaryMessages $script:CurrentModel ''; $payload.stream=$false}
         else{throw ('unsupported provider type: '+$type)}
         $response=Send-ProviderPayload $provider $script:CurrentModel $payload
-        $result=Show-Response $response $type
+        $responseType=if($type -eq 'antigravity'){'gemini'}else{$type}
+        $result=Show-Response $response $responseType
         if([string]::IsNullOrWhiteSpace($result.Text)){throw 'summary response was empty'}
         $script:SessionSummary=$result.Text.Trim()
         $script:Conversation=New-Object System.Collections.Generic.List[object]
@@ -3530,7 +3913,7 @@ function Write-MarkupText([string]$Text){
 function Show-Response($response,$providerType){
     $tokensIn=0
     $tokensOut=0
-    if($providerType -eq 'gemini'){
+    if($providerType -eq 'gemini' -or $providerType -eq 'antigravity'){
         if($null -ne $response.usageMetadata){
             if($null -ne $response.usageMetadata.promptTokenCount){$tokensIn=[int]$response.usageMetadata.promptTokenCount}
             if($null -ne $response.usageMetadata.candidatesTokenCount){$tokensOut=[int]$response.usageMetadata.candidatesTokenCount}
@@ -3604,7 +3987,7 @@ function Invoke-Provider($text,$parts=$null){
     if($null -ne $parts){$user.parts=@($parts)}
     $messages+=$user
     $type=[string]$provider.type
-    if($type -eq 'gemini'){$payload=Build-GeminiPayload $messages $script:SessionSummary}
+    if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $messages $script:SessionSummary}
     elseif($type -eq 'openai-compatible'){$payload=Build-OpenAICompatiblePayload $provider $messages $script:CurrentModel $script:SessionSummary}
     else{W ('[provider error] unsupported type: '+$type) Red;return $false}
 
@@ -3634,7 +4017,8 @@ function Invoke-Provider($text,$parts=$null){
             }
         }else{
             $response=Send-ProviderPayload $provider $script:CurrentModel $payload
-            $result=Show-Response $response $type
+            $responseType=if($type -eq 'antigravity'){'gemini'}else{$type}
+            $result=Show-Response $response $responseType
         }
 
         if($type -eq 'openai-compatible' -and $script:ShowReasoning -and $result.Reasoning){
@@ -3651,7 +4035,7 @@ function Invoke-Provider($text,$parts=$null){
 
     $script:LastPromptTokens=0
     if($null -ne $result.PromptTokens){$script:LastPromptTokens=[int]$result.PromptTokens}
-    if($type -eq 'gemini' -and
+    if(($type -eq 'gemini' -or $type -eq 'antigravity') -and
        $script:LastPromptTokens -eq 0 -and
        $null -ne $response -and
        $null -ne $response.usageMetadata -and
@@ -3671,7 +4055,7 @@ function Invoke-Provider($text,$parts=$null){
     $script:LastStatusText=$statusFrame+'  '+$elapsedSec+'s      ↑ '+$tokensIn+'  ↓ '+$tokensOut+$bullet
     $script:LastStatusHasBullet=$script:SessionActive
 
-    if($type -eq 'gemini' -or -not $script:StreamResponses){
+    if($type -eq 'gemini' -or $type -eq 'antigravity' -or -not $script:StreamResponses){
         try{
             Write-MarkupText ([string]$result.Text)
         }catch{
@@ -3694,23 +4078,34 @@ function Invoke-Provider($text,$parts=$null){
 
 function Show-ApiKeyStatus(){
     W '' DarkCyan
-    W 'API key status (safe; never prints secrets):' Cyan
-    $names=@('GEMINI_API_KEY','OPENROUTER_API_KEY','GROQ_API_KEY','OPENAI_API_KEY','DEEPSEEK_API_KEY','MISTRAL_API_KEY','TOGETHER_API_KEY','FIREWORKS_API_KEY','XAI_API_KEY','PERPLEXITY_API_KEY')
-    foreach($name in $names){
-        $v=Get-Item ('Env:'+ $name) -ErrorAction SilentlyContinue
-        if($null -eq $v -or [string]::IsNullOrWhiteSpace([string]$v.Value)){
-            W ($name+' = <empty>') DarkGray
-        }else{
-            W ($name+' = <set>') DarkGray
+    W 'Credential status (safe; never prints secrets):' Cyan
+    $names=New-Object System.Collections.Generic.List[string]
+    foreach($providerName in $script:MiraSettings.ApiKeyEnvironmentVariables.Keys){
+        foreach($name in @($script:MiraSettings.ApiKeyEnvironmentVariables[$providerName])){
+            $value=[string]$name
+            if(-not [string]::IsNullOrWhiteSpace($value) -and -not $names.Contains($value)){[void]$names.Add($value)}
         }
     }
+    foreach($name in @(
+        [string]$script:MiraSettings.AntigravityOAuth.ClientIdEnvironmentVariable,
+        [string]$script:MiraSettings.AntigravityOAuth.ClientSecretEnvironmentVariable
+    )){
+        if(-not [string]::IsNullOrWhiteSpace($name) -and -not $names.Contains($name)){[void]$names.Add($name)}
+    }
+    foreach($name in $names){
+        $value=[string][Environment]::GetEnvironmentVariable([string]$name)
+        if([string]::IsNullOrWhiteSpace($value)){W ($name+' = <empty>') DarkGray}
+        else{W ($name+' = <set>') DarkGray}
+    }
+    $tokenPath=Get-MiraAntigravityTokenPath
+    W ('ANTIGRAVITY_OAUTH = '+$(if(Test-Path -LiteralPath $tokenPath){'signed in'}else{'not signed in'})) DarkGray
 }
 
 function Help(){
     W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
     W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
     Show-ApiKeyStatus
-    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <Tab>              refresh only providers with a non-empty API key env' DarkGray; W '  .models test               pre-filter fetched models, probe API, learn successful text models into used.list' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live OpenAI-compatible streaming' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
+    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <Tab>              refresh provider model lists; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
 }
 
 function Add-Message($role,$text,$reasoningDetails=$null,$parts=$null){
@@ -3979,6 +4374,7 @@ function Handle($line){
     if($t -eq '.models test'){Test-CachedModels;return}
     if($t -eq '.models'){Show-Models;return}
     if($t -eq '.providers'){Show-Providers;return}
+    if($t -eq '.auth' -or $t.StartsWith('.auth ')){Invoke-MiraAntigravityAuthCommand (($t.Substring(5)).Trim());return}
     if($t -eq '.ui' -or $t -eq '.ui on' -or $t -eq '.ui off'){
         if(Handle-UiCommand $t){return}
     }
@@ -5810,7 +6206,7 @@ function Write-MarkupText([string]$Text){
 function Show-Response($response,$providerType){
     $tokensIn=0
     $tokensOut=0
-    if($providerType -eq 'gemini'){
+    if($providerType -eq 'gemini' -or $providerType -eq 'antigravity'){
         if($null -ne $response.usageMetadata){
             if($null -ne $response.usageMetadata.promptTokenCount){$tokensIn=[int]$response.usageMetadata.promptTokenCount}
             if($null -ne $response.usageMetadata.candidatesTokenCount){$tokensOut=[int]$response.usageMetadata.candidatesTokenCount}
@@ -5884,7 +6280,7 @@ function Invoke-Provider($text,$parts=$null){
     if($null -ne $parts){$user.parts=@($parts)}
     $messages+=$user
     $type=[string]$provider.type
-    if($type -eq 'gemini'){$payload=Build-GeminiPayload $messages $script:SessionSummary}
+    if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $messages $script:SessionSummary}
     elseif($type -eq 'openai-compatible'){$payload=Build-OpenAICompatiblePayload $provider $messages $script:CurrentModel $script:SessionSummary}
     else{W ('[provider error] unsupported type: '+$type) Red;return $false}
 
@@ -5914,7 +6310,8 @@ function Invoke-Provider($text,$parts=$null){
             }
         }else{
             $response=Send-ProviderPayload $provider $script:CurrentModel $payload
-            $result=Show-Response $response $type
+            $responseType=if($type -eq 'antigravity'){'gemini'}else{$type}
+            $result=Show-Response $response $responseType
         }
 
         if($type -eq 'openai-compatible' -and $script:ShowReasoning -and $result.Reasoning){
@@ -5931,7 +6328,7 @@ function Invoke-Provider($text,$parts=$null){
 
     $script:LastPromptTokens=0
     if($null -ne $result.PromptTokens){$script:LastPromptTokens=[int]$result.PromptTokens}
-    if($type -eq 'gemini' -and
+    if(($type -eq 'gemini' -or $type -eq 'antigravity') -and
        $script:LastPromptTokens -eq 0 -and
        $null -ne $response -and
        $null -ne $response.usageMetadata -and
@@ -5951,7 +6348,7 @@ function Invoke-Provider($text,$parts=$null){
     $script:LastStatusText=$statusFrame+'  '+$elapsedSec+'s      ↑ '+$tokensIn+'  ↓ '+$tokensOut+$bullet
     $script:LastStatusHasBullet=$script:SessionActive
 
-    if($type -eq 'gemini' -or -not $script:StreamResponses){
+    if($type -eq 'gemini' -or $type -eq 'antigravity' -or -not $script:StreamResponses){
         try{
             Write-MarkupText ([string]$result.Text)
         }catch{
@@ -5974,23 +6371,34 @@ function Invoke-Provider($text,$parts=$null){
 
 function Show-ApiKeyStatus(){
     W '' DarkCyan
-    W 'API key status (safe; never prints secrets):' Cyan
-    $names=@('GEMINI_API_KEY','OPENROUTER_API_KEY','GROQ_API_KEY','OPENAI_API_KEY','DEEPSEEK_API_KEY','MISTRAL_API_KEY','TOGETHER_API_KEY','FIREWORKS_API_KEY','XAI_API_KEY','PERPLEXITY_API_KEY')
-    foreach($name in $names){
-        $v=Get-Item ('Env:'+ $name) -ErrorAction SilentlyContinue
-        if($null -eq $v -or [string]::IsNullOrWhiteSpace([string]$v.Value)){
-            W ($name+' = <empty>') DarkGray
-        }else{
-            W ($name+' = <set>') DarkGray
+    W 'Credential status (safe; never prints secrets):' Cyan
+    $names=New-Object System.Collections.Generic.List[string]
+    foreach($providerName in $script:MiraSettings.ApiKeyEnvironmentVariables.Keys){
+        foreach($name in @($script:MiraSettings.ApiKeyEnvironmentVariables[$providerName])){
+            $value=[string]$name
+            if(-not [string]::IsNullOrWhiteSpace($value) -and -not $names.Contains($value)){[void]$names.Add($value)}
         }
     }
+    foreach($name in @(
+        [string]$script:MiraSettings.AntigravityOAuth.ClientIdEnvironmentVariable,
+        [string]$script:MiraSettings.AntigravityOAuth.ClientSecretEnvironmentVariable
+    )){
+        if(-not [string]::IsNullOrWhiteSpace($name) -and -not $names.Contains($name)){[void]$names.Add($name)}
+    }
+    foreach($name in $names){
+        $value=[string][Environment]::GetEnvironmentVariable([string]$name)
+        if([string]::IsNullOrWhiteSpace($value)){W ($name+' = <empty>') DarkGray}
+        else{W ($name+' = <set>') DarkGray}
+    }
+    $tokenPath=Get-MiraAntigravityTokenPath
+    W ('ANTIGRAVITY_OAUTH = '+$(if(Test-Path -LiteralPath $tokenPath){'signed in'}else{'not signed in'})) DarkGray
 }
 
 function Help(){
     W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
     W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
     Show-ApiKeyStatus
-    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <Tab>              refresh only providers with a non-empty API key env' DarkGray; W '  .models test               pre-filter fetched models, probe API, learn successful text models into used.list' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live OpenAI-compatible streaming' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
+    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <Tab>              refresh provider model lists; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
 }
 
 function Add-Message($role,$text,$reasoningDetails=$null,$parts=$null){
@@ -6260,6 +6668,7 @@ function Handle($line){
     if($t -eq '.models test'){Test-CachedModels;return}
     if($t -eq '.models'){Show-Models;return}
     if($t -eq '.providers'){Show-Providers;return}
+    if($t -eq '.auth' -or $t.StartsWith('.auth ')){Invoke-MiraAntigravityAuthCommand (($t.Substring(5)).Trim());return}
     if($t -eq '.ui' -or $t -eq '.ui on' -or $t -eq '.ui off'){
         if(Handle-UiCommand $t){return}
     }
