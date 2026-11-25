@@ -170,9 +170,9 @@ Successful text-chat models are remembered in the local `used.list` cache for fa
 
 ## One-shot and sessions
 
-The normal operating mode is **one-shot**.
+The normal operating mode is **one-shot**. To start every run with a RAM-only conversation session, change `SessionEnabled` near the top of `mira.ps1` to `$true`; leave it `$false` for one-shot requests. This setting is separate from persistent command history (`PersistHistory`).
 
-Every prompt is sent as an independent request unless a session is explicitly enabled.
+Every prompt is sent as an independent request unless a session is enabled.
 
 Start a RAM-only session:
 
