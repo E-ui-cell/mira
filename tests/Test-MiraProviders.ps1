@@ -31,7 +31,9 @@ $functionNames = @(
     'Build-OpenAICompatiblePayload',
     'Refresh-ProviderModelList',
     'New-MiraAntigravityEnvelope',
+    'Get-MiraReasoningOutputPreference',
     'Get-MiraReasoningOutputEnabled',
+    'Get-MiraReasoningOutputMode',
     'Set-MiraReasoningOutputEnabled',
     'Build-GeminiPayload',
     'ConvertFrom-MiraGoogleStreamEvent',
@@ -61,9 +63,13 @@ Assert-MiraTest ($antigravityDefault.Provider -eq 'antigravity' -and $antigravit
 Assert-MiraTest ($source.Contains('$defaultModelSelection=ConvertFrom-MiraModelSpec ([string]$script:MiraSettings.DefaultModel)')) 'startup does not initialize from the combined selector'
 Assert-MiraTest ($script:MiraSettings.UiRendering -eq $false) 'UI rendering must default off'
 Assert-MiraTest ($script:MiraSettings.Streaming -eq $true) 'streaming must default on'
-Assert-MiraTest ($script:MiraSettings.ReasoningOutput['gemini'] -eq $true) 'Google AI Studio thought output must be enabled in provider settings'
-Assert-MiraTest ($script:MiraSettings.ReasoningOutput['antigravity'] -eq $true) 'Antigravity thought output must be enabled in provider settings'
-Assert-MiraTest ($script:MiraSettings.ReasoningOutput['nvidia'] -eq $false) 'NVIDIA reasoning must default off to preserve the answer token budget'
+foreach($providerName in @('gemini','antigravity','openrouter','groq','openai','nvidia','deepseek','mistral','together','fireworks','xai','perplexity')){
+    Assert-MiraTest ($script:MiraSettings.ReasoningOutput.Contains($providerName)) ('ReasoningOutput is missing provider: '+$providerName)
+    Assert-MiraTest ($null -eq $script:MiraSettings.ReasoningOutput[$providerName]) ('ReasoningOutput must follow the endpoint default for '+$providerName)
+}
+Assert-MiraTest ((Get-MiraReasoningOutputPreference 'gemini') -eq $null) 'Gemini reasoning preference must remain unset by default'
+Assert-MiraTest ((Get-MiraReasoningOutputMode 'gemini') -eq 'default') 'unset reasoning preference must report endpoint default'
+Assert-MiraTest ((Get-MiraReasoningOutputEnabled 'gemini') -eq $true) 'endpoint-default thought summaries must be allowed through to the display'
 Assert-MiraTest ($script:MiraSettings.NvidiaReasoningBudget -eq 4096) 'NVIDIA reasoning budget must be independently configurable'
 Assert-MiraTest (-not $source.Contains('ShowReasoning')) 'global ShowReasoning setting must be removed'
 Assert-MiraTest ($script:MiraSettings.SessionEnabled -eq $false) 'RAM session must remain disabled by default'
@@ -80,17 +86,27 @@ Assert-MiraTest ($null -ne $googleStreamAst) 'Google SSE streaming function is m
 $script:Providers = @(New-BuiltinProviders)
 $script:CurrentProviderName = 'gemini'
 $geminiMessages = @([pscustomobject]@{role='user';text='hello';parts=$null})
+$geminiDefaultPayload = Build-GeminiPayload $geminiMessages '' 'gemini'
+Assert-MiraTest ($null -eq $geminiDefaultPayload.generationConfig) 'Gemini endpoint defaults were overridden when preference is null'
+$antigravityDefaultPayload = Build-GeminiPayload $geminiMessages '' 'antigravity'
+Assert-MiraTest ($null -eq $antigravityDefaultPayload.generationConfig) 'Antigravity endpoint defaults were overridden when preference is null'
+Assert-MiraTest ((Set-MiraReasoningOutputEnabled 'gemini' $true) -eq $true) 'Google thought output setting could not be enabled'
 $geminiThoughtPayload = Build-GeminiPayload $geminiMessages '' 'gemini'
-Assert-MiraTest ($geminiThoughtPayload.generationConfig.thinkingConfig.includeThoughts -eq $true) 'Google AI Studio payload did not request thought summaries'
+Assert-MiraTest ($geminiThoughtPayload.generationConfig.thinkingConfig.includeThoughts -eq $true) 'Google AI Studio payload did not request thought summaries when explicitly enabled'
+Assert-MiraTest ((Set-MiraReasoningOutputEnabled 'antigravity' $true) -eq $true) 'Antigravity thought output setting could not be enabled'
 $antigravityThoughtPayload = Build-GeminiPayload $geminiMessages '' 'antigravity'
-Assert-MiraTest ($antigravityThoughtPayload.generationConfig.thinkingConfig.includeThoughts -eq $true) 'Antigravity payload did not request thought summaries'
-Assert-MiraTest ((Set-MiraReasoningOutputEnabled 'gemini' $false) -eq $true) 'Google thought output setting could not be changed'
+Assert-MiraTest ($antigravityThoughtPayload.generationConfig.thinkingConfig.includeThoughts -eq $true) 'Antigravity payload did not request thought summaries when explicitly enabled'
+Assert-MiraTest ((Set-MiraReasoningOutputEnabled 'gemini' $false) -eq $true) 'Google thought output setting could not be disabled'
 $geminiNoThoughtPayload = Build-GeminiPayload $geminiMessages '' 'gemini'
-Assert-MiraTest ($null -eq $geminiNoThoughtPayload.generationConfig) 'disabled Google thought output still requested thought summaries'
-Assert-MiraTest ((Set-MiraReasoningOutputEnabled 'gemini' $true) -eq $true) 'Google thought output setting could not be restored'
+Assert-MiraTest ($geminiNoThoughtPayload.generationConfig.thinkingConfig.includeThoughts -eq $false) 'Google thought output off did not explicitly disable provider thought summaries'
+Assert-MiraTest ((Get-MiraReasoningOutputEnabled 'gemini') -eq $false) 'explicitly disabled thought output was still reported enabled'
+$script:MiraSettings.ReasoningOutput['gemini'] = $null
+$script:MiraSettings.ReasoningOutput['antigravity'] = $null
+Assert-MiraTest ((Get-MiraReasoningOutputMode 'gemini') -eq 'default') 'resetting Gemini preference did not restore endpoint defaults'
 Assert-MiraTest ((Set-MiraReasoningOutputEnabled 'nvidia' $true) -eq $true) 'NVIDIA thought output setting could not be enabled independently'
 Assert-MiraTest ((Get-MiraReasoningOutputEnabled 'gemini') -eq $true) 'changing NVIDIA reasoning unexpectedly changed Gemini reasoning'
 Assert-MiraTest ((Set-MiraReasoningOutputEnabled 'nvidia' $false) -eq $true) 'NVIDIA thought output setting could not be disabled'
+$script:MiraSettings.ReasoningOutput['nvidia'] = $null
 $antigravity = Get-Provider 'antigravity'
 Assert-MiraTest ($null -ne $antigravity) 'Antigravity is missing from the provider registry'
 Assert-MiraTest ($antigravity.type -eq 'antigravity') 'Antigravity has the wrong provider type'
@@ -145,8 +161,13 @@ try{
     Assert-MiraTest ($nvidiaRefresh.KeyName -eq $nvidiaKeyName) 'NVIDIA catalogue refresh lost the selected key name'
     Assert-MiraTest ($script:CapturedNvidiaModels -contains 'nvidia/nemotron-3.5-lightning-30b-a3b') 'NVIDIA catalogue refresh omitted the default chat model'
     $script:StreamResponses = $true
-    $script:MiraSettings.ReasoningOutput['nvidia'] = $false
+    $script:MiraSettings.ReasoningOutput['nvidia'] = $null
     $nvidiaMessages = @([pscustomobject]@{role='user';text='hello';parts=$null;reasoning_details=$null})
+    $nvidiaDefaultPayload = Build-OpenAICompatiblePayload $nvidia $nvidiaMessages 'nvidia/nemotron-3.5-lightning-30b-a3b' ''
+    Assert-MiraTest ($null -eq $nvidiaDefaultPayload.chat_template_kwargs) 'NVIDIA endpoint default thinking setting was overridden when preference is null'
+    Assert-MiraTest ($null -eq $nvidiaDefaultPayload.reasoning_budget) 'NVIDIA reasoning budget was sent while using endpoint defaults'
+    Assert-MiraTest ((Get-MiraReasoningOutputEnabled 'nvidia') -eq $true) 'NVIDIA endpoint-default thought output was not allowed through to the display'
+    $script:MiraSettings.ReasoningOutput['nvidia'] = $false
     $nvidiaDisabledPayload = Build-OpenAICompatiblePayload $nvidia $nvidiaMessages 'nvidia/nemotron-3.5-lightning-30b-a3b' ''
     Assert-MiraTest ($nvidiaDisabledPayload.chat_template_kwargs.enable_thinking -eq $false) 'NVIDIA Nemotron 3.5 thinking was not explicitly disabled when thought output is off'
     Assert-MiraTest ($null -eq $nvidiaDisabledPayload.reasoning_budget) 'NVIDIA reasoning budget was sent while thinking is disabled'
@@ -158,7 +179,7 @@ try{
 }finally{
     [Environment]::SetEnvironmentVariable($nvidiaKeyName,$oldNvidiaKey,[EnvironmentVariableTarget]::Process)
     $script:MiraSettings.ApiKeyEnvironmentVariables['nvidia'] = @('NVIDIA_API_KEY')
-    $script:MiraSettings.ReasoningOutput['nvidia'] = $false
+    $script:MiraSettings.ReasoningOutput['nvidia'] = $null
 }
 
 # The Antigravity adapter must create its own envelope without mutating the
