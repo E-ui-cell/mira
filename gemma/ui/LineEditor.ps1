@@ -105,6 +105,7 @@ function Read-GemLineConsole {
     $completionTop = -1
     $completionVisibleRows = 0
     $completionMenuHeight = 0
+    $pendingKeys = New-Object 'System.Collections.Generic.Queue[object]'
     $completionOldForeground = [Console]::ForegroundColor
     $completionOldBackground = [Console]::BackgroundColor
     function Redraw($old,$new,$pos) {
@@ -194,7 +195,7 @@ function Read-GemLineConsole {
         [Console]::WriteLine()
 
         [Console]::ForegroundColor = [ConsoleColor]::DarkGray
-        $hint = 'Up/Down or j/k move; Enter accept; Esc cancel'
+        $hint = 'Up/Down, j/k or Tab/Shift+Tab move; Enter accept; Esc cancel'
         [Console]::Write($hint.PadRight($clearWidth).Substring(0,$clearWidth))
         [Console]::WriteLine()
 
@@ -234,8 +235,32 @@ function Read-GemLineConsole {
             [Console]::BufferHeight - 1
         ))
     }
+    function Clear-GemCompletionMenu {
+        if ($completionTop -lt 0 -or $completionMenuHeight -le 0) { return }
+        $clearWidth = [Math]::Max(1,[Console]::WindowWidth - 1)
+        $oldForeground = [Console]::ForegroundColor
+        $oldBackground = [Console]::BackgroundColor
+        try {
+            [Console]::ForegroundColor = $completionOldForeground
+            [Console]::BackgroundColor = $completionOldBackground
+            for ($rowIndex = 0; $rowIndex -lt $completionMenuHeight; $rowIndex++) {
+                $targetRow = $completionTop + $rowIndex
+                if ($targetRow -lt 0 -or $targetRow -ge [Console]::BufferHeight) { continue }
+                [Console]::SetCursorPosition(0,$targetRow)
+                [Console]::Write((' ' * $clearWidth))
+            }
+        } finally {
+            [Console]::ForegroundColor = $oldForeground
+            [Console]::BackgroundColor = $oldBackground
+        }
+    }
+
     while ($true) {
-        $k = [Console]::ReadKey($true)
+        if ($pendingKeys.Count -gt 0) {
+            $k = $pendingKeys.Dequeue()
+        } else {
+            $k = [Console]::ReadKey($true)
+        }
 
         if ($completionCandidates.Count -gt 1) {
             if ($k.Key -eq [ConsoleKey]::J -or $k.Key -eq [ConsoleKey]::DownArrow) {
@@ -250,27 +275,40 @@ function Read-GemLineConsole {
                 Redraw $b $b $c
                 continue
             }
+            if ($k.Key -eq [ConsoleKey]::Tab) {
+                $direction = if (($k.Modifiers -band [ConsoleModifiers]::Shift) -ne 0) { -1 } else { 1 }
+                $completionIndex = ($completionIndex + $direction + $completionCandidates.Count) % $completionCandidates.Count
+                Draw-GemCompletionMenu
+                Redraw $b $b $c
+                continue
+            }
             if ($k.Key -eq [ConsoleKey]::Escape) {
+                Clear-GemCompletionMenu
                 $completionCandidates = @()
                 $completionLabels = @()
                 $completionIndex = -1
                 $completionOriginal = ''
                 $completionTop = -1
+                $completionVisibleRows = 0
+                $completionMenuHeight = 0
                 Redraw $b $b $c
                 continue
             }
 
             # Enter accepts the highlighted completion only; a second Enter
-            # submits the input line. Any other key accepts then edits normally.
+            # submits the input line. Other keys accept then edit normally.
             Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
             $old = $b
             $b = [string]$completionCandidates[$completionIndex]
             $c = $b.Length
+            Clear-GemCompletionMenu
             $completionCandidates = @()
             $completionLabels = @()
             $completionIndex = -1
             $completionOriginal = ''
             $completionTop = -1
+            $completionVisibleRows = 0
+            $completionMenuHeight = 0
             Redraw $old $b $c
             if ($k.Key -eq [ConsoleKey]::Enter) { continue }
         }
@@ -926,8 +964,8 @@ function Read-GemLineConsole {
                 $completionOldForeground = [Console]::ForegroundColor
                 $completionOldBackground = [Console]::BackgroundColor
                 Draw-GemCompletionMenu
-                $row = [Math]::Min($completionTop + $completionMenuHeight,[Console]::BufferHeight - 1)
-                $renderedRows = 1
+                # Keep the input prompt on its original row. The completion pane
+                # lives below it and is explicitly cleared when it closes.
                 Redraw $b $b $c
             } else {
                 [Console]::Beep(700,60)
@@ -950,13 +988,12 @@ if (-not [Char]::IsControl($k.KeyChar)) {
     $script:MiraHistoryIndex = -1
     $historySearchTerm = $null
 
-    # Drain a burst of pasted characters before redrawing.
+    # Drain printable paste bursts, but defer control keys to the main loop.
+    # This keeps Tab completion and editing shortcuts from being swallowed.
     while ([Console]::KeyAvailable) {
         $pk = [Console]::ReadKey($true)
 
-        # A multiline paste is delivered as Enter/CR/LF control characters.
-        # Preserve those as text line breaks; Enter typed after the paste burst
-        # is handled by the outer input loop as submit.
+        # Preserve CR/LF delivered as part of a multiline paste.
         if ($pk.Key -eq [ConsoleKey]::Enter -or $pk.KeyChar -eq [char]13 -or $pk.KeyChar -eq [char]10) {
             if ($pk.KeyChar -eq [char]10 -and $b.EndsWith("`n")) { continue }
             if ($b.EndsWith("`r")) { $b = $b.TrimEnd([char]13) }
@@ -965,15 +1002,18 @@ if (-not [Char]::IsControl($k.KeyChar)) {
             continue
         }
 
-        if (-not [Char]::IsControl($pk.KeyChar)) {
-            if ($c -eq $b.Length) {
-                $b += $pk.KeyChar
-            }
-            else {
-                $b = $b.Insert($c,[string]$pk.KeyChar)
-            }
-            ++$c
+        if ([Char]::IsControl($pk.KeyChar)) {
+            [void]$pendingKeys.Enqueue($pk)
+            break
         }
+
+        if ($c -eq $b.Length) {
+            $b += $pk.KeyChar
+        }
+        else {
+            $b = $b.Insert($c,[string]$pk.KeyChar)
+        }
+        ++$c
     }
 
     # One redraw for the whole burst instead of one per character.
