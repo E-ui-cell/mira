@@ -322,7 +322,7 @@ Check state:
 
 ### Streaming and reasoning
 
-OpenAI-compatible streaming is **on by default**. Toggle it with:
+Streaming is **on by default** for Gemini, Antigravity, and OpenAI-compatible providers. Gemini and Antigravity use Google's SSE endpoint; toggle streaming with:
 
 ```text
 .stream on
@@ -409,7 +409,7 @@ Show the raw JSON request:
 | `.copy` | Copy raw last response |
 | `.grab [name.txt]` | Save raw last response |
 | `.ui on/off` | Enable/disable renderer |
-| `.stream on/off` | Toggle OpenAI-compatible streaming |
+| `.stream on/off` | Toggle Gemini, Antigravity, and OpenAI-compatible streaming |
 | `.reasoning on/off` | Toggle reasoning output |
 | `.enable-session [name]` | Start RAM-only session |
 | `.empty session` | Clear active session context |
@@ -511,7 +511,7 @@ No PS7-specific runtime requirement.
 
 ### Functional
 
-The current beta includes the native readline/TUI, built-in providers, API-key based configuration, one-shot requests, RAM-only sessions that can be enabled on demand and exported to a file, session compression, persistent history, model-list caching and refresh, model probing, Markdown rendering, file/text/image input, clipboard screenshots, diffs, output saving/copying, OpenAI-compatible streaming, reasoning display, request inspection and raw-response mode.
+The current beta includes the native readline/TUI, built-in providers, API-key based configuration, one-shot requests, RAM-only sessions that can be enabled on demand and exported to a file, session compression, persistent history, model-list caching and refresh, model probing, Markdown rendering, file/text/image input, clipboard screenshots, diffs, output saving/copying, Google and OpenAI-compatible streaming, reasoning display, request inspection and raw-response mode.
 
 ### Not yet done
 
