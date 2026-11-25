@@ -16,20 +16,20 @@ $script:MiraSettings = [ordered]@{
     UiRendering = $false
     Streaming = $true
 
-    # Display provider-supplied thought summaries. NVIDIA false disables Nemotron 3.5 Lightning thinking.
+    # $null follows the endpoint default; $true forces thought output on; $false forces it off.
     ReasoningOutput = [ordered]@{
-        gemini = $true
-        antigravity = $true
-        openrouter = $false
-        groq = $false
-        openai = $false
-        nvidia = $false
-        deepseek = $false
-        mistral = $false
-        together = $false
-        fireworks = $false
-        xai = $false
-        perplexity = $false
+        gemini = $null
+        antigravity = $null
+        openrouter = $null
+        groq = $null
+        openai = $null
+        nvidia = $null
+        deepseek = $null
+        mistral = $null
+        together = $null
+        fireworks = $null
+        xai = $null
+        perplexity = $null
     }
     NvidiaReasoningBudget = 4096
 
@@ -164,14 +164,31 @@ $script:CliArgsNotImplemented = @('-m, --model <name>','-h, --help','--')
 $script:UiRenderEnabled = [bool]$script:MiraSettings.UiRendering
 $script:CompressThreshold = if($env:MIRA_COMPRESS_THRESHOLD){[int]$env:MIRA_COMPRESS_THRESHOLD}else{[int]$script:MiraSettings.CompressThreshold}
 $script:StreamResponses = [bool]$script:MiraSettings.Streaming
-function Get-MiraReasoningOutputEnabled {
+function Get-MiraReasoningOutputPreference {
     param([string]$ProviderName = '')
     if([string]::IsNullOrWhiteSpace($ProviderName)){$ProviderName=[string]$script:CurrentProviderName}
     $map=$script:MiraSettings.ReasoningOutput
-    if($null -eq $map -or -not ($map -is [System.Collections.IDictionary])){return $false}
+    if($null -eq $map -or -not ($map -is [System.Collections.IDictionary])){return $null}
     $key=$ProviderName.Trim().ToLowerInvariant()
-    if($map.Contains($key)){return [bool]$map[$key]}
-    return $false
+    if(-not $map.Contains($key)){return $null}
+    $value=$map[$key]
+    if($null -eq $value){return $null}
+    return [bool]$value
+}
+
+function Get-MiraReasoningOutputEnabled {
+    param([string]$ProviderName = '')
+    $preference=Get-MiraReasoningOutputPreference $ProviderName
+    # $null means follow the endpoint default and display any thought output it returns.
+    return ($null -eq $preference -or [bool]$preference)
+}
+
+function Get-MiraReasoningOutputMode {
+    param([string]$ProviderName = '')
+    $preference=Get-MiraReasoningOutputPreference $ProviderName
+    if($null -eq $preference){return 'default'}
+    if([bool]$preference){return 'on'}
+    return 'off'
 }
 
 function Set-MiraReasoningOutputEnabled {
@@ -2109,9 +2126,10 @@ function Build-GeminiPayload($messages,$summary,[string]$providerName='gemini'){
     if(-not [string]::IsNullOrWhiteSpace($summary)){
         $payload.systemInstruction=[ordered]@{parts=@([ordered]@{text=$summary})}
     }
-    if(Get-MiraReasoningOutputEnabled $providerName){
+    $reasoningOutput=Get-MiraReasoningOutputPreference $providerName
+    if($null -ne $reasoningOutput){
         $payload.generationConfig=[ordered]@{
-            thinkingConfig=[ordered]@{includeThoughts=$true}
+            thinkingConfig=[ordered]@{includeThoughts=[bool]$reasoningOutput}
         }
     }
     return $payload
@@ -2144,15 +2162,16 @@ function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary){
         $msg += $entry
     }
     $payload=[ordered]@{model=$model;messages=$msg;stream=$script:StreamResponses}
-    $reasoningOutput=Get-MiraReasoningOutputEnabled ([string]$provider.name)
+    $reasoningOutput=Get-MiraReasoningOutputPreference ([string]$provider.name)
     if(([string]$provider.name -ieq 'nvidia') -and ([string]$model -ieq 'nvidia/nemotron-3.5-lightning-30b-a3b')){
-        # Nemotron 3.5 Lightning reasons by default. Explicitly disable thinking
-        # when hidden so reasoning tokens do not consume the visible answer budget.
-        $payload.chat_template_kwargs=[ordered]@{enable_thinking=[bool]$reasoningOutput}
-        if($reasoningOutput){
-            $payload.reasoning_budget=[int]$script:MiraSettings.NvidiaReasoningBudget
+        # $null leaves Nemotron's endpoint default untouched. Explicit values override it.
+        if($null -ne $reasoningOutput){
+            $payload.chat_template_kwargs=[ordered]@{enable_thinking=[bool]$reasoningOutput}
+            if([bool]$reasoningOutput){
+                $payload.reasoning_budget=[int]$script:MiraSettings.NvidiaReasoningBudget
+            }
         }
-    }elseif($reasoningOutput -and [string]$provider.name -ine 'nvidia'){
+    }elseif($null -ne $reasoningOutput -and [bool]$reasoningOutput -and [string]$provider.name -ine 'nvidia'){
         $payload.reasoning=[ordered]@{enabled=$true}
     }
     return $payload
@@ -4850,7 +4869,8 @@ function Handle($line){
     if($t -in @('.stream on','.stream off')){$script:StreamResponses=($t -eq '.stream on');W ('[stream '+$(if($script:StreamResponses){'on'}else{'off'})+']') Cyan;return}
     if($t -eq '.reasoning'){
         $providerName=[string]$script:CurrentProviderName
-        $state=if(Get-MiraReasoningOutputEnabled $providerName){'on'}else{'off'}
+        $state=Get-MiraReasoningOutputMode $providerName
+        if($state -eq 'default'){$state='default (endpoint)'}
         W ('[reasoning output: '+$providerName+' '+$state+']') Cyan
         return
     }
@@ -5557,7 +5577,7 @@ W 'MIRA-TUI / SLIM PROVIDERS' Cyan
 W ('Own readline • no PSReadLine • Tab • history • multiline • attachments • model: ' + $script:CurrentProviderName + ':' + $script:CurrentModel) DarkGray
 W ('Session: ' + $(if($script:SessionActive){'ON (RAM only)'}else{'off (one-shot requests)'}) + ' • .enable-session / .delete session • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
 W ('History persistence: ' + $(if($script:PersistHistory){$script:HistoryFile}else{'OFF (RAM only)'}) + ' • loaded last ' + $script:HistoryLoadLimit + ' entries • .history persist on/off') DarkGray
-W ('Streaming (Gemini/Antigravity/OpenAI-compatible): ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning output: ' + $script:CurrentProviderName + '=' + $(if(Get-MiraReasoningOutputEnabled $script:CurrentProviderName){'on'}else{'off'}) + ' • .reasoning on/off') DarkGray
+W ('Streaming (Gemini/Antigravity/OpenAI-compatible): ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning output: ' + $script:CurrentProviderName + '=' + $(Get-MiraReasoningOutputMode $script:CurrentProviderName) + ' • .reasoning on/off') DarkGray
 W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
 W ('Used models: ' + $script:UsedModelsCacheFile + ' • learned from successful text replies/probes') DarkGray
 W ''
@@ -7193,7 +7213,8 @@ function Handle($line){
     if($t -in @('.stream on','.stream off')){$script:StreamResponses=($t -eq '.stream on');W ('[stream '+$(if($script:StreamResponses){'on'}else{'off'})+']') Cyan;return}
     if($t -eq '.reasoning'){
         $providerName=[string]$script:CurrentProviderName
-        $state=if(Get-MiraReasoningOutputEnabled $providerName){'on'}else{'off'}
+        $state=Get-MiraReasoningOutputMode $providerName
+        if($state -eq 'default'){$state='default (endpoint)'}
         W ('[reasoning output: '+$providerName+' '+$state+']') Cyan
         return
     }
@@ -7836,7 +7857,7 @@ W 'MIRA-TUI / SLIM PROVIDERS' Cyan
 W ('Own readline • no PSReadLine • Tab • history • multiline • attachments • model: ' + $script:CurrentProviderName + ':' + $script:CurrentModel) DarkGray
 W ('Session: ' + $(if($script:SessionActive){'ON (RAM only)'}else{'off (one-shot requests)'}) + ' • .enable-session / .delete session • .export-session saves active context • compress threshold: ' + $script:CompressThreshold) DarkGray
 W ('History persistence: ' + $(if($script:PersistHistory){$script:HistoryFile}else{'OFF (RAM only)'}) + ' • loaded last ' + $script:HistoryLoadLimit + ' entries • .history persist on/off') DarkGray
-W ('Streaming (Gemini/Antigravity/OpenAI-compatible): ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning output: ' + $script:CurrentProviderName + '=' + $(if(Get-MiraReasoningOutputEnabled $script:CurrentProviderName){'on'}else{'off'}) + ' • .reasoning on/off') DarkGray
+W ('Streaming (Gemini/Antigravity/OpenAI-compatible): ' + $(if($script:StreamResponses){'on'}else{'off'}) + ' • reasoning output: ' + $script:CurrentProviderName + '=' + $(Get-MiraReasoningOutputMode $script:CurrentProviderName) + ' • .reasoning on/off') DarkGray
 W ('Model cache: ' + $script:ModelCacheRoot + ' • refresh only with .models <Tab> • verify with .models test') DarkGray
 W ('Used models: ' + $script:UsedModelsCacheFile + ' • learned from successful text replies/probes') DarkGray
 W ''
