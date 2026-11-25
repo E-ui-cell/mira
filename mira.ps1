@@ -9,9 +9,9 @@
 # Antigravity uses OAuth, not an API key.
 # -----------------------------------------------------------------------------
 $script:MiraSettings = [ordered]@{
-    DefaultProvider = 'gemini'
-    DefaultModel = 'gemini-flash-lite-latest'
-    DefaultModelEnvironmentVariable = 'GEMINI_MODEL'
+    # aichat-style selector: provider:model
+    # Alternative: 'antigravity:gemini-3.1-flash-lite'
+    DefaultModel = 'gemini:gemini-3.5-flash-lite'
 
     UiRendering = $false
     Streaming = $true
@@ -95,6 +95,21 @@ function Get-MiraCliArgs {
     return $a
 }
 
+function ConvertFrom-MiraModelSpec {
+    param([Parameter(Mandatory=$true)][string]$Spec)
+    $value=$Spec.Trim()
+    $separator=$value.IndexOf(':')
+    if($separator -le 0 -or $separator -ge ($value.Length-1)){
+        throw "Invalid model selector '$Spec'. Use provider:model, for example gemini:gemini-3.5-flash-lite."
+    }
+    $provider=$value.Substring(0,$separator).Trim().ToLowerInvariant()
+    $model=$value.Substring($separator+1).Trim()
+    if([string]::IsNullOrWhiteSpace($provider) -or [string]::IsNullOrWhiteSpace($model)){
+        throw "Invalid model selector '$Spec'. Use provider:model."
+    }
+    return [pscustomobject]@{Provider=$provider;Model=$model}
+}
+
 $cliArgs=Get-MiraCliArgs $args
 $script:MiraVersion = '0.1.0-beta.3'
 $script:MiraBuild = 'b90879230'
@@ -128,10 +143,9 @@ $script:LastRequest = ''
 $script:ResponseAnchorRow = -1
 $script:Conversation = New-Object System.Collections.Generic.List[object]
 $script:Providers = @()
-$script:CurrentProviderName = [string]$script:MiraSettings.DefaultProvider
-$defaultModelEnvName = [string]$script:MiraSettings.DefaultModelEnvironmentVariable
-$defaultModelEnvValue = if(-not [string]::IsNullOrWhiteSpace($defaultModelEnvName)){[Environment]::GetEnvironmentVariable($defaultModelEnvName)}else{$null}
-$script:CurrentModel = if(-not [string]::IsNullOrWhiteSpace([string]$defaultModelEnvValue)){[string]$defaultModelEnvValue}else{[string]$script:MiraSettings.DefaultModel}
+$defaultModelSelection=ConvertFrom-MiraModelSpec ([string]$script:MiraSettings.DefaultModel)
+$script:CurrentProviderName=[string]$defaultModelSelection.Provider
+$script:CurrentModel=[string]$defaultModelSelection.Model
 $script:MiraAntigravityProject = $null
 $script:SessionActive = [bool]$script:MiraSettings.SessionEnabled
 $script:SessionName = if($script:SessionActive){'temp'}else{''}
