@@ -1159,7 +1159,6 @@ function Get-MiraAntigravityHeaders {
     $settings = $script:MiraSettings.AntigravityOAuth
     return @{
         Authorization = 'Bearer ' + $AccessToken
-        'User-Agent' = [string]$settings.UserAgent
         'X-Goog-Api-Client' = [string]$settings.ApiClient
         'Client-Metadata' = [string]$settings.ClientMetadata
     }
@@ -1169,7 +1168,7 @@ function Invoke-MiraAntigravityPost {
     param([string]$Method,[hashtable]$Body,[string]$AccessToken)
     $url = ([string]$script:MiraSettings.AntigravityOAuth.ApiBase).TrimEnd('/') + ':' + $Method
     $headers = Get-MiraAntigravityHeaders -AccessToken $AccessToken
-    return Invoke-RestMethod -Uri $url -Method Post -Headers $headers -ContentType 'application/json' -Body ($Body | ConvertTo-Json -Depth 30) -ErrorAction Stop
+    return Invoke-RestMethod -Uri $url -Method Post -Headers $headers -UserAgent ([string]$script:MiraSettings.AntigravityOAuth.UserAgent) -ContentType 'application/json' -Body ($Body | ConvertTo-Json -Depth 30) -ErrorAction Stop
 }
 
 function Get-MiraAntigravityProject {
@@ -2324,6 +2323,7 @@ function Send-ProviderPayload($provider,$model,$payload){
     $json=$requestBody | ConvertTo-Json -Depth 40
     $bytes=[Text.Encoding]::UTF8.GetBytes($json)
     $params=@{Uri=$url;Method='Post';ContentType='application/json';Body=$bytes;TimeoutSec=120;ErrorAction='Stop'}
+    if($type -eq 'antigravity'){$params.UserAgent=[string]$script:MiraSettings.AntigravityOAuth.UserAgent}
     if($headers.Count -gt 0){$params.Headers=$headers}
 
     $oldTreatControlCAsInput=$null;$runspace=$null;$powershell=$null;$asyncResult=$null;$cancelled=$false
