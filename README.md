@@ -347,11 +347,30 @@ Disable it with:
 .stream off
 ```
 
-Provider reasoning output can be toggled with:
+Thought-summary output is configured independently for each provider in the settings block near the top of `mira.ps1`:
+
+```powershell
+ReasoningOutput = [ordered]@{
+    gemini     = $true
+    antigravity = $true
+    nvidia     = $false
+    # Other providers can be enabled individually.
+}
+NvidiaReasoningBudget = 4096
+```
+
+Gemini and Antigravity request provider-supplied thought summaries. A model may still return no summary, even when enabled. This displays summaries, not the model's private full reasoning trace.
+
+Nemotron 3.5 Lightning has thinking enabled by default. When NVIDIA thought output is off, MIRA explicitly sends `enable_thinking=false` so internal reasoning does not consume the visible answer-token budget. When enabled, `NvidiaReasoningBudget` limits its reasoning budget.
+
+Runtime controls affect only the selected provider:
 
 ```text
+.reasoning
 .reasoning on
 .reasoning off
+.reasoning nvidia on
+.reasoning antigravity off
 ```
 
 ### History
@@ -423,7 +442,8 @@ Show the raw JSON request:
 | `.grab [name.txt]` | Save raw last response |
 | `.ui on/off` | Enable/disable renderer |
 | `.stream on/off` | Toggle Gemini, Antigravity, NVIDIA NIM, and other OpenAI-compatible streaming |
-| `.reasoning on/off` | Toggle reasoning output |
+| `.reasoning on/off` | Toggle thought output for the current provider |
+| `.reasoning <provider> on/off` | Set thought output for one provider |
 | `.enable-session [name]` | Start RAM-only session |
 | `.empty session` | Clear active session context |
 | `.export-session [name]` | Export active session to a file |
