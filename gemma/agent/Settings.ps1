@@ -40,7 +40,9 @@ function Invoke-GemmaEffortCommand {
     param([string]$Argument = '')
     $value = $Argument.Trim().ToLowerInvariant()
     if (-not $value) {
-        Write-Host "[Effort: $script:Effort]" -ForegroundColor Cyan
+        $activeEffort = Get-GemmaEffortStatusText -Provider $script:Provider -Model $script:MODEL
+        Write-Host "[Shared effort: $script:Effort]" -ForegroundColor Cyan
+        Write-Host "[Active request: $activeEffort]" -ForegroundColor DarkGray
         Write-Host 'Usage: .effort low | .effort medium | .effort high' -ForegroundColor DarkGray
         return
     }
@@ -49,8 +51,8 @@ function Invoke-GemmaEffortCommand {
         return
     }
     $script:Effort = $value
-    $effectiveEffort = Get-GemmaRequestEffort -Provider $script:Provider
-    Write-Host "[Shared effort set to: $script:Effort | active request effort: $effectiveEffort]" -ForegroundColor Green
+    $activeEffort = Get-GemmaEffortStatusText -Provider $script:Provider -Model $script:MODEL
+    Write-Host "[Shared effort set to: $script:Effort | active request: $activeEffort]" -ForegroundColor Green
 }
 
 function Invoke-GemmaSystemPromptCommand {

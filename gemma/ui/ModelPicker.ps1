@@ -407,8 +407,8 @@ function Set-GemmaActiveModel {
         'gemini' { 'Google AI Studio API' }
     }
     Write-Host (([Environment]::NewLine) + '[Provider: ' + $providerLabel + ' | Model: ' + $script:MODEL + ']') -ForegroundColor Green
-    $effectiveEffort = Get-GemmaRequestEffort -Provider $Provider
-    Write-Host "[Reasoning effort: $effectiveEffort (provider override or shared .effort setting).]" -ForegroundColor DarkGray
+    $effortStatus = Get-GemmaEffortStatusText -Provider $Provider -Model $Model
+    Write-Host "[Reasoning effort: $effortStatus]" -ForegroundColor DarkGray
     return $true
 }
 

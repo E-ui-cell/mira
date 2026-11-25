@@ -1,31 +1,86 @@
-function Get-GemmaEffectiveEffort {
-    param([ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider)
+function Get-GemmaEffortResolution {
+    param(
+        [ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider,
+        [string]$Model = $script:MODEL
+    )
 
-    $override = switch ($Provider) {
+    # Resolution order: shared .effort -> provider override -> model override.
+    # A configured, more-specific override always takes precedence.
+    $value = [string]$script:Effort
+    $source = 'shared setting'
+    $providerOverride = switch ($Provider) {
         'openai' { $MIRA_OPENAI_EFFORT }
         'gemini' { $MIRA_GEMINI_EFFORT }
         'antigravity' { $MIRA_ANTIGRAVITY_EFFORT }
     }
-    $value = if ([string]::IsNullOrWhiteSpace([string]$override)) { [string]$script:Effort } else { [string]$override }
-    $value = $value.Trim().ToLowerInvariant()
+    if (-not [string]::IsNullOrWhiteSpace([string]$providerOverride)) {
+        $value = [string]$providerOverride
+        $source = "$Provider override"
+    }
 
-    $allowed = if ($Provider -eq 'openai') { @('none','minimal','low','medium','high','xhigh','max') } else { @('low','medium','high') }
+    if ($Provider -eq 'openai' -and $Model -ieq 'gpt-6-luna' -and
+        -not [string]::IsNullOrWhiteSpace([string]$MIRA_OPENAI_LUNA_EFFORT)) {
+        $value = [string]$MIRA_OPENAI_LUNA_EFFORT
+        $source = 'gpt-6-luna model override'
+    }
+
+    $value = $value.Trim().ToLowerInvariant()
+    $allowed = if ($Provider -eq 'openai') {
+        @('none','minimal','low','medium','high','xhigh','max')
+    } else {
+        @('low','medium','high')
+    }
     if ($value -notin $allowed) {
         throw "Invalid $Provider reasoning effort '$value'. Allowed values: $($allowed -join ', ')."
     }
-    return $value
+
+    $parameter = $null
+    if ($Provider -eq 'openai') {
+        $parameter = if ($Model -ieq 'gpt-6-luna') { 'reasoning.effort' } else { 'reasoning_effort' }
+    } elseif ($Model -match '(?i)gemini[-.]?3') {
+        $parameter = 'generationConfig.thinkingConfig.thinkingLevel'
+    } elseif ($Model -match '(?i)gemini[-.]?2.5') {
+        $parameter = 'generationConfig.thinkingConfig.thinkingBudget'
+    }
+
+    return [pscustomobject]@{
+        Provider = $Provider
+        Model = $Model
+        Effort = $value
+        Source = $source
+        Parameter = $parameter
+        Supported = (-not [string]::IsNullOrWhiteSpace([string]$parameter))
+    }
+}
+
+function Get-GemmaEffectiveEffort {
+    param(
+        [ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider,
+        [string]$Model = $script:MODEL
+    )
+    return (Get-GemmaEffortResolution -Provider $Provider -Model $Model).Effort
 }
 
 function Get-GemmaRequestEffort {
-    param([ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider)
+    param(
+        [ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider,
+        [string]$Model = $script:MODEL
+    )
+    # Keep the reported value identical to the value serialized into the request.
+    # Luna uses the Responses API, where reasoning effort and function tools coexist.
+    return (Get-GemmaEffortResolution -Provider $Provider -Model $Model).Effort
+}
 
-    $value = Get-GemmaEffectiveEffort -Provider $Provider
-    # GPT-6 Luna Chat Completions can use function calling only at effort=none.
-    # Use Responses API to remove this restriction while retaining tools.
-    if ($Provider -eq 'openai' -and @(ConvertTo-GemmaOpenAITools -GeminiTools $GeminiTools).Count -gt 0) {
-        return 'none'
+function Get-GemmaEffortStatusText {
+    param(
+        [ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider,
+        [string]$Model = $script:MODEL
+    )
+    $resolution = Get-GemmaEffortResolution -Provider $Provider -Model $Model
+    if (-not $resolution.Supported) {
+        return 'model default (this model exposes no reasoning-effort control)'
     }
-    return $value
+    return ('{0} ({1})' -f $resolution.Effort,$resolution.Source)
 }
 
 function Build-GeminiPayload {
@@ -70,21 +125,30 @@ function Build-GeminiPayload {
         $payload.generationConfig = $GeminiGenerationConfig
     }
 
-    # Resolve the provider override first, then the live .effort setting.
     # This payload is shared by Gemini Developer API and Antigravity OAuth.
     $effortProvider = if ($script:Provider -eq 'antigravity') { 'antigravity' } else { 'gemini' }
-    $effectiveEffort = Get-GemmaEffectiveEffort -Provider $effortProvider
-    if ($script:MODEL -match '(?i)gemini[-.]?3') {
+    $effortResolution = Get-GemmaEffortResolution -Provider $effortProvider -Model $script:MODEL
+    if ($effortResolution.Supported) {
         if ($null -eq $payload.generationConfig) { $payload.generationConfig = @{} }
-        $payload.generationConfig.thinkingConfig = @{ thinkingLevel = $effectiveEffort.ToUpperInvariant(); includeThoughts = [bool]$script:VerboseOutput }
-    } elseif ($script:MODEL -match '(?i)gemini[-.]?2.5') {
-        if ($null -eq $payload.generationConfig) { $payload.generationConfig = @{} }
-        $thinkingBudget = switch ($effectiveEffort) {
-            'low' { 1024 }
-            'medium' { 8192 }
-            'high' { 24576 }
+        switch ($effortResolution.Parameter) {
+            'generationConfig.thinkingConfig.thinkingLevel' {
+                $payload.generationConfig.thinkingConfig = @{
+                    thinkingLevel = $effortResolution.Effort.ToUpperInvariant()
+                    includeThoughts = [bool]$script:VerboseOutput
+                }
+            }
+            'generationConfig.thinkingConfig.thinkingBudget' {
+                $thinkingBudget = switch ($effortResolution.Effort) {
+                    'low' { 1024 }
+                    'medium' { 8192 }
+                    'high' { 24576 }
+                }
+                $payload.generationConfig.thinkingConfig = @{
+                    thinkingBudget = $thinkingBudget
+                    includeThoughts = [bool]$script:VerboseOutput
+                }
+            }
         }
-        $payload.generationConfig.thinkingConfig = @{ thinkingBudget = $thinkingBudget; includeThoughts = [bool]$script:VerboseOutput }
     }
 
     if (-not [string]::IsNullOrWhiteSpace($GeminiCachedContent)) {
