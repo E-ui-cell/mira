@@ -27,6 +27,8 @@ $functionNames = @(
     'Get-ProviderKeyEnvironmentNames',
     'Get-ProviderKey',
     'Get-ProviderRefreshKey',
+    'Build-OpenAICompatiblePayload',
+    'Refresh-ProviderModelList',
     'New-MiraAntigravityEnvelope',
     'ConvertFrom-MiraGoogleStreamEvent',
     'Get-MiraAntigravityModels',
@@ -48,6 +50,7 @@ Assert-MiraTest ($script:MiraSettings.DefaultProvider -eq 'gemini') 'default pro
 Assert-MiraTest ($script:MiraSettings.DefaultModel -eq 'gemini-flash-lite-latest') 'default model changed unexpectedly'
 Assert-MiraTest ($script:MiraSettings.UiRendering -eq $false) 'UI rendering must default off'
 Assert-MiraTest ($script:MiraSettings.Streaming -eq $true) 'streaming must default on'
+Assert-MiraTest (@($script:MiraSettings.ApiKeyEnvironmentVariables['nvidia']).Count -eq 1 -and $script:MiraSettings.ApiKeyEnvironmentVariables['nvidia'][0] -eq 'NVIDIA_API_KEY') 'NVIDIA_API_KEY must be editable in the settings block'
 $configText = $source.Substring($configStart,$configEnd-$configStart)
 foreach($match in [regex]::Matches($source,"'[A-Z0-9_]+_API_KEY'")){
     Assert-MiraTest ($configText.Contains($match.Value)) ('API-key environment name is hardcoded outside the settings block: '+$match.Value)
@@ -60,6 +63,12 @@ $antigravity = Get-Provider 'antigravity'
 Assert-MiraTest ($null -ne $antigravity) 'Antigravity is missing from the provider registry'
 Assert-MiraTest ($antigravity.type -eq 'antigravity') 'Antigravity has the wrong provider type'
 Assert-MiraTest (@($antigravity.api_key_envs).Count -eq 0) 'Antigravity must not be configured as an API-key provider'
+$nvidia = Get-Provider 'nvidia'
+Assert-MiraTest ($null -ne $nvidia) 'NVIDIA NIM is missing from the provider registry'
+Assert-MiraTest ($nvidia.type -eq 'openai-compatible') 'NVIDIA NIM must use the OpenAI-compatible transport'
+Assert-MiraTest ($nvidia.api_base -eq 'https://integrate.api.nvidia.com/v1') 'NVIDIA NIM API base URL is incorrect'
+Assert-MiraTest ($nvidia.models[0].name -eq 'nvidia/nemotron-3.5-lightning-30b-a3b') 'NVIDIA default model is not the documented Nemotron 3.5 Lightning model'
+Assert-MiraTest (@($nvidia.api_key_envs).Count -eq 1 -and $nvidia.api_key_envs[0] -eq 'NVIDIA_API_KEY') 'NVIDIA provider key lookup is not wired to NVIDIA_API_KEY'
 
 # Verify that multiple environment-variable names are tried in configured order.
 $primaryName = 'MIRA_TEST_OPENAI_KEY_PRIMARY'
@@ -80,6 +89,39 @@ try{
 }finally{
     [Environment]::SetEnvironmentVariable($primaryName,$oldPrimary,[EnvironmentVariableTarget]::Process)
     [Environment]::SetEnvironmentVariable($secondaryName,$oldSecondary,[EnvironmentVariableTarget]::Process)
+}
+
+# NVIDIA uses the same editable key-name list as other providers. Its hosted
+# catalog has no shared /v1/models route, so refresh uses the documented model list.
+$nvidiaKeyName = 'MIRA_TEST_NVIDIA_KEY'
+$oldNvidiaKey = [Environment]::GetEnvironmentVariable($nvidiaKeyName,[EnvironmentVariableTarget]::Process)
+try{
+    $script:MiraSettings.ApiKeyEnvironmentVariables['nvidia'] = @($nvidiaKeyName)
+    $script:Providers = @(New-BuiltinProviders)
+    [Environment]::SetEnvironmentVariable($nvidiaKeyName,'nvidia-test-value',[EnvironmentVariableTarget]::Process)
+    $nvidia = Get-Provider 'nvidia'
+    Assert-MiraTest ((Get-ProviderKey $nvidia) -eq 'nvidia-test-value') 'NVIDIA provider did not read its configured API-key variable'
+    $nvidiaRefreshKey = Get-ProviderRefreshKey $nvidia
+    Assert-MiraTest ($nvidiaRefreshKey.Name -eq $nvidiaKeyName) 'NVIDIA model refresh did not report the selected key variable'
+    $script:CapturedNvidiaModels = @()
+    function Write-ProviderModelCache($provider,[string[]]$models){
+        $script:CapturedNvidiaModels = @($models)
+        return 'nvidia.list'
+    }
+    $nvidiaRefresh = Refresh-ProviderModelList $nvidia
+    Assert-MiraTest ($nvidiaRefresh.Count -eq @($nvidia.models).Count) 'NVIDIA catalogue refresh returned the wrong model count'
+    Assert-MiraTest ($nvidiaRefresh.KeyName -eq $nvidiaKeyName) 'NVIDIA catalogue refresh lost the selected key name'
+    Assert-MiraTest ($script:CapturedNvidiaModels -contains 'nvidia/nemotron-3.5-lightning-30b-a3b') 'NVIDIA catalogue refresh omitted the default chat model'
+    $script:StreamResponses = $true
+    $script:ShowReasoning = $true
+    $nvidiaMessages = @([pscustomobject]@{role='user';text='hello';parts=$null;reasoning_details=$null})
+    $nvidiaPayload = Build-OpenAICompatiblePayload $nvidia $nvidiaMessages 'nvidia/nemotron-3.5-lightning-30b-a3b' ''
+    Assert-MiraTest ($nvidiaPayload.chat_template_kwargs.enable_thinking -eq $true) 'NVIDIA Nemotron 3.5 reasoning control was not mapped to chat_template_kwargs'
+    Assert-MiraTest ($nvidiaPayload.reasoning_budget -eq 16384) 'NVIDIA Nemotron 3.5 reasoning budget was not configured'
+    Assert-MiraTest ($null -eq $nvidiaPayload.reasoning) 'Generic reasoning.enabled leaked into the NVIDIA request'
+}finally{
+    [Environment]::SetEnvironmentVariable($nvidiaKeyName,$oldNvidiaKey,[EnvironmentVariableTarget]::Process)
+    $script:MiraSettings.ApiKeyEnvironmentVariables['nvidia'] = @('NVIDIA_API_KEY')
 }
 
 # The Antigravity adapter must create its own envelope without mutating the
@@ -108,6 +150,18 @@ $event = ConvertFrom-MiraGoogleStreamEvent -EventJson $eventJson
 Assert-MiraTest ($event.Text -eq 'Hello world') 'Google SSE parser did not assemble text parts or filtered thought text incorrectly'
 Assert-MiraTest ($event.FinishReason -eq 'STOP') 'Google SSE parser did not read finishReason'
 Assert-MiraTest ($event.PromptTokens -eq 11 -and $event.CompletionTokens -eq 2) 'Google SSE parser did not read usage metadata'
+$nvidiaResponse = [pscustomobject]@{
+    usage = [pscustomobject]@{prompt_tokens=5;completion_tokens=9}
+    choices = @([pscustomobject]@{
+        message = [pscustomobject]@{content='NVIDIA answer';reasoning_content='NVIDIA reasoning'}
+        finish_reason = 'stop'
+    })
+}
+$nvidiaParsed = Show-Response $nvidiaResponse 'openai-compatible'
+Assert-MiraTest ($nvidiaParsed.Text -eq 'NVIDIA answer') 'NVIDIA-compatible response text was not parsed'
+Assert-MiraTest ($nvidiaParsed.Reasoning -eq 'NVIDIA reasoning') 'NVIDIA reasoning_content was not parsed'
+Assert-MiraTest ($nvidiaParsed.PromptTokens -eq 5 -and $nvidiaParsed.CompletionTokens -eq 9) 'NVIDIA token usage was not parsed'
+Assert-MiraTest ($source.Contains('$delta.reasoning_content')) 'NVIDIA streaming reasoning_content parser is missing'
 
 # Stub the three network/auth dependencies to test account model-catalog parsing
 # without contacting Google or requiring user credentials.
@@ -139,4 +193,4 @@ $parsed = Show-Response $geminiResponse 'antigravity'
 Assert-MiraTest ($parsed.Text -eq 'Antigravity reply') 'Antigravity Gemini-compatible response text was not parsed'
 Assert-MiraTest ($parsed.PromptTokens -eq 7 -and $parsed.CompletionTokens -eq 3) 'Antigravity usage metadata was not parsed'
 
-Write-Host 'MIRA provider configuration and Antigravity adapter tests passed.' -ForegroundColor Green
+Write-Host 'MIRA provider configuration, Antigravity adapter, and NVIDIA NIM tests passed.' -ForegroundColor Green
