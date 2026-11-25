@@ -2211,7 +2211,7 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
             $fullResponse=$body|ConvertFrom-Json -ErrorAction Stop
             $r=Show-Response $fullResponse 'openai-compatible'
             Stop-MiraRequestUi ([int]$r.PromptTokens) ([int]$r.CompletionTokens)
-            return [pscustomobject]@{Text=[string]$r.Text;Reasoning=[string]$r.Reasoning;ReasoningDetails=@($r.ReasoningDetails);Display=[string]$r.Display;FinishReason=[string]$r.FinishReason;PromptTokens=[int]$r.PromptTokens;CompletionTokens=[int]$r.CompletionTokens;ReasoningTokens=0}
+            return [pscustomobject]@{Text=[string]$r.Text;Reasoning=[string]$r.Reasoning;ReasoningDetails=@($r.ReasoningDetails);Display=[string]$r.Display;FinishReason=[string]$r.FinishReason;PromptTokens=[int]$r.PromptTokens;CompletionTokens=[int]$r.CompletionTokens;ReasoningTokens=0;Streamed=$false}
         }
 
         try{$responseStream.ReadTimeout=500}catch{}
@@ -2322,7 +2322,7 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
             $script:RequestUiActive=$false;$script:RequestUiLineOpen=$false
         }else{Stop-MiraRequestUi $tokensIn $tokensOut}
         if([string]::IsNullOrWhiteSpace($finish)){$finish='stop'}
-        return [pscustomobject]@{Text=[string]$answer.ToString();Reasoning=[string]$reasoning.ToString();ReasoningDetails=$reasoningDetails.ToArray();Display='[Tokens: '+$tokensIn+' in, '+$tokensOut+' out]';FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut;ReasoningTokens=$reasoningTokens}
+        return [pscustomobject]@{Text=[string]$answer.ToString();Reasoning=[string]$reasoning.ToString();ReasoningDetails=$reasoningDetails.ToArray();Display='[Tokens: '+$tokensIn+' in, '+$tokensOut+' out]';FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut;ReasoningTokens=$reasoningTokens;Streamed=$true}
     }finally{
         if($null -ne $reader){try{$reader.Dispose()}catch{}}
         if($null -ne $resp){try{$resp.Dispose()}catch{}}
@@ -2486,6 +2486,7 @@ function Send-GoogleStream($provider,$model,$payload){
                 FinishReason=[string]$result.FinishReason
                 PromptTokens=[int]$result.PromptTokens
                 CompletionTokens=[int]$result.CompletionTokens
+                Streamed=$false
             }
         }
 
@@ -2589,6 +2590,7 @@ function Send-GoogleStream($provider,$model,$payload){
             $answerText += [Environment]::NewLine+[Environment]::NewLine+'[WARNING: Response truncated due to token limit]'
         }
         if($startedOutput){
+            if($finish -eq 'MAX_TOKENS'){[Console]::Write(([Environment]::NewLine)+('[WARNING: Response truncated due to token limit]'))}
             Write-Host ''
             if($script:RequestUiStopwatch.IsRunning){$script:RequestUiStopwatch.Stop()}
             $script:LastRequestElapsedMs=[int]$script:RequestUiStopwatch.ElapsedMilliseconds
@@ -2601,6 +2603,7 @@ function Send-GoogleStream($provider,$model,$payload){
             $script:RequestUiLineOpen=$false
         }else{
             Stop-MiraRequestUi $tokensIn $tokensOut
+            W $answerText
         }
         if([string]::IsNullOrWhiteSpace($finish)){$finish='STOP'}
         return [pscustomobject]@{
@@ -2609,6 +2612,7 @@ function Send-GoogleStream($provider,$model,$payload){
             FinishReason=$finish
             PromptTokens=$tokensIn
             CompletionTokens=$tokensOut
+            Streamed=$true
         }
     }finally{
         if($null -ne $reader){try{$reader.Dispose()}catch{}}
