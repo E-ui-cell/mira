@@ -123,6 +123,9 @@ if ($rootTuiSource -notmatch '\$script:PendingTuiKeys\s*=\s*New-Object' -or
     $rootTuiSource -match '\$buffer\s*=\s*\$buffer\.Insert\(\$cursor,"\u0060t"\)') {
     throw 'The root TUI still loses queued Tab/control keys during input bursts.'
 }
+if ($rootTuiSource -notmatch '(?s)if\(\$p\.Key -eq \[ConsoleKey\]::Enter.*?if\(Available\)\{.*?\$buffer=\$buffer\.Insert\(\$cursor,"\u0060n"\)') {
+    throw 'A fast Enter in the root TUI is not deferred for prompt submission.'
+}
 if ($rootTuiSource -notmatch '(?s)\$direction=if\(\$shift\)\{-1\}else\{1\}\s*Move-ModelMenu \$direction') {
     throw 'The root TUI model completion menu does not support reverse Tab navigation.'
 }
@@ -133,6 +136,9 @@ if ($lineEditorSource -notmatch '\$pendingKeys\s*=\s*New-Object' -or
     $lineEditorSource -notmatch 'Clear-GemCompletionMenu' -or
     $lineEditorSource -match '\$row\s*=\s*\[Math\]::Min\(\$completionTop\s*\+\s*\$completionMenuHeight') {
     throw 'Gemma completion input still drops control keys or leaves duplicate/stale menu rows.'
+}
+if ($lineEditorSource -notmatch '(?s)if \(\$pk\.Key -eq \[ConsoleKey\]::Enter.*?if \(\[Console\]::KeyAvailable\) \{.*?\$b = \$b\.Insert\(\$c,"\u0060n"\)') {
+    throw 'A fast Enter in the Gemma line editor is not deferred for prompt submission.'
 }
 if ($lineEditorSource -notmatch '(?s)if \(\$k\.Key -eq \[ConsoleKey\]::Tab\) \{\s*\$direction = if \(\(\$k\.Modifiers -band \[ConsoleModifiers\]::Shift\)') {
     throw 'Gemma completion menu does not support Tab/Shift+Tab navigation.'
