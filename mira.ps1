@@ -1,4 +1,4 @@
-﻿#requires -Version 5.1
+#requires -Version 5.1
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -164,6 +164,11 @@ $script:CliArgsNotImplemented = @('-m, --model <name>','-h, --help','--')
 $script:UiRenderEnabled = [bool]$script:MiraSettings.UiRendering
 $script:CompressThreshold = if($env:MIRA_COMPRESS_THRESHOLD){[int]$env:MIRA_COMPRESS_THRESHOLD}else{[int]$script:MiraSettings.CompressThreshold}
 $script:StreamResponses = [bool]$script:MiraSettings.Streaming
+$script:MiraToolPermission = if($env:MIRA_TOOL_PERMISSION -match '^(?i:ask|auto|deny)$'){$env:MIRA_TOOL_PERMISSION.ToLowerInvariant()}else{'ask'}
+$script:MiraToolMaxRounds = 8
+$script:MiraToolMaxCalls = 16
+$script:MiraToolTimeoutSeconds = 120
+if($env:MIRA_TOOL_TIMEOUT_SECONDS -match '^\d+$'){$script:MiraToolTimeoutSeconds=[Math]::Max(1,[Math]::Min(3600,[int]$env:MIRA_TOOL_TIMEOUT_SECONDS))}
 function Get-MiraReasoningOutputPreference {
     param([string]$ProviderName = '')
     if([string]::IsNullOrWhiteSpace($ProviderName)){$ProviderName=[string]$script:CurrentProviderName}
@@ -2100,22 +2105,37 @@ function Complete-Model($buffer,$row){
     return (Open-ModelMenu $buffer $row)
 }
 
-function Build-GeminiPayload($messages,$summary,[string]$providerName='gemini'){
+function ConvertFrom-MiraToolArguments($Arguments){
+    if($null -eq $Arguments){return [pscustomobject]@{}}
+    if($Arguments -is [string]){
+        if([string]::IsNullOrWhiteSpace([string]$Arguments)){return [pscustomobject]@{}}
+        return (ConvertFrom-Json -InputObject ([string]$Arguments) -ErrorAction Stop)
+    }
+    return $Arguments
+}
+
+function Build-GeminiPayload($messages,$summary,[string]$providerName='gemini',[bool]$EnableTools=$true){
     $contents=@()
     foreach($m in $messages){
         $role=if([string]$m.role -eq 'assistant'){'model'}else{'user'}
         $parts=@()
-        if($null -ne $m.parts){
-            foreach($p in @($m.parts)){
-                if([string]$p.kind -eq 'image'){
-                    $parts += [ordered]@{inlineData=[ordered]@{mimeType=[string]$p.mimeType;data=[string]$p.data}}
-                }else{
-                    $parts += [ordered]@{text=[string]$p.text}
-                }
+        if([string]$m.role -eq 'tool'){
+            $toolResponse=[pscustomobject]@{}
+            try{if(-not [string]::IsNullOrWhiteSpace([string]$m.text)){$toolResponse=ConvertFrom-Json -InputObject ([string]$m.text) -ErrorAction Stop}}
+            catch{$toolResponse=[ordered]@{output=[string]$m.text}}
+            $parts += [ordered]@{functionResponse=[ordered]@{name=[string]$m.name;response=$toolResponse}}
+        }elseif($null -ne $m.tool_calls -and @($m.tool_calls).Count -gt 0){
+            if(-not [string]::IsNullOrWhiteSpace([string]$m.text)){$parts += [ordered]@{text=[string]$m.text}}
+            foreach($call in @($m.tool_calls)){
+                $fn=$call.function;$arguments=ConvertFrom-MiraToolArguments $fn.arguments
+                $parts += [ordered]@{functionCall=[ordered]@{name=[string]$fn.name;args=$arguments}}
             }
-        }else{
-            $parts += [ordered]@{text=[string]$m.text}
-        }
+        }elseif($null -ne $m.parts){
+            foreach($p in @($m.parts)){
+                if([string]$p.kind -eq 'image'){$parts += [ordered]@{inlineData=[ordered]@{mimeType=[string]$p.mimeType;data=[string]$p.data}}}
+                else{$parts += [ordered]@{text=[string]$p.text}}
+            }
+        }else{$parts += [ordered]@{text=[string]$m.text}}
         $contents += [ordered]@{role=$role;parts=$parts}
     }
     $payload=[ordered]@{contents=$contents}
@@ -2123,57 +2143,75 @@ function Build-GeminiPayload($messages,$summary,[string]$providerName='gemini'){
         $provider=Get-Provider 'gemini'
         if($null -ne $provider -and $null -ne $provider.safetySettings){$payload.safetySettings=@($provider.safetySettings)}
     }
-    if(-not [string]::IsNullOrWhiteSpace($summary)){
-        $payload.systemInstruction=[ordered]@{parts=@([ordered]@{text=$summary})}
-    }
+    if(-not [string]::IsNullOrWhiteSpace($summary)){$payload.systemInstruction=[ordered]@{parts=@([ordered]@{text=$summary})}}
     $reasoningOutput=Get-MiraReasoningOutputPreference $providerName
-    if($null -ne $reasoningOutput){
-        $payload.generationConfig=[ordered]@{
-            thinkingConfig=[ordered]@{includeThoughts=[bool]$reasoningOutput}
-        }
+    if($null -ne $reasoningOutput){$payload.generationConfig=[ordered]@{thinkingConfig=[ordered]@{includeThoughts=[bool]$reasoningOutput}}}
+    if($EnableTools){
+        $functionDeclarations=@(
+            [ordered]@{
+                name='cmd'
+                description='Run a command through Windows cmd.exe. Use for cmd.exe built-ins and Windows command-line utilities.'
+                parameters=[ordered]@{type='OBJECT';properties=[ordered]@{
+                    command=[ordered]@{type='STRING';description='The command line to execute.'}
+                    working_directory=[ordered]@{type='STRING';description='Optional working directory. Defaults to the current MIRA directory.'}
+                };required=@('command')}
+            },
+            [ordered]@{
+                name='ps'
+                description='Run a script through Windows PowerShell 5.1. Use for PowerShell commands, scripts, Windows management, files, processes, registry and system configuration.'
+                parameters=[ordered]@{type='OBJECT';properties=[ordered]@{
+                    command=[ordered]@{type='STRING';description='The PowerShell script to execute.'}
+                    working_directory=[ordered]@{type='STRING';description='Optional working directory. Defaults to the current MIRA directory.'}
+                };required=@('command')}
+            }
+        )
+        $payload.tools=@([ordered]@{functionDeclarations=$functionDeclarations})
     }
     return $payload
 }
 
-function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary){
+function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary,[bool]$EnableTools=$true){
     $msg=@()
-    if(-not [string]::IsNullOrWhiteSpace($summary)){
-        $msg += [ordered]@{role='system';content=$summary}
-    }
+    if(-not [string]::IsNullOrWhiteSpace($summary)){$msg += [ordered]@{role='system';content=$summary}}
     foreach($m in $messages){
+        if([string]$m.role -eq 'tool'){
+            $msg += [ordered]@{role='tool';tool_call_id=[string]$m.tool_call_id;name=[string]$m.name;content=[string]$m.text}
+            continue
+        }
         $entry=[ordered]@{role=[string]$m.role}
         if($null -ne $m.parts){
             $content=@()
             foreach($p in @($m.parts)){
-                if([string]$p.kind -eq 'image'){
-                    $content += [ordered]@{type='image_url';image_url=[ordered]@{url=('data:'+([string]$p.mimeType)+';base64,'+([string]$p.data))}}
-                }else{
-                    $content += [ordered]@{type='text';text=[string]$p.text}
-                }
+                if([string]$p.kind -eq 'image'){$content += [ordered]@{type='image_url';image_url=[ordered]@{url=('data:'+([string]$p.mimeType)+';base64,'+([string]$p.data))}}}
+                else{$content += [ordered]@{type='text';text=[string]$p.text}}
             }
             $entry.content=$content
-        }else{
-            $entry.content=[string]$m.text
-        }
+        }else{$entry.content=[string]$m.text}
         if([string]$m.role -eq 'assistant' -and $null -ne $m.reasoning_details){
-            $rd=@($m.reasoning_details)
-            if($rd.Count -gt 0){$entry.reasoning_details=$rd}
+            $rd=@($m.reasoning_details);if($rd.Count -gt 0){$entry.reasoning_details=$rd}
         }
+        if([string]$m.role -eq 'assistant' -and $null -ne $m.tool_calls -and @($m.tool_calls).Count -gt 0){$entry.tool_calls=@($m.tool_calls)}
         $msg += $entry
     }
     $payload=[ordered]@{model=$model;messages=$msg;stream=$script:StreamResponses}
+    if($EnableTools){
+        $parameters=[ordered]@{type='object';properties=[ordered]@{
+            command=[ordered]@{type='string';description='The command or script to execute.'}
+            working_directory=[ordered]@{type='string';description='Optional working directory. Defaults to the current MIRA directory.'}
+        };required=@('command')}
+        $payload.tools=@(
+            [ordered]@{type='function';function=[ordered]@{name='cmd';description='Run a command through Windows cmd.exe.';parameters=$parameters}},
+            [ordered]@{type='function';function=[ordered]@{name='ps';description='Run a script through Windows PowerShell 5.1. Use for Windows management, files, processes, registry and system configuration.';parameters=$parameters}}
+        )
+        $payload.tool_choice='auto'
+    }
     $reasoningOutput=Get-MiraReasoningOutputPreference ([string]$provider.name)
     if(([string]$provider.name -ieq 'nvidia') -and ([string]$model -ieq 'nvidia/nemotron-3.5-lightning-30b-a3b')){
-        # $null leaves Nemotron's endpoint default untouched. Explicit values override it.
         if($null -ne $reasoningOutput){
             $payload.chat_template_kwargs=[ordered]@{enable_thinking=[bool]$reasoningOutput}
-            if([bool]$reasoningOutput){
-                $payload.reasoning_budget=[int]$script:MiraSettings.NvidiaReasoningBudget
-            }
+            if([bool]$reasoningOutput){$payload.reasoning_budget=[int]$script:MiraSettings.NvidiaReasoningBudget}
         }
-    }elseif($null -ne $reasoningOutput -and [bool]$reasoningOutput -and [string]$provider.name -ine 'nvidia'){
-        $payload.reasoning=[ordered]@{enabled=$true}
-    }
+    }elseif($null -ne $reasoningOutput -and [bool]$reasoningOutput -and [string]$provider.name -ine 'nvidia'){$payload.reasoning=[ordered]@{enabled=$true}}
     return $payload
 }
 
@@ -2308,7 +2346,7 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
             $fullResponse=$body|ConvertFrom-Json -ErrorAction Stop
             $r=Show-Response $fullResponse 'openai-compatible'
             Stop-MiraRequestUi ([int]$r.PromptTokens) ([int]$r.CompletionTokens)
-            return [pscustomobject]@{Text=[string]$r.Text;Reasoning=[string]$r.Reasoning;ReasoningDetails=@($r.ReasoningDetails);Display=[string]$r.Display;FinishReason=[string]$r.FinishReason;PromptTokens=[int]$r.PromptTokens;CompletionTokens=[int]$r.CompletionTokens;ReasoningTokens=0;Streamed=$false}
+            return [pscustomobject]@{Text=[string]$r.Text;Reasoning=[string]$r.Reasoning;ReasoningDetails=@($r.ReasoningDetails);ToolCalls=@($r.ToolCalls);Display=[string]$r.Display;FinishReason=[string]$r.FinishReason;PromptTokens=[int]$r.PromptTokens;CompletionTokens=[int]$r.CompletionTokens;ReasoningTokens=0;Streamed=$false}
         }
 
         try{$responseStream.ReadTimeout=500}catch{}
@@ -2319,6 +2357,7 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
         $readWatch=[Diagnostics.Stopwatch]::StartNew()
         $answer=New-Object Text.StringBuilder;$reasoning=New-Object Text.StringBuilder
         $reasoningDetails=New-Object System.Collections.Generic.List[object]
+        $toolCallsByIndex=@{}
         $finish='';$tokensIn=0;$tokensOut=0;$reasoningTokens=0;$showThought=$false
         $lineTask=$reader.ReadLineAsync()
 
@@ -2395,6 +2434,18 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
                 }
             }
             if($null -ne $delta.reasoning_details){foreach($detail in @($delta.reasoning_details)){[void]$reasoningDetails.Add($detail)}}
+            if($null -ne $delta.tool_calls){
+                foreach($toolDelta in @($delta.tool_calls)){
+                    $toolIndex=0;if($null -ne $toolDelta.index){$toolIndex=[int]$toolDelta.index};$toolKey=[string]$toolIndex
+                    if(-not $toolCallsByIndex.ContainsKey($toolKey)){$toolCallsByIndex[$toolKey]=[pscustomobject]@{Index=$toolIndex;Id='';Name='';Arguments=''}}
+                    $toolEntry=$toolCallsByIndex[$toolKey]
+                    if($null -ne $toolDelta.id -and -not [string]::IsNullOrWhiteSpace([string]$toolDelta.id)){$toolEntry.Id=[string]$toolDelta.id}
+                    if($null -ne $toolDelta.function){
+                        if($null -ne $toolDelta.function.name){$toolEntry.Name += [string]$toolDelta.function.name}
+                        if($null -ne $toolDelta.function.arguments){$toolEntry.Arguments += [string]$toolDelta.function.arguments}
+                    }
+                }
+            }
             if($null -ne $delta.content){
                 if($delta.content -is [string]){$pieces=@([string]$delta.content)}
                 else{$pieces=@($delta.content|ForEach-Object{if($null -ne $_.text){[string]$_.text}})}
@@ -2422,7 +2473,13 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
             $script:RequestUiActive=$false;$script:RequestUiLineOpen=$false
         }else{Stop-MiraRequestUi $tokensIn $tokensOut}
         if([string]::IsNullOrWhiteSpace($finish)){$finish='stop'}
-        return [pscustomobject]@{Text=[string]$answer.ToString();Reasoning=[string]$reasoning.ToString();ReasoningDetails=$reasoningDetails.ToArray();Display='[Tokens: '+$tokensIn+' in, '+$tokensOut+' out]';FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut;ReasoningTokens=$reasoningTokens;Streamed=$true}
+        $toolCalls=New-Object System.Collections.Generic.List[object]
+        foreach($toolEntry in @($toolCallsByIndex.Values | Sort-Object Index)){
+            $callId=[string]$toolEntry.Id;if([string]::IsNullOrWhiteSpace($callId)){$callId='call_'+[guid]::NewGuid().ToString('N')}
+            $arguments=[string]$toolEntry.Arguments;if([string]::IsNullOrWhiteSpace($arguments)){$arguments='{}'}
+            [void]$toolCalls.Add([pscustomobject]@{id=$callId;type='function';function=[pscustomobject]@{name=[string]$toolEntry.Name;arguments=$arguments}})
+        }
+        return [pscustomobject]@{Text=[string]$answer.ToString();Reasoning=[string]$reasoning.ToString();ReasoningDetails=$reasoningDetails.ToArray();ToolCalls=$toolCalls.ToArray();Display='[Tokens: '+$tokensIn+' in, '+$tokensOut+' out]';FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut;ReasoningTokens=$reasoningTokens;Streamed=$true}
     }finally{
         if($null -ne $reader){try{$reader.Dispose()}catch{}}
         if($null -ne $resp){try{$resp.Dispose()}catch{}}
@@ -2436,13 +2493,9 @@ function ConvertFrom-MiraGoogleStreamEvent {
     param([string]$EventJson)
     $chunk=$EventJson | ConvertFrom-Json -ErrorAction Stop
     if($null -ne $chunk.response){$chunk=$chunk.response}
-    $text=New-Object Text.StringBuilder
-    $reasoning=New-Object Text.StringBuilder
-    $finish=''
-    $tokensIn=0
-    $tokensOut=0
-    $promptFeedback=$chunk.promptFeedback
-    $errorMessage=''
+    $text=New-Object Text.StringBuilder;$reasoning=New-Object Text.StringBuilder
+    $toolCalls=New-Object System.Collections.Generic.List[object]
+    $finish='';$tokensIn=0;$tokensOut=0;$promptFeedback=$chunk.promptFeedback;$errorMessage=''
     if($null -ne $chunk.error){
         $errorMessage=[string]$chunk.error.message
         if([string]::IsNullOrWhiteSpace($errorMessage)){$errorMessage=$chunk.error | ConvertTo-Json -Depth 8 -Compress}
@@ -2453,27 +2506,20 @@ function ConvertFrom-MiraGoogleStreamEvent {
     }
     $candidates=@($chunk.candidates)
     if($candidates.Count -gt 0){
-        $candidate=$candidates[0]
-        $finish=[string]$candidate.finishReason
+        $candidate=$candidates[0];$finish=[string]$candidate.finishReason
         foreach($part in @($candidate.content.parts)){
             if($null -ne $part.text -and -not [string]::IsNullOrEmpty([string]$part.text)){
-                if($null -ne $part.thought -and [bool]$part.thought){
-                    [void]$reasoning.Append([string]$part.text)
-                }else{
-                    [void]$text.Append([string]$part.text)
-                }
+                if($null -ne $part.thought -and [bool]$part.thought){[void]$reasoning.Append([string]$part.text)}
+                else{[void]$text.Append([string]$part.text)}
+            }
+            if($null -ne $part.functionCall){
+                $fc=$part.functionCall;$arguments='{}'
+                if($null -ne $fc.args){$arguments=$fc.args | ConvertTo-Json -Depth 20 -Compress}
+                [void]$toolCalls.Add([pscustomobject]@{id='call_'+[guid]::NewGuid().ToString('N');type='function';function=[pscustomobject]@{name=[string]$fc.name;arguments=$arguments}})
             }
         }
     }
-    return [pscustomobject]@{
-        Text=[string]$text.ToString()
-        Reasoning=[string]$reasoning.ToString()
-        FinishReason=$finish
-        PromptTokens=$tokensIn
-        CompletionTokens=$tokensOut
-        PromptFeedback=$promptFeedback
-        ErrorMessage=$errorMessage
-    }
+    return [pscustomobject]@{Text=[string]$text.ToString();Reasoning=[string]$reasoning.ToString();ToolCalls=$toolCalls.ToArray();FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut;PromptFeedback=$promptFeedback;ErrorMessage=$errorMessage}
 }
 
 function Send-GoogleStream($provider,$model,$payload){
@@ -2592,6 +2638,7 @@ function Send-GoogleStream($provider,$model,$payload){
                 FinishReason=[string]$result.FinishReason
                 PromptTokens=[int]$result.PromptTokens
                 CompletionTokens=[int]$result.CompletionTokens
+                ToolCalls=@($result.ToolCalls)
                 Streamed=$false
             }
         }
@@ -2607,6 +2654,8 @@ function Send-GoogleStream($provider,$model,$payload){
         $tokensOut=0
         $promptFeedback=$null
         $eventData=New-Object System.Collections.Generic.List[string]
+        $toolCalls=New-Object System.Collections.Generic.List[object]
+        $toolCallKeys=@{}
         $lineTask=$reader.ReadLineAsync()
         $done=$false
 
@@ -2652,6 +2701,10 @@ function Send-GoogleStream($provider,$model,$payload){
                         if($event.CompletionTokens -gt 0){$tokensOut=[int]$event.CompletionTokens}
                         if($event.FinishReason){$finish=[string]$event.FinishReason}
                         if($null -ne $event.PromptFeedback){$promptFeedback=$event.PromptFeedback}
+                        foreach($toolCall in @($event.ToolCalls)){
+                            $toolKey=[string]$toolCall.function.name+'|'+[string]$toolCall.function.arguments
+                            if(-not $toolCallKeys.ContainsKey($toolKey)){$toolCallKeys[$toolKey]=$true;[void]$toolCalls.Add($toolCall)}
+                        }
                         if(-not [string]::IsNullOrEmpty([string]$event.Reasoning)){
                             [void]$reasoning.Append([string]$event.Reasoning)
                             if($reasoningOutput){
@@ -2690,6 +2743,10 @@ function Send-GoogleStream($provider,$model,$payload){
                 if($event.CompletionTokens -gt 0){$tokensOut=[int]$event.CompletionTokens}
                 if($event.FinishReason){$finish=[string]$event.FinishReason}
                 if($null -ne $event.PromptFeedback){$promptFeedback=$event.PromptFeedback}
+                foreach($toolCall in @($event.ToolCalls)){
+                    $toolKey=[string]$toolCall.function.name+'|'+[string]$toolCall.function.arguments
+                    if(-not $toolCallKeys.ContainsKey($toolKey)){$toolCallKeys[$toolKey]=$true;[void]$toolCalls.Add($toolCall)}
+                }
                 if(-not [string]::IsNullOrEmpty([string]$event.Reasoning)){
                     [void]$reasoning.Append([string]$event.Reasoning)
                     if($reasoningOutput){
@@ -2740,6 +2797,7 @@ function Send-GoogleStream($provider,$model,$payload){
             FinishReason=$finish
             PromptTokens=$tokensIn
             CompletionTokens=$tokensOut
+            ToolCalls=$toolCalls.ToArray()
             Streamed=$true
         }
     }finally{
@@ -2856,8 +2914,8 @@ function Compress-Session(){
     $summaryMessages=@([pscustomobject]@{role='user';text=$prompt})
     try{
         $type=[string]$provider.type
-        if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $summaryMessages ''}
-        elseif($type -eq 'openai-compatible'){$payload=Build-OpenAICompatiblePayload $provider $summaryMessages $script:CurrentModel ''; $payload.stream=$false}
+        if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $summaryMessages '' 'gemini' $false}
+        elseif($type -eq 'openai-compatible'){$payload=Build-OpenAICompatiblePayload $provider $summaryMessages $script:CurrentModel '' $false; $payload.stream=$false}
         else{throw ('unsupported provider type: '+$type)}
         $response=Send-ProviderPayload $provider $script:CurrentModel $payload
         $responseType=if($type -eq 'antigravity'){'gemini'}else{$type}
@@ -6710,6 +6768,7 @@ function Write-MarkupText([string]$Text){
 function Show-Response($response,$providerType){
     $tokensIn=0
     $tokensOut=0
+    $toolCalls=New-Object System.Collections.Generic.List[object]
     if($providerType -eq 'gemini' -or $providerType -eq 'antigravity'){
         if($null -ne $response.usageMetadata){
             if($null -ne $response.usageMetadata.promptTokenCount){$tokensIn=[int]$response.usageMetadata.promptTokenCount}
@@ -6722,7 +6781,7 @@ function Show-Response($response,$providerType){
             if($null -ne $response.promptFeedback -and $null -ne $response.promptFeedback.safetyRatings){
                 foreach($rating in $response.promptFeedback.safetyRatings){$reply += "`n$($rating.category): $($rating.probability)"}
             }
-            return [pscustomobject]@{Text=$reply;Display="$tokenString`n$reply";FinishReason='';PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+            return [pscustomobject]@{Text=$reply;ToolCalls=@();Display="$tokenString`n$reply";FinishReason='';PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
         }
         $candidate=$candidates[0]
         $reply=''
@@ -6731,11 +6790,14 @@ function Show-Response($response,$providerType){
             $answerParts=New-Object Text.StringBuilder
             $thoughtParts=New-Object Text.StringBuilder
             foreach($part in @($candidate.content.parts)){
-                if($null -eq $part.text -or [string]::IsNullOrEmpty([string]$part.text)){continue}
-                if($null -ne $part.thought -and [bool]$part.thought){
-                    [void]$thoughtParts.Append([string]$part.text)
-                }else{
-                    [void]$answerParts.Append([string]$part.text)
+                if($null -ne $part.text -and -not [string]::IsNullOrEmpty([string]$part.text)){
+                    if($null -ne $part.thought -and [bool]$part.thought){[void]$thoughtParts.Append([string]$part.text)}
+                    else{[void]$answerParts.Append([string]$part.text)}
+                }
+                if($null -ne $part.functionCall){
+                    $fc=$part.functionCall;$arguments='{}'
+                    if($null -ne $fc.args){$arguments=$fc.args | ConvertTo-Json -Depth 20 -Compress}
+                    [void]$toolCalls.Add([pscustomobject]@{id='call_'+[guid]::NewGuid().ToString('N');type='function';function=[pscustomobject]@{name=[string]$fc.name;arguments=$arguments}})
                 }
             }
             $reply=[string]$answerParts.ToString()
@@ -6747,7 +6809,7 @@ function Show-Response($response,$providerType){
             $reply='[BLOCKED BY SAFETY FILTERS]'
             if($null -ne $candidate.safetyRatings){foreach($rating in $candidate.safetyRatings){$reply += "`n$($rating.category): $($rating.probability)"}}
         }
-        return [pscustomobject]@{Text=$reply;Reasoning=$reasoning;Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+        return [pscustomobject]@{Text=$reply;Reasoning=$reasoning;ToolCalls=$toolCalls.ToArray();Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
     }
 
     if($null -ne $response.usage){
@@ -6758,7 +6820,7 @@ function Show-Response($response,$providerType){
     $choices=@($response.choices)
     if($choices.Count -eq 0){
         $reply='[NO CHOICES RETURNED]'
-        return [pscustomobject]@{Text=$reply;Display="$tokenString`n$reply";FinishReason='';PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+        return [pscustomobject]@{Text=$reply;ToolCalls=@();Display="$tokenString`n$reply";FinishReason='';PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
     }
     $choice=$choices[0]
     $reply=''
@@ -6782,118 +6844,173 @@ function Show-Response($response,$providerType){
         if($null -ne $choice.message.reasoning_content -and -not [string]::IsNullOrEmpty([string]$choice.message.reasoning_content)){$reasoning=[string]$choice.message.reasoning_content}
         elseif($null -ne $choice.message.reasoning){$reasoning=[string]$choice.message.reasoning}
         if($null -ne $choice.message.reasoning_details){$reasoningDetails=@($choice.message.reasoning_details)}
+        if($null -ne $choice.message.tool_calls){foreach($call in @($choice.message.tool_calls)){[void]$toolCalls.Add($call)}}
     }
     $finish=[string]$choice.finish_reason
     if($finish -eq 'length'){$reply += "`n`n[WARNING: Response truncated due to token limit]"}
-    return [pscustomobject]@{Text=$reply;Reasoning=$reasoning;ReasoningDetails=$reasoningDetails;Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+    return [pscustomobject]@{Text=$reply;Reasoning=$reasoning;ReasoningDetails=$reasoningDetails;ToolCalls=$toolCalls.ToArray();Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
+}
+
+function Invoke-MiraToolCall($ToolCall){
+    $function=$ToolCall.function;$name=[string]$function.name
+    if($name -notin @('cmd','ps')){return ([ordered]@{error='Unknown tool: '+$name} | ConvertTo-Json -Depth 6 -Compress)}
+    try{$arguments=ConvertFrom-MiraToolArguments $function.arguments}
+    catch{return ([ordered]@{error='Invalid tool arguments: '+$_.Exception.Message} | ConvertTo-Json -Depth 6 -Compress)}
+    $command=[string]$arguments.command
+    if([string]::IsNullOrWhiteSpace($command)){return ([ordered]@{error='The command argument is required.'} | ConvertTo-Json -Depth 6 -Compress)}
+    $workingDirectory=[string]$arguments.working_directory
+    if([string]::IsNullOrWhiteSpace($workingDirectory)){$workingDirectory=(Get-Location).Path}
+    try{$workingDirectory=(Resolve-Path -LiteralPath $workingDirectory -ErrorAction Stop).Path}
+    catch{return ([ordered]@{error='Working directory does not exist: '+$workingDirectory} | ConvertTo-Json -Depth 6 -Compress)}
+
+    W ('[tool call] '+$name) Cyan;W ('cwd: '+$workingDirectory) DarkGray;W $command Gray
+    if($script:MiraToolPermission -eq 'deny'){return ([ordered]@{denied=$true;message='Tool execution is disabled by MIRA_TOOL_PERMISSION=deny.'} | ConvertTo-Json -Depth 6 -Compress)}
+    if($script:MiraToolPermission -eq 'ask'){
+        $approval=Read-Host 'Allow this tool call? [y/N]'
+        if($approval -notmatch '^(?i:y|yes)$'){
+            W '[tool denied]' Yellow
+            return ([ordered]@{denied=$true;message='The user denied this tool call.'} | ConvertTo-Json -Depth 6 -Compress)
+        }
+    }
+    $result=[ordered]@{stdout='';stderr='';exit_code=-1;timed_out=$false};$process=$null
+    try{
+        $psi=New-Object System.Diagnostics.ProcessStartInfo
+        $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true
+        $psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true;$psi.WorkingDirectory=$workingDirectory
+        try{$psi.StandardOutputEncoding=New-Object System.Text.UTF8Encoding($false);$psi.StandardErrorEncoding=New-Object System.Text.UTF8Encoding($false)}catch{}
+        if($name -eq 'cmd'){
+            $psi.FileName=[string]$env:ComSpec
+            if([string]::IsNullOrWhiteSpace($psi.FileName)){$psi.FileName=Join-Path $env:SystemRoot 'System32\cmd.exe'}
+            $psi.Arguments='/d /s /c "chcp 65001>nul & '+$command+'"'
+        }else{
+            $powershellExe=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            if(-not (Test-Path -LiteralPath $powershellExe)){$powershellExe='powershell.exe'}
+            $psi.FileName=$powershellExe
+            $scriptText='$OutputEncoding = New-Object System.Text.UTF8Encoding($false)'+[Environment]::NewLine+
+                '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)'+[Environment]::NewLine+
+                $command+[Environment]::NewLine+'if ($?) { exit 0 } else { exit 1 }'
+            $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptText))
+            $psi.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand '+$encoded
+        }
+        $process=New-Object System.Diagnostics.Process;$process.StartInfo=$psi
+        if(-not $process.Start()){throw 'Could not start the shell process.'}
+        $stdoutTask=$process.StandardOutput.ReadToEndAsync();$stderrTask=$process.StandardError.ReadToEndAsync()
+        if(-not $process.WaitForExit([int]$script:MiraToolTimeoutSeconds * 1000)){
+            $result.timed_out=$true;try{$process.Kill()}catch{};try{$process.WaitForExit()}catch{}
+        }
+        $result.stdout=[string]$stdoutTask.GetAwaiter().GetResult()
+        $result.stderr=[string]$stderrTask.GetAwaiter().GetResult()
+        if(-not $result.timed_out){$result.exit_code=[int]$process.ExitCode}
+    }catch{$result.stderr=$_.Exception.Message;$result.exit_code=-1}
+    finally{if($null -ne $process){try{$process.Dispose()}catch{}}}
+    foreach($field in @('stdout','stderr')){
+        $fieldText=[string]$result[$field]
+        if($fieldText.Length -gt 20000){$result[$field]=$fieldText.Substring(0,20000)+[Environment]::NewLine+'[output truncated by MIRA]'}
+    }
+    W ('[tool result] '+$name+' | exit '+$result.exit_code+$(if($result.timed_out){' | timeout'}else{''})) DarkGray
+    if(-not [string]::IsNullOrWhiteSpace([string]$result.stdout)){W ([string]$result.stdout.TrimEnd()) Gray}
+    if(-not [string]::IsNullOrWhiteSpace([string]$result.stderr)){W ([string]$result.stderr.TrimEnd()) Yellow}
+    return ($result | ConvertTo-Json -Depth 8 -Compress)
 }
 
 function Invoke-Provider($text,$parts=$null){
     $provider=Get-Provider $script:CurrentProviderName
     if($null -eq $provider){W ('[provider error] unknown provider: '+$script:CurrentProviderName) Red;return $false}
     if($script:SessionActive -and $script:LastPromptTokens -ge $script:CompressThreshold){[void](Compress-Session)}
-
     $messages=@($script:Conversation|ForEach-Object{$_})
-    # Initialize parts explicitly; assigning a new property to a PSObject fails in PS 5.1.
+    $newMessages=New-Object System.Collections.Generic.List[object]
     $user=[pscustomobject]@{role='user';text=[string]$text;parts=$null}
     if($null -ne $parts){$user.parts=@($parts)}
-    $messages+=$user
+    $messages += $user;[void]$newMessages.Add($user)
+
     $type=[string]$provider.type
-    if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $messages $script:SessionSummary $script:CurrentProviderName}
-    elseif($type -eq 'openai-compatible'){$payload=Build-OpenAICompatiblePayload $provider $messages $script:CurrentModel $script:SessionSummary}
-    else{W ('[provider error] unsupported type: '+$type) Red;return $false}
-
-    $jsonPayload=$payload|ConvertTo-Json -Depth 40
-    $script:LastRequest=$jsonPayload
-    if($script:DryRunMode){
-        W '[dry-run] no request sent' Yellow
-        W ('provider : '+$script:CurrentProviderName) Gray
-        W ('model    : '+$script:CurrentModel) Gray
-        W ''
-        W $jsonPayload Gray
-        $script:LastText=$jsonPayload
-        return $true
-    }
-
-    try{
-        $streamedOutput=$false
-        if($script:StreamResponses -and $type -in @('openai-compatible','gemini','antigravity')){
-            try{
-                if($type -eq 'openai-compatible'){
-                    $result=Send-OpenAICompatibleStream $provider $script:CurrentModel $payload
-                }else{
-                    $result=Send-GoogleStream $provider $script:CurrentModel $payload
+    if($type -notin @('gemini','antigravity','openai-compatible')){W ('[provider error] unsupported type: '+$type) Red;return $false}
+    $totalPromptTokens=0;$totalCompletionTokens=0;$toolCallCount=0
+    $finalResult=$null;$finalStreamedOutput=$false
+    $toolLoopWatch=[Diagnostics.Stopwatch]::StartNew()
+    for($round=0;$round -lt [int]$script:MiraToolMaxRounds;++$round){
+        if($type -eq 'gemini' -or $type -eq 'antigravity'){$payload=Build-GeminiPayload $messages $script:SessionSummary $script:CurrentProviderName $true}
+        else{$payload=Build-OpenAICompatiblePayload $provider $messages $script:CurrentModel $script:SessionSummary $true}
+        $jsonPayload=$payload|ConvertTo-Json -Depth 40;$script:LastRequest=$jsonPayload
+        if($script:DryRunMode){
+            W '[dry-run] no request sent' Yellow;W ('provider : '+$script:CurrentProviderName) Gray
+            W ('model    : '+$script:CurrentModel) Gray;W '';W $jsonPayload Gray
+            $script:LastText=$jsonPayload;$toolLoopWatch.Stop();return $true
+        }
+        $response=$null
+        try{
+            $streamedOutput=$false
+            if($script:StreamResponses){
+                try{
+                    if($type -eq 'openai-compatible'){$result=Send-OpenAICompatibleStream $provider $script:CurrentModel $payload}
+                    else{$result=Send-GoogleStream $provider $script:CurrentModel $payload}
+                    $streamedOutput=($null -ne $result.Streamed -and [bool]$result.Streamed)
+                }catch{
+                    if($_.Exception.Message -eq 'Request cancelled.'){throw}
+                    W ('[stream error] '+$_.Exception.Message) Yellow;W '[stream fallback] retrying non-stream request...' DarkGray
+                    if($type -eq 'openai-compatible'){$payload.stream=$false}
+                    $response=Send-ProviderPayload $provider $script:CurrentModel $payload
+                    $responseType=if($type -eq 'antigravity'){'gemini'}else{$type}
+                    $result=Show-Response $response $responseType
                 }
-                $streamedOutput=($null -ne $result.Streamed -and [bool]$result.Streamed)
-            }catch{
-                if($_.Exception.Message -eq 'Request cancelled.'){throw}
-                W ('[stream error] '+$_.Exception.Message) Yellow
-                W '[stream fallback] retrying non-stream request...' DarkGray
-                if($type -eq 'openai-compatible'){$payload.stream=$false}
+            }else{
                 $response=Send-ProviderPayload $provider $script:CurrentModel $payload
                 $responseType=if($type -eq 'antigravity'){'gemini'}else{$type}
                 $result=Show-Response $response $responseType
-                $streamedOutput=$false
             }
-        }else{
-            $response=Send-ProviderPayload $provider $script:CurrentModel $payload
-            $responseType=if($type -eq 'antigravity'){'gemini'}else{$type}
-            $result=Show-Response $response $responseType
+        }catch{
+            $msg=$_.Exception.Message
+            if($msg -eq 'Request cancelled.'){ $toolLoopWatch.Stop();return $false }
+            if($_.ErrorDetails -and $_.ErrorDetails.Message){$msg+=[Environment]::NewLine+$_.ErrorDetails.Message}
+            W ('[API error] '+$msg) Red;$toolLoopWatch.Stop();return $false
         }
-
-        $reasoningOutput=Get-MiraReasoningOutputEnabled ([string]$provider.name)
-        if($reasoningOutput -and -not $streamedOutput -and -not [string]::IsNullOrWhiteSpace([string]$result.Reasoning)){
-            W '[THOUGHT]' DarkGray
-            W ([string]$result.Reasoning) DarkGray
+        $totalPromptTokens += [int]$result.PromptTokens;$totalCompletionTokens += [int]$result.CompletionTokens
+        $calls=@($result.ToolCalls)
+        if($calls.Count -gt 0){
+            if(-not $streamedOutput -and -not [string]::IsNullOrWhiteSpace([string]$result.Text)){Write-MarkupText ([string]$result.Text)}
+            $assistantToolMessage=[pscustomobject]@{role='assistant';text=[string]$result.Text;parts=$null;reasoning_details=$result.ReasoningDetails;tool_calls=$calls;tool_call_id=$null;name=$null}
+            $messages += $assistantToolMessage;[void]$newMessages.Add($assistantToolMessage)
+            foreach($call in $calls){
+                $callId=[string]$call.id;if([string]::IsNullOrWhiteSpace($callId)){$callId='call_'+[guid]::NewGuid().ToString('N')}
+                $toolName=[string]$call.function.name
+                if($toolCallCount -ge [int]$script:MiraToolMaxCalls){
+                    $toolOutput=([ordered]@{error='MIRA tool-call limit reached for this turn.'} | ConvertTo-Json -Depth 6 -Compress)
+                    W '[tool limit] maximum tool calls reached for this turn' Yellow
+                }else{++$toolCallCount;$toolOutput=Invoke-MiraToolCall $call}
+                $toolMessage=[pscustomobject]@{role='tool';text=[string]$toolOutput;parts=$null;reasoning_details=$null;tool_calls=$null;tool_call_id=$callId;name=$toolName}
+                $messages += $toolMessage;[void]$newMessages.Add($toolMessage)
+            }
+            continue
         }
-    }catch{
-        $msg=$_.Exception.Message
-        if($msg -eq 'Request cancelled.'){return $false}
-        if($_.ErrorDetails -and $_.ErrorDetails.Message){$msg+=[Environment]::NewLine+$_.ErrorDetails.Message}
-        W ('[API error] '+$msg) Red
-        return $false
+        $finalResult=$result;$finalStreamedOutput=$streamedOutput;break
     }
-
-    $script:LastPromptTokens=0
-    if($null -ne $result.PromptTokens){$script:LastPromptTokens=[int]$result.PromptTokens}
-    if(($type -eq 'gemini' -or $type -eq 'antigravity') -and
-       $script:LastPromptTokens -eq 0 -and
-       $null -ne $response -and
-       $null -ne $response.usageMetadata -and
-       $null -ne $response.usageMetadata.promptTokenCount){
-        $script:LastPromptTokens=[int]$response.usageMetadata.promptTokenCount
-    }
-
-    $script:LastText=$result.Text
-
-    # Final status is prepared before the renderer converts the reserved live
-    # row into the top frame. No second status row is created.
+    $toolLoopWatch.Stop()
+    if($null -eq $finalResult){W '[tool limit] model did not finish within the tool-call round limit' Yellow;return $false}
+    $finalResult.PromptTokens=$totalPromptTokens;$finalResult.CompletionTokens=$totalCompletionTokens
+    $script:LastPromptTokens=$totalPromptTokens;$script:LastText=[string]$finalResult.Text
+    $script:LastRequestElapsedMs=[int]$toolLoopWatch.ElapsedMilliseconds
     $elapsedSec=[math]::Round(([int]$script:LastRequestElapsedMs)/1000,1)
     $statusFrame=if([string]::IsNullOrEmpty([string]$script:LastRequestFrame)){'... '}else{[string]$script:LastRequestFrame}
-    $tokensIn=if($null -ne $result.PromptTokens){[int]$result.PromptTokens}else{0}
-    $tokensOut=if($null -ne $result.CompletionTokens){[int]$result.CompletionTokens}else{0}
     $bullet=if($script:SessionActive){'  ●'}else{''}
-    $script:LastStatusText=$statusFrame+'  '+$elapsedSec+'s      ↑ '+$tokensIn+'  ↓ '+$tokensOut+$bullet
+    $script:LastStatusText=$statusFrame+'  '+$elapsedSec+'s      ↑ '+$totalPromptTokens+'  ↓ '+$totalCompletionTokens+$bullet
     $script:LastStatusHasBullet=$script:SessionActive
-
-    if(-not $streamedOutput){
-        try{
-            Write-MarkupText ([string]$result.Text)
-        }catch{
-            try{ W '[markup warning] raw response fallback' Yellow }catch{}
-            try{ Write-Host ([string]$result.Text) -ForegroundColor Gray }catch{}
-        }
+    $reasoningOutput=Get-MiraReasoningOutputEnabled ([string]$provider.name)
+    if($reasoningOutput -and -not $finalStreamedOutput -and -not [string]::IsNullOrWhiteSpace([string]$finalResult.Reasoning)){
+        W '[THOUGHT]' DarkGray;W ([string]$finalResult.Reasoning) DarkGray
     }
-
-    # Self-learning used.list: only remember models that produced a real
-    # non-empty text answer through Mira's normal chat path. Model selection
-    # itself never writes to used.list, so failed/TTS/non-text models stay out.
-    $ok=($result.FinishReason -ne 'SAFETY') -and
-        -not [string]::IsNullOrEmpty([string]$result.Text) -and
-        ([string]$result.Text -notmatch '^\[NO CHOICES RETURNED\]$') -and
-        ([string]$result.Text -notmatch '^\[NO CANDIDATES RETURNED\]$')
+    if(-not $finalStreamedOutput){
+        try{Write-MarkupText ([string]$finalResult.Text)}
+        catch{try{W '[markup warning] raw response fallback' Yellow}catch{};try{Write-Host ([string]$finalResult.Text) -ForegroundColor Gray}catch{}}
+    }
+    $ok=($finalResult.FinishReason -ne 'SAFETY') -and -not [string]::IsNullOrEmpty([string]$finalResult.Text) -and
+        ([string]$finalResult.Text -notmatch '^\[NO CHOICES RETURNED\]$') -and
+        ([string]$finalResult.Text -notmatch '^\[NO CANDIDATES RETURNED\]$')
     if($ok){Add-UsedModel $script:CurrentProviderName $script:CurrentModel}
-    if($ok -and $script:SessionActive){[void]$script:Conversation.Add($user);Add-Message 'assistant' $result.Text $result.ReasoningDetails}
+    if($ok -and $script:SessionActive){
+        foreach($message in $newMessages){[void]$script:Conversation.Add($message)}
+        $assistantFinal=[pscustomobject]@{role='assistant';text=[string]$finalResult.Text;parts=$null;reasoning_details=$finalResult.ReasoningDetails;tool_calls=$null;tool_call_id=$null;name=$null}
+        [void]$script:Conversation.Add($assistantFinal)
+    }
     return $ok
 }
 
