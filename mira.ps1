@@ -16,6 +16,7 @@ $script:MiraSettings = [ordered]@{
     UiRendering = $false
     Streaming = $true
     GroundingEnabled = $true
+    GroundingSearchModel = 'gemini-3.1-flash-lite'
 
     # $null follows the endpoint default; $true forces thought output on; $false forces it off.
     ReasoningOutput = [ordered]@{
@@ -6900,7 +6901,10 @@ $query
     }
 
     try{
-        $response=Send-ProviderPayload $provider $script:CurrentModel $searchPayload
+        $searchModel=[string]$env:MIRA_SEARCH_MODEL
+        if([string]::IsNullOrWhiteSpace($searchModel)){$searchModel=[string]$script:MiraSettings.GroundingSearchModel}
+        if([string]::IsNullOrWhiteSpace($searchModel)){$searchModel=[string]$script:CurrentModel}
+        $response=Send-ProviderPayload $provider $searchModel $searchPayload
         $candidates=@($response.candidates)
         if($candidates.Count -eq 0){
             return ([ordered]@{query=$query;grounded=$false;error='Antigravity returned no candidate for the Google Search request.';sources=@()} | ConvertTo-Json -Depth 8 -Compress)
