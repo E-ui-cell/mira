@@ -43,11 +43,14 @@ Native file/image input, diff sending, on-demand sessions with export, model dis
 
 MIRA starts with **Gemini** as the default provider.
 
-Default model:
+Default model selector (edit `DefaultModel` near the top of `mira.ps1`):
 
-```text
-gemini-flash-lite-latest
+```powershell
+DefaultModel = 'gemini:gemini-3.5-flash-lite'
+# Or: 'antigravity:gemini-3.1-flash-lite'
 ```
+
+The selector uses the same `provider:model` format as aichat. Provider and model are parsed from this single setting.
 
 To use Google Antigravity instead, sign in and load its account-specific model list:
 
