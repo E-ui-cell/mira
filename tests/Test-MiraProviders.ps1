@@ -33,12 +33,14 @@ $functionNames = @(
     'Show-Response'
 )
 foreach($functionName in $functionNames){
-    $functionAst = $ast.Find({
+    $functionAsts = @($ast.FindAll({
         param($node)
         $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
         $node.Name -eq $functionName
-    },$true)
-    if($null -eq $functionAst){throw ('Missing MIRA function: '+$functionName)}
+    },$true))
+    if($functionAsts.Count -eq 0){throw ('Missing MIRA function: '+$functionName)}
+    # PowerShell executes the last definition in the file, so test that copy.
+    $functionAst = $functionAsts[$functionAsts.Count - 1]
     Invoke-Expression $functionAst.Extent.Text
 }
 
@@ -46,6 +48,12 @@ Assert-MiraTest ($script:MiraSettings.DefaultProvider -eq 'gemini') 'default pro
 Assert-MiraTest ($script:MiraSettings.DefaultModel -eq 'gemini-flash-lite-latest') 'default model changed unexpectedly'
 Assert-MiraTest ($script:MiraSettings.UiRendering -eq $false) 'UI rendering must default off'
 Assert-MiraTest ($script:MiraSettings.Streaming -eq $true) 'streaming must default on'
+$configText = $source.Substring($configStart,$configEnd-$configStart)
+foreach($match in [regex]::Matches($source,"'[A-Z0-9_]+_API_KEY'")){
+    Assert-MiraTest ($configText.Contains($match.Value)) ('API-key environment name is hardcoded outside the settings block: '+$match.Value)
+}
+$googleStreamAst = $ast.Find({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Send-GoogleStream'},$true)
+Assert-MiraTest ($null -ne $googleStreamAst) 'Google SSE streaming function is missing'
 
 $script:Providers = @(New-BuiltinProviders)
 $antigravity = Get-Provider 'antigravity'
