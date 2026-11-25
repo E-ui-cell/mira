@@ -354,17 +354,25 @@ Thought-summary output is configured independently for each provider in the sett
 
 ```powershell
 ReasoningOutput = [ordered]@{
-    gemini     = $true
-    antigravity = $true
-    nvidia     = $false
-    # Other providers can be enabled individually.
+    gemini      = $null
+    antigravity = $null
+    openrouter  = $null
+    groq        = $null
+    openai      = $null
+    nvidia      = $null
+    deepseek    = $null
+    mistral     = $null
+    together    = $null
+    fireworks   = $null
+    xai         = $null
+    perplexity  = $null
 }
 NvidiaReasoningBudget = 4096
 ```
 
-Gemini and Antigravity request provider-supplied thought summaries. A model may still return no summary, even when enabled. This displays summaries, not the model's private full reasoning trace.
+`$null` leaves the request untouched and follows that provider endpoint's defaults; MIRA displays any thought summaries the endpoint returns. Set a provider to `$true` to explicitly request output where supported, or `$false` to suppress it. Gemini and Antigravity send `includeThoughts=true/false` only when explicitly overridden. This displays provider-supplied summaries, not the model's private full reasoning trace.
 
-Nemotron 3.5 Lightning has thinking enabled by default. When NVIDIA thought output is off, MIRA explicitly sends `enable_thinking=false` so internal reasoning does not consume the visible answer-token budget. When enabled, `NvidiaReasoningBudget` limits its reasoning budget.
+For Nemotron 3.5 Lightning, `$null` leaves the endpoint's thinking default untouched. An explicit `$false` sends `enable_thinking=false`; `$true` sends `enable_thinking=true` and applies `NvidiaReasoningBudget`.
 
 Runtime controls affect only the selected provider:
 
