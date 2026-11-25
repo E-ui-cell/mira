@@ -27,7 +27,7 @@ $MIRA_DEFAULT_MODEL = 'gemini-3.1-flash-lite'
 $MIRA_DEFAULT_EFFORT = 'high'                # Shared fallback for every provider: low, medium, high
 # Provider overrides ($null inherits the shared/default effort).
 $MIRA_OPENAI_EFFORT = $null                  # none, minimal, low, medium, high, xhigh, max
-$MIRA_OPENAI_LUNA_EFFORT = 'medium'          # Model-specific override; takes precedence for gpt-6-luna
+$MIRA_OPENAI_LUNA_EFFORT = $null            # Optional model-specific override; $null inherits .effort
 $MIRA_GEMINI_EFFORT = $null                  # low, medium, high
 $MIRA_ANTIGRAVITY_EFFORT = $null             # low, medium, high
 $MIRA_SEARCH_MODEL = 'gemini-3.1-flash-lite' # Dedicated Antigravity OAuth research model for Gemini API web_search
