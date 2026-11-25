@@ -15,6 +15,7 @@ $script:MiraSettings = [ordered]@{
 
     UiRendering = $false
     Streaming = $true
+    GroundingEnabled = $true
 
     # $null follows the endpoint default; $true forces thought output on; $false forces it off.
     ReasoningOutput = [ordered]@{
@@ -167,6 +168,11 @@ $script:StreamResponses = [bool]$script:MiraSettings.Streaming
 $script:MiraToolPermission = if($env:MIRA_TOOL_PERMISSION -match '^(?i:ask|auto|deny)$'){$env:MIRA_TOOL_PERMISSION.ToLowerInvariant()}else{'ask'}
 $script:MiraToolMaxRounds = 8
 $script:MiraToolMaxCalls = 16
+$script:MiraGroundingAllowed = $true
+$groundingEnv = [string]$env:MIRA_DEFAULT_GROUNDING
+if($groundingEnv -match '^(?i:0|false|off|no)$'){$script:MiraGroundingAllowed = $false}
+$script:MiraGroundingEnabled = [bool]$script:MiraSettings.GroundingEnabled -and $script:MiraGroundingAllowed
+if($groundingEnv -match '^(?i:1|true|on|yes)$'){$script:MiraGroundingEnabled = $script:MiraGroundingAllowed}
 $script:MiraToolTimeoutSeconds = 120
 if($env:MIRA_TOOL_TIMEOUT_SECONDS -match '^\d+$'){$script:MiraToolTimeoutSeconds=[Math]::Max(1,[Math]::Min(3600,[int]$env:MIRA_TOOL_TIMEOUT_SECONDS))}
 function Get-MiraReasoningOutputPreference {
@@ -225,7 +231,7 @@ $script:ModelMenuIndex = 0
 $script:ModelMenuTyped = ''
 
 $script:Commands = @(
-    '.help','.clear','.clear history','.history','.history persist on','.history persist off','.file','.read','.diff','.shot','.model','.models','.models test','.models antigravity','.models nvidia','.providers','.auth','.auth login','.auth status','.auth logout','.request','.request json','.save','.copy','.grab','.ui','.stream','.reasoning','.enable-session','.export-session','.empty session','.compress session','.delete session','.q',':q',':wq'
+    '.help','.clear','.clear history','.history','.history persist on','.history persist off','.file','.read','.diff','.shot','.model','.models','.models test','.models antigravity','.models nvidia','.providers','.auth','.auth login','.auth status','.auth logout','.grounding','.grounding on','.grounding off','.grounding status','.request','.request json','.save','.copy','.grab','.ui','.stream','.reasoning','.enable-session','.export-session','.empty session','.compress session','.delete session','.q',':q',':wq'
 )
 
 # -----------------------------------------------------------------------------
@@ -2165,6 +2171,15 @@ function Build-GeminiPayload($messages,$summary,[string]$providerName='gemini',[
                 };required=@('command')}
             }
         )
+        if($providerName -ieq 'antigravity' -and $script:MiraGroundingEnabled -and $script:MiraGroundingAllowed){
+            $functionDeclarations += [ordered]@{
+                name='google_search'
+                description='Search the web using native Google Search grounding. Use for current facts, external research, verification, and source discovery. Return findings with source URLs so the final answer can cite them.'
+                parameters=[ordered]@{type='OBJECT';properties=[ordered]@{
+                    query=[ordered]@{type='STRING';description='The specific web search query or research question.'}
+                };required=@('query')}
+            }
+        }
         $payload.tools=@([ordered]@{functionDeclarations=$functionDeclarations})
     }
     return $payload
@@ -6852,11 +6867,93 @@ function Show-Response($response,$providerType){
     return [pscustomobject]@{Text=$reply;Reasoning=$reasoning;ReasoningDetails=$reasoningDetails;ToolCalls=$toolCalls.ToArray();Display="$tokenString`n$reply";FinishReason=$finish;PromptTokens=$tokensIn;CompletionTokens=$tokensOut}
 }
 
+function Invoke-MiraGoogleSearch($Arguments){
+    $query=[string]$Arguments.query
+    if([string]::IsNullOrWhiteSpace($query)){
+        return ([ordered]@{grounded=$false;error='The query argument is required.';sources=@()} | ConvertTo-Json -Depth 8 -Compress)
+    }
+    if($query.Length -gt 4000){$query=$query.Substring(0,4000)}
+    if(-not $script:MiraGroundingAllowed -or -not $script:MiraGroundingEnabled){
+        return ([ordered]@{grounded=$false;error='Google Search grounding is disabled in MIRA.';sources=@()} | ConvertTo-Json -Depth 8 -Compress)
+    }
+    if([string]$script:CurrentProviderName -ine 'antigravity'){
+        return ([ordered]@{grounded=$false;error='Native Google Search grounding is available only through the Antigravity provider.';sources=@()} | ConvertTo-Json -Depth 8 -Compress)
+    }
+
+    W ('[google search] '+$query) DarkGray
+    $provider=Get-Provider 'antigravity'
+    if($null -eq $provider){
+        return ([ordered]@{grounded=$false;error='The Antigravity provider is not configured.';sources=@()} | ConvertTo-Json -Depth 8 -Compress)
+    }
+
+    $searchPrompt=@"
+Use native Google Search to research the following query. Perform an actual web search. Prefer official, primary, and recent sources where appropriate. Return a concise factual summary. Do not invent sources or URLs.
+
+QUERY:
+$query
+"@
+    # Antigravity rejects googleSearch when it is combined with functionDeclarations.
+    # This dedicated request therefore contains only the native googleSearch tool.
+    $searchPayload=[ordered]@{
+        contents=@([ordered]@{role='user';parts=@([ordered]@{text=$searchPrompt})})
+        tools=@([ordered]@{googleSearch=[ordered]@{}})
+    }
+
+    try{
+        $response=Send-ProviderPayload $provider $script:CurrentModel $searchPayload
+        $candidates=@($response.candidates)
+        if($candidates.Count -eq 0){
+            return ([ordered]@{query=$query;grounded=$false;error='Antigravity returned no candidate for the Google Search request.';sources=@()} | ConvertTo-Json -Depth 8 -Compress)
+        }
+        $candidate=$candidates[0]
+        $summary=''
+        if($null -ne $candidate.content -and $null -ne $candidate.content.parts){
+            $summary=(@($candidate.content.parts | ForEach-Object {
+                if($null -ne $_.text -and -not [string]::IsNullOrWhiteSpace([string]$_.text) -and -not [bool]$_.thought){[string]$_.text}
+            }) -join '').Trim()
+        }
+        if($summary.Length -gt 12000){$summary=$summary.Substring(0,12000)+' [summary truncated]'}
+
+        $metadata=$candidate.groundingMetadata
+        $searchQueries=@()
+        if($null -ne $metadata -and $null -ne $metadata.webSearchQueries){
+            $searchQueries=@($metadata.webSearchQueries | ForEach-Object {[string]$_} | Where-Object {-not [string]::IsNullOrWhiteSpace($_)})
+        }
+        $sources=New-Object System.Collections.Generic.List[object]
+        $seenUrls=@{}
+        if($null -ne $metadata -and $null -ne $metadata.groundingChunks){
+            foreach($chunk in @($metadata.groundingChunks)){
+                if($null -eq $chunk.web){continue}
+                $url=[string]$chunk.web.uri
+                if([string]::IsNullOrWhiteSpace($url) -or $seenUrls.ContainsKey($url)){continue}
+                $title=[string]$chunk.web.title
+                if([string]::IsNullOrWhiteSpace($title)){$title=$url}
+                $seenUrls[$url]=$true
+                [void]$sources.Add([ordered]@{title=$title;url=$url})
+                if($sources.Count -ge 10){break}
+            }
+        }
+        if($sources.Count -eq 0){
+            W '[google search] no grounding metadata returned' Yellow
+            return ([ordered]@{query=$query;grounded=$false;error='Google Search returned no verifiable groundingMetadata or source URLs. Do not present this as a successful web search.';search_queries=$searchQueries;sources=@()} | ConvertTo-Json -Depth 10 -Compress)
+        }
+        W ('[grounding] '+$sources.Count+' verified source URL(s)') DarkGray
+        return ([ordered]@{query=$query;grounded=$true;summary=$summary;search_queries=$searchQueries;sources=$sources.ToArray()} | ConvertTo-Json -Depth 10 -Compress)
+    }catch{
+        W ('[google search error] '+$_.Exception.Message) Yellow
+        return ([ordered]@{query=$query;grounded=$false;error=('Native Google Search grounding failed: '+$_.Exception.Message);sources=@()} | ConvertTo-Json -Depth 8 -Compress)
+    }
+}
+
 function Invoke-MiraToolCall($ToolCall){
     $function=$ToolCall.function;$name=[string]$function.name
-    if($name -notin @('cmd','ps')){return ([ordered]@{error='Unknown tool: '+$name} | ConvertTo-Json -Depth 6 -Compress)}
     try{$arguments=ConvertFrom-MiraToolArguments $function.arguments}
     catch{return ([ordered]@{error='Invalid tool arguments: '+$_.Exception.Message} | ConvertTo-Json -Depth 6 -Compress)}
+    if($name -eq 'google_search'){
+        if(-not $script:MiraGroundingAllowed -or -not $script:MiraGroundingEnabled){return ([ordered]@{grounded=$false;error='Google Search grounding is disabled in MIRA.';sources=@()} | ConvertTo-Json -Depth 8 -Compress)}
+        return (Invoke-MiraGoogleSearch $arguments)
+    }
+    if($name -notin @('cmd','ps')){return ([ordered]@{error='Unknown tool: '+$name} | ConvertTo-Json -Depth 6 -Compress)}
     $command=[string]$arguments.command
     if([string]::IsNullOrWhiteSpace($command)){return ([ordered]@{error='The command argument is required.'} | ConvertTo-Json -Depth 6 -Compress)}
     $workingDirectory=[string]$arguments.working_directory
@@ -7047,8 +7144,8 @@ function Help(){
     W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
     W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
     Show-ApiKeyStatus
-    W '  LLM tools: cmd, ps | permission: ask (MIRA_TOOL_PERMISSION=auto|ask|deny)' DarkGray
-    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <provider>         refresh one provider model list' DarkGray; W '  .models <Tab>              refresh all configured providers; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live Gemini/Antigravity, NVIDIA NIM, and other OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          toggle current provider thought output' DarkGray; W '  .reasoning <provider> on|off  set a provider independently' DarkGray; W ''
+    W ('  LLM tools: cmd, ps'+$(if($script:MiraGroundingEnabled){', google_search (Antigravity native grounding)'}else{''})+' | shell permission: '+$script:MiraToolPermission) DarkGray
+    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <provider>         refresh one provider model list' DarkGray; W '  .models <Tab>              refresh all configured providers; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .grounding on|off|status   native Google Search grounding for Antigravity' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live Gemini/Antigravity, NVIDIA NIM, and other OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          toggle current provider thought output' DarkGray; W '  .reasoning <provider> on|off  set a provider independently' DarkGray; W ''
 }
 
 function Add-Message($role,$text,$reasoningDetails=$null,$parts=$null){
@@ -7320,6 +7417,18 @@ function Handle($line){
     if($t.StartsWith('.models ')){Refresh-ModelCaches (($t.Substring(8)).Trim());return}
     if($t -eq '.providers'){Show-Providers;return}
     if($t -eq '.auth' -or $t.StartsWith('.auth ')){Invoke-MiraAntigravityAuthCommand (($t.Substring(5)).Trim());return}
+    if($t -eq '.grounding' -or $t.StartsWith('.grounding ')){
+        $action='status'
+        if($t -match '^\.grounding\s+(on|off|status)$'){$action=$Matches[1].ToLowerInvariant()}
+        elseif($t -ne '.grounding'){W '[Usage: .grounding on|off|status]' Yellow;return}
+        if($action -eq 'on'){
+            if(-not $script:MiraGroundingAllowed){W '[grounding disabled by MIRA_DEFAULT_GROUNDING]' Yellow;return}
+            $script:MiraGroundingEnabled=$true
+        }elseif($action -eq 'off'){$script:MiraGroundingEnabled=$false}
+        $state=if($script:MiraGroundingEnabled){'on'}else{'off'}
+        W ('[grounding '+$state+'] native Google Search for Antigravity'+$(if(-not $script:MiraGroundingAllowed){' | globally disabled by MIRA_DEFAULT_GROUNDING'}else{''})) Cyan
+        return
+    }
     if($t -eq '.ui' -or $t -eq '.ui on' -or $t -eq '.ui off'){
         if(Handle-UiCommand $t){return}
     }
