@@ -63,6 +63,18 @@ Set the Gemini API key:
 $env:GEMINI_API_KEY="YOUR_KEY"
 ```
 
+Or use NVIDIA NIM with a key from the [NVIDIA API Catalog](https://build.nvidia.com/):
+
+```powershell
+$env:NVIDIA_API_KEY="YOUR_KEY"
+```
+
+Then, inside MIRA, select the documented Nemotron 3.5 Lightning model:
+
+```text
+.model nvidia:nvidia/nemotron-3.5-lightning-30b-a3b
+```
+
 Download:
 
 ```powershell
@@ -101,7 +113,7 @@ Or refresh one provider directly:
 .models antigravity
 ```
 
-Refresh uses providers with a non-empty API-key environment variable. Antigravity is refreshed separately when its OAuth token is present.
+Refresh uses providers with a non-empty API-key environment variable. Antigravity is refreshed separately when its OAuth token is present. NVIDIA uses the documented hosted text-chat model catalogue bundled with MIRA: the hosted API documents model-specific chat endpoints, but not a shared `/v1/models` discovery endpoint.
 
 MIRA filters returned catalogs using provider metadata when available and keeps a local cache.
 
@@ -134,6 +146,7 @@ Built-in providers:
 | OpenRouter | `OPENROUTER_API_KEY` |
 | Groq | `GROQ_API_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
+| NVIDIA NIM | `NVIDIA_API_KEY` |
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | Mistral | `MISTRAL_API_KEY` |
 | Together | `TOGETHER_API_KEY` |
@@ -322,7 +335,7 @@ Check state:
 
 ### Streaming and reasoning
 
-Streaming is **on by default** for Gemini, Antigravity, and OpenAI-compatible providers. Gemini and Antigravity use Google's SSE endpoint; toggle streaming with:
+Streaming is **on by default** for Gemini, Antigravity, NVIDIA NIM, and other OpenAI-compatible providers. Gemini and Antigravity use Google's SSE endpoint; NVIDIA uses its OpenAI-compatible SSE endpoint and exposes Nemotron reasoning through `reasoning_content`. Toggle streaming with:
 
 ```text
 .stream on
@@ -409,7 +422,7 @@ Show the raw JSON request:
 | `.copy` | Copy raw last response |
 | `.grab [name.txt]` | Save raw last response |
 | `.ui on/off` | Enable/disable renderer |
-| `.stream on/off` | Toggle Gemini, Antigravity, and OpenAI-compatible streaming |
+| `.stream on/off` | Toggle Gemini, Antigravity, NVIDIA NIM, and other OpenAI-compatible streaming |
 | `.reasoning on/off` | Toggle reasoning output |
 | `.enable-session [name]` | Start RAM-only session |
 | `.empty session` | Clear active session context |
@@ -482,6 +495,7 @@ GEMINI_API_KEY
 OPENROUTER_API_KEY
 GROQ_API_KEY
 OPENAI_API_KEY
+NVIDIA_API_KEY
 DEEPSEEK_API_KEY
 MISTRAL_API_KEY
 TOGETHER_API_KEY
@@ -511,7 +525,7 @@ No PS7-specific runtime requirement.
 
 ### Functional
 
-The current beta includes the native readline/TUI, built-in providers, API-key and Antigravity OAuth authentication, one-shot requests, RAM-only sessions that can be enabled on demand and exported to a file, session compression, persistent history, model-list caching and refresh, model probing, Markdown rendering, file/text/image input, clipboard screenshots, diffs, output saving/copying, Google and OpenAI-compatible streaming, reasoning display, request inspection and raw-response mode.
+The current beta includes the native readline/TUI, built-in providers, API-key and Antigravity OAuth authentication, one-shot requests, RAM-only sessions that can be enabled on demand and exported to a file, session compression, persistent history, model-list caching and refresh, model probing, Markdown rendering, file/text/image input, clipboard screenshots, diffs, output saving/copying, Google, NVIDIA NIM, and other OpenAI-compatible streaming, reasoning display, request inspection and raw-response mode.
 
 ### Not yet done
 
