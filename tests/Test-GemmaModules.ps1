@@ -113,6 +113,171 @@ if ($lineEditorSource -notmatch "openai:gpt-6-luna" -or
     throw 'The .model provider-qualified tab completions are incomplete.'
 }
 
+# The main Mira TUI and Gemma line editor must defer queued control keys rather
+# than consuming Tab as text or silently dropping it during fast paste bursts.
+$rootTuiPath = Join-Path $repoRoot 'mira.ps1'
+$rootTuiSource = Get-Content -LiteralPath $rootTuiPath -Raw -Encoding UTF8
+if ($rootTuiSource -notmatch '\$script:PendingTuiKeys\s*=\s*New-Object' -or
+    $rootTuiSource -notmatch 'PendingTuiKeys\.Dequeue\(\)' -or
+    [regex]::Matches($rootTuiSource,'PendingTuiKeys\.Enqueue\(\$p\)').Count -lt 2 -or
+    $rootTuiSource -match '\$buffer\s*=\s*\$buffer\.Insert\(\$cursor,"\u0060t"\)') {
+    throw 'The root TUI still loses queued Tab/control keys during input bursts.'
+}
+if ($rootTuiSource -notmatch '(?s)\$direction=if\(\$shift\)\{-1\}else\{1\}\s*Move-ModelMenu \$direction') {
+    throw 'The root TUI model completion menu does not support reverse Tab navigation.'
+}
+if ($lineEditorSource -notmatch '\$pendingKeys\s*=\s*New-Object' -or
+    $lineEditorSource -notmatch '\$pendingKeys\.Dequeue\(\)' -or
+    $lineEditorSource -notmatch '\$pendingKeys\.Enqueue\(\$pk\)' -or
+    $lineEditorSource -notmatch 'function Clear-GemCompletionMenu' -or
+    $lineEditorSource -notmatch 'Clear-GemCompletionMenu' -or
+    $lineEditorSource -match '\$row\s*=\s*\[Math\]::Min\(\$completionTop\s*\+\s*\$completionMenuHeight') {
+    throw 'Gemma completion input still drops control keys or leaves duplicate/stale menu rows.'
+}
+if ($lineEditorSource -notmatch '(?s)if \(\$k\.Key -eq \[ConsoleKey\]::Tab\) \{\s*\$direction = if \(\(\$k\.Modifiers -band \[ConsoleModifiers\]::Shift\)') {
+    throw 'Gemma completion menu does not support Tab/Shift+Tab navigation.'
+}
+
+# Exercise the root TUI model setter without starting its interactive console.
+$rootTuiTokens = $null
+$rootTuiErrors = $null
+$rootTuiAst = [System.Management.Automation.Language.Parser]::ParseFile($rootTuiPath,[ref]$rootTuiTokens,[ref]$rootTuiErrors)
+if ($rootTuiErrors.Count -gt 0) {
+    throw ('Root Mira TUI syntax error: ' + $rootTuiErrors[0].Message)
+}
+$setModelNode = $rootTuiAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-ModelSelection'
+},$true)
+$invokeProviderNode = $rootTuiAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-Provider'
+},$true)
+if ($null -eq $setModelNode -or $null -eq $invokeProviderNode) {
+    throw 'Root Mira TUI model selection/provider dispatch functions are missing.'
+}
+$invokeProviderSource = $invokeProviderNode.Extent.Text
+if ($invokeProviderSource -notmatch 'Get-Provider \$script:CurrentProviderName' -or
+    $invokeProviderSource -notmatch 'Build-OpenAICompatiblePayload \$provider \$messages \$script:CurrentModel' -or
+    $rootTuiSource -notmatch 'Add-UsedModel \$script:CurrentProviderName \$script:CurrentModel') {
+    throw 'Root Mira TUI request routing or provider-qualified model history is incomplete.'
+}
+
+$oldGetProvider = Get-Command Get-Provider -CommandType Function -ErrorAction SilentlyContinue
+$oldGetDefaultProviderModel = Get-Command Get-DefaultProviderModel -CommandType Function -ErrorAction SilentlyContinue
+$oldW = Get-Command W -CommandType Function -ErrorAction SilentlyContinue
+$oldSetModelSelection = Get-Command Set-ModelSelection -CommandType Function -ErrorAction SilentlyContinue
+$oldCurrentProviderName = Get-Variable CurrentProviderName -Scope Script -ErrorAction SilentlyContinue
+$oldCurrentModel = Get-Variable CurrentModel -Scope Script -ErrorAction SilentlyContinue
+try {
+    $script:TestTuiProviders = @(
+        [pscustomobject]@{ name='openai'; models=@([pscustomobject]@{ name='gpt-6-luna' }) }
+        [pscustomobject]@{ name='gemini'; models=@([pscustomobject]@{ name='gemini-3.1-flash-lite' }) }
+        [pscustomobject]@{ name='groq'; models=@([pscustomobject]@{ name='openai/gpt-oss-120b' }) }
+    )
+    Set-Item -Path Function:\Get-Provider -Value {
+        param([string]$name)
+        foreach ($provider in $script:TestTuiProviders) {
+            if ([string]$provider.name -ieq $name) { return $provider }
+        }
+        return $null
+    }
+    Set-Item -Path Function:\Get-DefaultProviderModel -Value {
+        param($provider)
+        if ($null -ne $provider.models -and @($provider.models).Count -gt 0) {
+            return [string]$provider.models[0].name
+        }
+        return ''
+    }
+    Set-Item -Path Function:\W -Value { param($Message,$Color) }
+    . ([scriptblock]::Create($setModelNode.Extent.Text))
+
+    $script:CurrentProviderName = 'gemini'
+    $script:CurrentModel = 'gemini-3.1-flash-lite'
+    if (-not (Set-ModelSelection 'openai:gpt-6-luna') -or
+        $script:CurrentProviderName -ne 'openai' -or
+        $script:CurrentModel -ne 'gpt-6-luna') {
+        throw 'Root .model provider-qualified selection did not switch both provider and model.'
+    }
+    if (-not (Set-ModelSelection 'groq') -or
+        $script:CurrentProviderName -ne 'groq' -or
+        $script:CurrentModel -ne 'openai/gpt-oss-120b') {
+        throw 'Root .model provider-only selection did not choose that provider’s default model.'
+    }
+} finally {
+    if ($null -ne $oldGetProvider) { Set-Item -Path Function:\Get-Provider -Value $oldGetProvider.ScriptBlock }
+    else { Remove-Item -Path Function:\Get-Provider -ErrorAction SilentlyContinue }
+    if ($null -ne $oldGetDefaultProviderModel) { Set-Item -Path Function:\Get-DefaultProviderModel -Value $oldGetDefaultProviderModel.ScriptBlock }
+    else { Remove-Item -Path Function:\Get-DefaultProviderModel -ErrorAction SilentlyContinue }
+    if ($null -ne $oldW) { Set-Item -Path Function:\W -Value $oldW.ScriptBlock }
+    else { Remove-Item -Path Function:\W -ErrorAction SilentlyContinue }
+    if ($null -ne $oldSetModelSelection) { Set-Item -Path Function:\Set-ModelSelection -Value $oldSetModelSelection.ScriptBlock }
+    else { Remove-Item -Path Function:\Set-ModelSelection -ErrorAction SilentlyContinue }
+    if ($null -ne $oldCurrentProviderName) { Set-Variable -Name CurrentProviderName -Scope Script -Value $oldCurrentProviderName.Value }
+    else { Remove-Variable -Name CurrentProviderName -Scope Script -ErrorAction SilentlyContinue }
+    if ($null -ne $oldCurrentModel) { Set-Variable -Name CurrentModel -Scope Script -Value $oldCurrentModel.Value }
+    else { Remove-Variable -Name CurrentModel -Scope Script -ErrorAction SilentlyContinue }
+    Remove-Variable -Name TestTuiProviders -Scope Script -ErrorAction SilentlyContinue
+}
+
+# Exercise the unified Gemma picker and prove each catalogue selection updates
+# both the active provider and model. No live model-list requests are made.
+$oldGemmaProvider = $script:Provider
+$oldGemmaModel = $script:MODEL
+$oldOpenAIApiKeys = @($script:OpenAIApiKeys)
+$oldGeminiApiKeys = @($script:GeminiApiKeys)
+$oldModelCatalogFunction = (Get-Command Get-GemmaModelCatalog -CommandType Function).ScriptBlock
+$oldAntigravityPathFunction = (Get-Command Get-AntigravityTokenPath -CommandType Function).ScriptBlock
+$script:TestAntigravityTokenPath = [IO.Path]::Combine([IO.Path]::GetTempPath(),'mira-antigravity-test-' + [guid]::NewGuid().ToString('N') + '.json')
+try {
+    $script:OpenAIApiKeys = @('unit-test-openai-key')
+    $script:GeminiApiKeys = @('unit-test-gemini-key')
+    [IO.File]::WriteAllText($script:TestAntigravityTokenPath,'{}')
+    Set-Item -Path Function:\Get-GemmaModelCatalog -Value {
+        return [pscustomobject]@{
+            Models = @(
+                [pscustomobject]@{ name='gemini-test-model'; provider='gemini' }
+                [pscustomobject]@{ name='agy-test-model'; provider='antigravity' }
+            )
+            ProviderStatuses = @{}
+        }
+    }
+    Set-Item -Path Function:\Get-AntigravityTokenPath -Value {
+        return $script:TestAntigravityTokenPath
+    }
+
+    Invoke-GemmaModelPicker -RequestedModel 'openai:gpt-6-luna'
+    if ($script:Provider -ne 'openai' -or $script:MODEL -ne 'gpt-6-luna') {
+        throw 'Gemma .model openai:gpt-6-luna did not switch to OpenAI.'
+    }
+    Invoke-GemmaModelPicker -RequestedModel 'gemini:gemini-test-model'
+    if ($script:Provider -ne 'gemini' -or $script:MODEL -ne 'gemini-test-model') {
+        throw 'Gemma .model gemini:model did not switch to Google AI Studio API.'
+    }
+    Invoke-GemmaModelPicker -RequestedModel 'antigravity:agy-test-model'
+    if ($script:Provider -ne 'antigravity' -or $script:MODEL -ne 'agy-test-model') {
+        throw 'Gemma .model antigravity:model did not switch to Antigravity.'
+    }
+} finally {
+    $script:Provider = $oldGemmaProvider
+    $script:MODEL = $oldGemmaModel
+    $script:OpenAIApiKeys = $oldOpenAIApiKeys
+    $script:GeminiApiKeys = $oldGeminiApiKeys
+    Set-Item -Path Function:\Get-GemmaModelCatalog -Value $oldModelCatalogFunction
+    Set-Item -Path Function:\Get-AntigravityTokenPath -Value $oldAntigravityPathFunction
+    if (Test-Path -LiteralPath $script:TestAntigravityTokenPath) {
+        Remove-Item -LiteralPath $script:TestAntigravityTokenPath -Force
+    }
+    Remove-Variable -Name TestAntigravityTokenPath -Scope Script -ErrorAction SilentlyContinue
+}
+
+$turnRoutingSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\agent\Turn.ps1') -Raw -Encoding UTF8
+if ($turnRoutingSource -notmatch '\$usingOpenAI\s*=\s*\(\$script:Provider -eq ''openai''\)' -or
+    $turnRoutingSource -notmatch '\$usingAntigravityOAuth\s*=\s*\(\$script:Provider -eq ''antigravity''\)' -or
+    $turnRoutingSource -notmatch 'Build-GeminiPayload -SystemInstruction') {
+    throw 'Gemma request execution does not route from the active model picker provider.'
+}
+
 if ($MIRA_DEFAULT_PROVIDER -notin @('antigravity','gemini')) {
     throw 'Gemma defaults did not initialize a supported provider.'
 }
