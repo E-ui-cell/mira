@@ -16,7 +16,7 @@ $script:MiraSettings = [ordered]@{
     UiRendering = $false
     Streaming = $true
 
-    # Display provider-supplied thought summaries. NVIDIA thinking is disabled when false.
+    # Display provider-supplied thought summaries. NVIDIA false disables Nemotron 3.5 Lightning thinking.
     ReasoningOutput = [ordered]@{
         gemini = $true
         antigravity = $true
