@@ -4431,8 +4431,15 @@ function Read-Line {
                     $p=Read-Key
                     if($p.Key -eq [ConsoleKey]::Enter -or $p.KeyChar -eq [char]13 -or $p.KeyChar -eq [char]10){
                         if($p.KeyChar -eq [char]10 -and $buffer.EndsWith("`n")){continue}
-                        if($buffer.EndsWith("`r")){$buffer=$buffer.TrimEnd([char]13)}
-                        $buffer=$buffer.Insert($cursor,"`n");++$cursor;continue
+                        # A queued CR/LF followed by more input is a multiline-paste separator.
+                        # Otherwise replay Enter so the main loop submits the prompt.
+                        if(Available){
+                            if($buffer.EndsWith("`r")){$buffer=$buffer.TrimEnd([char]13)}
+                            $buffer=$buffer.Insert($cursor,"`n");++$cursor;continue
+                        }
+                        if($null -eq $script:PendingTuiKeys){$script:PendingTuiKeys=New-Object 'System.Collections.Generic.Queue[object]'}
+                        [void]$script:PendingTuiKeys.Enqueue($p)
+                        break
                     }
                     if([Char]::IsControl($p.KeyChar)){
                         if($null -eq $script:PendingTuiKeys){$script:PendingTuiKeys=New-Object 'System.Collections.Generic.Queue[object]'}
@@ -6705,8 +6712,15 @@ function Read-Line {
                     $p=Read-Key
                     if($p.Key -eq [ConsoleKey]::Enter -or $p.KeyChar -eq [char]13 -or $p.KeyChar -eq [char]10){
                         if($p.KeyChar -eq [char]10 -and $buffer.EndsWith("`n")){continue}
-                        if($buffer.EndsWith("`r")){$buffer=$buffer.TrimEnd([char]13)}
-                        $buffer=$buffer.Insert($cursor,"`n");++$cursor;continue
+                        # A queued CR/LF followed by more input is a multiline-paste separator.
+                        # Otherwise replay Enter so the main loop submits the prompt.
+                        if(Available){
+                            if($buffer.EndsWith("`r")){$buffer=$buffer.TrimEnd([char]13)}
+                            $buffer=$buffer.Insert($cursor,"`n");++$cursor;continue
+                        }
+                        if($null -eq $script:PendingTuiKeys){$script:PendingTuiKeys=New-Object 'System.Collections.Generic.Queue[object]'}
+                        [void]$script:PendingTuiKeys.Enqueue($p)
+                        break
                     }
                     if([Char]::IsControl($p.KeyChar)){
                         if($null -eq $script:PendingTuiKeys){$script:PendingTuiKeys=New-Object 'System.Collections.Generic.Queue[object]'}
