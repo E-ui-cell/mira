@@ -30,6 +30,9 @@ $functionNames = @(
     'Build-OpenAICompatiblePayload',
     'Refresh-ProviderModelList',
     'New-MiraAntigravityEnvelope',
+    'Get-MiraReasoningOutputEnabled',
+    'Set-MiraReasoningOutputEnabled',
+    'Build-GeminiPayload',
     'ConvertFrom-MiraGoogleStreamEvent',
     'Get-MiraAntigravityModels',
     'Show-Response'
@@ -50,6 +53,11 @@ Assert-MiraTest ($script:MiraSettings.DefaultProvider -eq 'gemini') 'default pro
 Assert-MiraTest ($script:MiraSettings.DefaultModel -eq 'gemini-flash-lite-latest') 'default model changed unexpectedly'
 Assert-MiraTest ($script:MiraSettings.UiRendering -eq $false) 'UI rendering must default off'
 Assert-MiraTest ($script:MiraSettings.Streaming -eq $true) 'streaming must default on'
+Assert-MiraTest ($script:MiraSettings.ReasoningOutput['gemini'] -eq $true) 'Google AI Studio thought output must be enabled in provider settings'
+Assert-MiraTest ($script:MiraSettings.ReasoningOutput['antigravity'] -eq $true) 'Antigravity thought output must be enabled in provider settings'
+Assert-MiraTest ($script:MiraSettings.ReasoningOutput['nvidia'] -eq $false) 'NVIDIA reasoning must default off to preserve the answer token budget'
+Assert-MiraTest ($script:MiraSettings.NvidiaReasoningBudget -eq 4096) 'NVIDIA reasoning budget must be independently configurable'
+Assert-MiraTest (-not $source.Contains('ShowReasoning')) 'global ShowReasoning setting must be removed'
 Assert-MiraTest ($script:MiraSettings.SessionEnabled -eq $false) 'RAM session must remain disabled by default'
 Assert-MiraTest ($source.Contains('$script:SessionActive = [bool]$script:MiraSettings.SessionEnabled')) 'startup session state must follow SessionEnabled'
 Assert-MiraTest ($source.Contains("`$script:SessionName = if(`$script:SessionActive){'temp'}else{''}")) 'enabled startup session must receive the default temp name'
@@ -62,6 +70,19 @@ $googleStreamAst = $ast.Find({param($node) $node -is [System.Management.Automati
 Assert-MiraTest ($null -ne $googleStreamAst) 'Google SSE streaming function is missing'
 
 $script:Providers = @(New-BuiltinProviders)
+$script:CurrentProviderName = 'gemini'
+$geminiMessages = @([pscustomobject]@{role='user';text='hello';parts=$null})
+$geminiThoughtPayload = Build-GeminiPayload $geminiMessages '' 'gemini'
+Assert-MiraTest ($geminiThoughtPayload.generationConfig.thinkingConfig.includeThoughts -eq $true) 'Google AI Studio payload did not request thought summaries'
+$antigravityThoughtPayload = Build-GeminiPayload $geminiMessages '' 'antigravity'
+Assert-MiraTest ($antigravityThoughtPayload.generationConfig.thinkingConfig.includeThoughts -eq $true) 'Antigravity payload did not request thought summaries'
+Assert-MiraTest ((Set-MiraReasoningOutputEnabled 'gemini' $false) -eq $true) 'Google thought output setting could not be changed'
+$geminiNoThoughtPayload = Build-GeminiPayload $geminiMessages '' 'gemini'
+Assert-MiraTest ($null -eq $geminiNoThoughtPayload.generationConfig) 'disabled Google thought output still requested thought summaries'
+Assert-MiraTest ((Set-MiraReasoningOutputEnabled 'gemini' $true) -eq $true) 'Google thought output setting could not be restored'
+Assert-MiraTest ((Set-MiraReasoningOutputEnabled 'nvidia' $true) -eq $true) 'NVIDIA thought output setting could not be enabled independently'
+Assert-MiraTest ((Get-MiraReasoningOutputEnabled 'gemini') -eq $true) 'changing NVIDIA reasoning unexpectedly changed Gemini reasoning'
+Assert-MiraTest ((Set-MiraReasoningOutputEnabled 'nvidia' $false) -eq $true) 'NVIDIA thought output setting could not be disabled'
 $antigravity = Get-Provider 'antigravity'
 Assert-MiraTest ($null -ne $antigravity) 'Antigravity is missing from the provider registry'
 Assert-MiraTest ($antigravity.type -eq 'antigravity') 'Antigravity has the wrong provider type'
@@ -116,15 +137,20 @@ try{
     Assert-MiraTest ($nvidiaRefresh.KeyName -eq $nvidiaKeyName) 'NVIDIA catalogue refresh lost the selected key name'
     Assert-MiraTest ($script:CapturedNvidiaModels -contains 'nvidia/nemotron-3.5-lightning-30b-a3b') 'NVIDIA catalogue refresh omitted the default chat model'
     $script:StreamResponses = $true
-    $script:ShowReasoning = $true
+    $script:MiraSettings.ReasoningOutput['nvidia'] = $false
     $nvidiaMessages = @([pscustomobject]@{role='user';text='hello';parts=$null;reasoning_details=$null})
+    $nvidiaDisabledPayload = Build-OpenAICompatiblePayload $nvidia $nvidiaMessages 'nvidia/nemotron-3.5-lightning-30b-a3b' ''
+    Assert-MiraTest ($nvidiaDisabledPayload.chat_template_kwargs.enable_thinking -eq $false) 'NVIDIA Nemotron 3.5 thinking was not explicitly disabled when thought output is off'
+    Assert-MiraTest ($null -eq $nvidiaDisabledPayload.reasoning_budget) 'NVIDIA reasoning budget was sent while thinking is disabled'
+    $script:MiraSettings.ReasoningOutput['nvidia'] = $true
     $nvidiaPayload = Build-OpenAICompatiblePayload $nvidia $nvidiaMessages 'nvidia/nemotron-3.5-lightning-30b-a3b' ''
     Assert-MiraTest ($nvidiaPayload.chat_template_kwargs.enable_thinking -eq $true) 'NVIDIA Nemotron 3.5 reasoning control was not mapped to chat_template_kwargs'
-    Assert-MiraTest ($nvidiaPayload.reasoning_budget -eq 16384) 'NVIDIA Nemotron 3.5 reasoning budget was not configured'
+    Assert-MiraTest ($nvidiaPayload.reasoning_budget -eq 4096) 'NVIDIA Nemotron 3.5 reasoning budget was not configured from settings'
     Assert-MiraTest ($null -eq $nvidiaPayload.reasoning) 'Generic reasoning.enabled leaked into the NVIDIA request'
 }finally{
     [Environment]::SetEnvironmentVariable($nvidiaKeyName,$oldNvidiaKey,[EnvironmentVariableTarget]::Process)
     $script:MiraSettings.ApiKeyEnvironmentVariables['nvidia'] = @('NVIDIA_API_KEY')
+    $script:MiraSettings.ReasoningOutput['nvidia'] = $false
 }
 
 # The Antigravity adapter must create its own envelope without mutating the
@@ -150,7 +176,8 @@ Assert-MiraTest ($defaultEnvelope.request.systemInstruction.parts[0].text -eq $s
 
 $eventJson = '{"candidates":[{"content":{"parts":[{"text":"Hello"},{"text":" world"},{"text":"hidden thought","thought":true}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":2}}'
 $event = ConvertFrom-MiraGoogleStreamEvent -EventJson $eventJson
-Assert-MiraTest ($event.Text -eq 'Hello world') 'Google SSE parser did not assemble text parts or filtered thought text incorrectly'
+Assert-MiraTest ($event.Text -eq 'Hello world') 'Google SSE parser did not assemble answer text separately from thoughts'
+Assert-MiraTest ($event.Reasoning -eq 'hidden thought') 'Google SSE parser did not extract thought-summary parts'
 Assert-MiraTest ($event.FinishReason -eq 'STOP') 'Google SSE parser did not read finishReason'
 Assert-MiraTest ($event.PromptTokens -eq 11 -and $event.CompletionTokens -eq 2) 'Google SSE parser did not read usage metadata'
 $nvidiaResponse = [pscustomobject]@{
@@ -165,6 +192,7 @@ Assert-MiraTest ($nvidiaParsed.Text -eq 'NVIDIA answer') 'NVIDIA-compatible resp
 Assert-MiraTest ($nvidiaParsed.Reasoning -eq 'NVIDIA reasoning') 'NVIDIA reasoning_content was not parsed'
 Assert-MiraTest ($nvidiaParsed.PromptTokens -eq 5 -and $nvidiaParsed.CompletionTokens -eq 9) 'NVIDIA token usage was not parsed'
 Assert-MiraTest ($source.Contains('$delta.reasoning_content')) 'NVIDIA streaming reasoning_content parser is missing'
+Assert-MiraTest ($source.Contains('$event.Reasoning')) 'Google streaming thought-summary renderer is missing'
 
 # Stub the three network/auth dependencies to test account model-catalog parsing
 # without contacting Google or requiring user credentials.
@@ -187,13 +215,17 @@ $geminiResponse = [pscustomobject]@{
     usageMetadata = [pscustomobject]@{promptTokenCount=7;candidatesTokenCount=3}
     candidates = @(
         [pscustomobject]@{
-            content = [pscustomobject]@{parts=@([pscustomobject]@{text='Antigravity reply'})}
+            content = [pscustomobject]@{parts=@(
+                [pscustomobject]@{text='Antigravity thought';thought=$true},
+                [pscustomobject]@{text='Antigravity reply'}
+            )}
             finishReason = 'STOP'
         }
     )
 }
 $parsed = Show-Response $geminiResponse 'antigravity'
 Assert-MiraTest ($parsed.Text -eq 'Antigravity reply') 'Antigravity Gemini-compatible response text was not parsed'
+Assert-MiraTest ($parsed.Reasoning -eq 'Antigravity thought') 'Antigravity Gemini thought summary was not parsed separately'
 Assert-MiraTest ($parsed.PromptTokens -eq 7 -and $parsed.CompletionTokens -eq 3) 'Antigravity usage metadata was not parsed'
 
 Write-Host 'MIRA provider configuration, Antigravity adapter, and NVIDIA NIM tests passed.' -ForegroundColor Green
