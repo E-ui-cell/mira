@@ -30,6 +30,7 @@ $script:MiraSettings = [ordered]@{
         openrouter  = @('OPENROUTER_API_KEY')
         groq        = @('GROQ_API_KEY')
         openai      = @('OPENAI_API_KEY')
+        nvidia      = @('NVIDIA_API_KEY')
         deepseek    = @('DEEPSEEK_API_KEY')
         mistral     = @('MISTRAL_API_KEY')
         together    = @('TOGETHER_API_KEY')
@@ -149,7 +150,7 @@ $script:ModelMenuIndex = 0
 $script:ModelMenuTyped = ''
 
 $script:Commands = @(
-    '.help','.clear','.clear history','.history','.history persist on','.history persist off','.file','.read','.diff','.shot','.model','.models','.models test','.models antigravity','.providers','.auth','.auth login','.auth status','.auth logout','.request','.request json','.save','.copy','.grab','.ui','.stream','.reasoning','.enable-session','.export-session','.empty session','.compress session','.delete session','.q',':q',':wq'
+    '.help','.clear','.clear history','.history','.history persist on','.history persist off','.file','.read','.diff','.shot','.model','.models','.models test','.models antigravity','.models nvidia','.providers','.auth','.auth login','.auth status','.auth logout','.request','.request json','.save','.copy','.grab','.ui','.stream','.reasoning','.enable-session','.export-session','.empty session','.compress session','.delete session','.q',':q',':wq'
 )
 
 # -----------------------------------------------------------------------------
@@ -913,6 +914,19 @@ function New-BuiltinProviders(){
             [pscustomobject]@{category='HARM_CATEGORY_JAILBREAK';threshold='BLOCK_NONE'}
         ); models=@([pscustomobject]@{name='gemini-flash-lite-latest'})}
         [pscustomobject]@{name='antigravity';type='antigravity';api_base=[string]$script:MiraSettings.AntigravityOAuth.ApiBase;api_key_env='';api_key_envs=@();models=@()}
+        [pscustomobject]@{name='nvidia';type='openai-compatible';api_base='https://integrate.api.nvidia.com/v1';api_key_env=([string]$keys['nvidia'][0]);api_key_envs=@($keys['nvidia']);models=@(
+            [pscustomobject]@{name='nvidia/nemotron-3.5-lightning-30b-a3b'}
+            [pscustomobject]@{name='nvidia/nemotron-3.5-bolt-e4b'}
+            [pscustomobject]@{name='nvidia/nemotron-3-nano-30b-a3b'}
+            [pscustomobject]@{name='nvidia/nemotron-3-super-120b-a12b'}
+            [pscustomobject]@{name='nvidia/nemotron-3-ultra-550b-a55b'}
+            [pscustomobject]@{name='nvidia/llama-3.3-nemotron-super-49b-v1.5'}
+            [pscustomobject]@{name='nvidia/llama-3.3-nemotron-super-49b-v1'}
+            [pscustomobject]@{name='nvidia/llama-3.1-nemotron-ultra-253b-v1'}
+            [pscustomobject]@{name='nvidia/nvidia-nemotron-nano-9b-v2'}
+            [pscustomobject]@{name='nvidia/riva-translate-4b-instruct-v2'}
+            [pscustomobject]@{name='nvidia/usdcode'}
+        )}
         [pscustomobject]@{name='openrouter'; type='openai-compatible'; api_base='https://openrouter.ai/api/v1';                     api_key_env=([string]$keys['openrouter'][0]); api_key_envs=@($keys['openrouter']); headers=[pscustomobject]@{'HTTP-Referer'='http://localhost';'X-Title'='Mira-TUI'}; models=@([pscustomobject]@{name='nvidia/nemotron-3-super-120b-a12b:free'})}
         [pscustomobject]@{name='groq';      type='openai-compatible'; api_base='https://api.groq.com/openai/v1';                    api_key_env=([string]$keys['groq'][0]);      api_key_envs=@($keys['groq']);      models=@([pscustomobject]@{name='openai/gpt-oss-120b'})}
         [pscustomobject]@{name='openai';    type='openai-compatible'; api_base='https://api.openai.com/v1';                         api_key_env=([string]$keys['openai'][0]);    api_key_envs=@($keys['openai']);    models=@()}
@@ -1451,6 +1465,16 @@ function Refresh-ProviderModelList($provider){
     $refreshKey=Get-ProviderRefreshKey $provider
     if($null -eq $refreshKey){return $null}
     $apiKey=[string]$refreshKey.Value
+    if($name -ieq 'nvidia'){
+        # Hosted NVIDIA API Catalog documents model-specific chat endpoints,
+        # not a shared /v1/models discovery route. Cache its documented chat list.
+        foreach($item in @($provider.models)){
+            $id=[string]$item.name
+            if(-not [string]::IsNullOrWhiteSpace($id)){[void]$models.Add($id)}
+        }
+        $path=Write-ProviderModelCache $provider $models.ToArray()
+        return [pscustomobject]@{Provider=$name;Count=$models.Count;Path=$path;KeyName=$refreshKey.Name}
+    }
     $headers=Get-ModelListHeaders $provider $apiKey
 
     if($name -ieq 'openrouter'){
@@ -2062,7 +2086,14 @@ function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary){
         $msg += $entry
     }
     $payload=[ordered]@{model=$model;messages=$msg;stream=$script:StreamResponses}
-    if($script:ShowReasoning){$payload.reasoning=[ordered]@{enabled=$true}}
+    if($script:ShowReasoning){
+        if(([string]$provider.name -ieq 'nvidia') -and ([string]$model -ieq 'nvidia/nemotron-3.5-lightning-30b-a3b')){
+            $payload.chat_template_kwargs=[ordered]@{enable_thinking=$true}
+            $payload.reasoning_budget=16384
+        }elseif([string]$provider.name -ine 'nvidia'){
+            $payload.reasoning=[ordered]@{enabled=$true}
+        }
+    }
     return $payload
 }
 
@@ -2272,8 +2303,11 @@ function Send-OpenAICompatibleStream($provider,$model,$payload){
             $choice=$choices[0];$delta=$choice.delta;$finish=[string]$choice.finish_reason
             if($null -eq $delta){$lineTask=$reader.ReadLineAsync();continue}
 
-            if($null -ne $delta.reasoning -and -not [string]::IsNullOrEmpty([string]$delta.reasoning)){
-                $rText=[string]$delta.reasoning;[void]$reasoning.Append($rText)
+            $rText=''
+            if($null -ne $delta.reasoning_content -and -not [string]::IsNullOrEmpty([string]$delta.reasoning_content)){$rText=[string]$delta.reasoning_content}
+            elseif($null -ne $delta.reasoning -and -not [string]::IsNullOrEmpty([string]$delta.reasoning)){$rText=[string]$delta.reasoning}
+            if(-not [string]::IsNullOrEmpty($rText)){
+                [void]$reasoning.Append($rText)
                 if($script:ShowReasoning){
                     if(-not $startedOutput){Suspend-MiraRequestUi;$startedOutput=$true}
                     if(-not $showThought){W '[THOUGHT]' DarkGray;$showThought=$true}
@@ -4280,7 +4314,8 @@ function Show-Response($response,$providerType){
             }
             $reply=$chunks -join ''
         }
-        if($null -ne $choice.message.reasoning){$reasoning=[string]$choice.message.reasoning}
+        if($null -ne $choice.message.reasoning_content -and -not [string]::IsNullOrEmpty([string]$choice.message.reasoning_content)){$reasoning=[string]$choice.message.reasoning_content}
+        elseif($null -ne $choice.message.reasoning){$reasoning=[string]$choice.message.reasoning}
         if($null -ne $choice.message.reasoning_details){$reasoningDetails=@($choice.message.reasoning_details)}
     }
     $finish=[string]$choice.finish_reason
@@ -4428,7 +4463,7 @@ function Help(){
     W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
     W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
     Show-ApiKeyStatus
-    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <provider>         refresh one provider model list' DarkGray; W '  .models <Tab>              refresh all configured providers; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live Gemini/Antigravity and OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
+    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <provider>         refresh one provider model list' DarkGray; W '  .models <Tab>              refresh all configured providers; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live Gemini/Antigravity, NVIDIA NIM, and other OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
 }
 
 function Add-Message($role,$text,$reasoningDetails=$null,$parts=$null){
@@ -6585,7 +6620,8 @@ function Show-Response($response,$providerType){
             }
             $reply=$chunks -join ''
         }
-        if($null -ne $choice.message.reasoning){$reasoning=[string]$choice.message.reasoning}
+        if($null -ne $choice.message.reasoning_content -and -not [string]::IsNullOrEmpty([string]$choice.message.reasoning_content)){$reasoning=[string]$choice.message.reasoning_content}
+        elseif($null -ne $choice.message.reasoning){$reasoning=[string]$choice.message.reasoning}
         if($null -ne $choice.message.reasoning_details){$reasoningDetails=@($choice.message.reasoning_details)}
     }
     $finish=[string]$choice.finish_reason
@@ -6733,7 +6769,7 @@ function Help(){
     W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
     W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
     Show-ApiKeyStatus
-    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <provider>         refresh one provider model list' DarkGray; W '  .models <Tab>              refresh all configured providers; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live Gemini/Antigravity and OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
+    W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <provider>         refresh one provider model list' DarkGray; W '  .models <Tab>              refresh all configured providers; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live Gemini/Antigravity, NVIDIA NIM, and other OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          enable provider reasoning output' DarkGray; W ''
 }
 
 function Add-Message($role,$text,$reasoningDetails=$null,$parts=$null){
