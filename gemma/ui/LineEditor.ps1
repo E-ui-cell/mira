@@ -124,13 +124,11 @@ function Read-GemLineConsole {
             $totalRows += $rowsForLine
         }
 
-        # Keep the newest input rows visible when a long prompt exceeds
-        # the console buffer. The logical buffer remains complete and editable.
+        # Clear the previous and new physical rows, including wrapped long lines.
         $clearRows = [Math]::Max($renderedRows,$totalRows)
-        $visibleRowOffset = [Math]::Max(0,$row + $clearRows - [Console]::BufferHeight)
         for ($i = 0; $i -lt $clearRows; $i++) {
-            $targetRow = $row + $i - $visibleRowOffset
-            if ($targetRow -lt 0 -or $targetRow -ge [Console]::BufferHeight) { continue }
+            $targetRow = $row + $i
+            if ($targetRow -ge [Console]::BufferHeight) { break }
             [Console]::SetCursorPosition(0,$targetRow)
             [Console]::Write((' ' * $usable))
         }
@@ -141,8 +139,8 @@ function Read-GemLineConsole {
             $startColumn = if ($i -eq 0) { $prompt } else { 0 }
             $firstCapacity = [Math]::Max(1,$usable - $startColumn)
             $offset = 0
-            $physicalRow = $row + $rowOffsets[$i] - $visibleRowOffset
-            if ($i -eq 0 -and $physicalRow -ge 0 -and $physicalRow -lt [Console]::BufferHeight) {
+            $physicalRow = $row + $rowOffsets[$i]
+            if ($i -eq 0 -and $physicalRow -lt [Console]::BufferHeight) {
                 [Console]::SetCursorPosition(0,$physicalRow)
                 [Console]::Write($promptText)
             }
@@ -150,7 +148,7 @@ function Read-GemLineConsole {
                 $column = if ($offset -eq 0) { $startColumn } else { 0 }
                 $capacity = if ($offset -eq 0) { $firstCapacity } else { $usable }
                 $count = [Math]::Min($capacity,$value.Length - $offset)
-                if ($physicalRow -ge 0 -and $physicalRow -lt [Console]::BufferHeight) {
+                if ($physicalRow -lt [Console]::BufferHeight) {
                     [Console]::SetCursorPosition($column,$physicalRow)
                     [Console]::Write($value.Substring($offset,$count))
                 }
@@ -177,8 +175,7 @@ function Read-GemLineConsole {
             $cursorRowOffset = 1 + [int][Math]::Floor($afterFirst / [double]$usable)
             $cursorColumn = $afterFirst % $usable
         }
-        $cursorRow = $row + $rowOffsets[$lineIndex] + $cursorRowOffset - $visibleRowOffset
-        $cursorRow = [Math]::Max(0,[Math]::Min($cursorRow,[Console]::BufferHeight - 1))
+        $cursorRow = [Math]::Min($row + $rowOffsets[$lineIndex] + $cursorRowOffset,[Console]::BufferHeight - 1)
         [Console]::SetCursorPosition([Math]::Min($cursorColumn,$usable - 1),$cursorRow)
         $renderedRows = [Math]::Max(1,$totalRows)
     }
@@ -645,30 +642,8 @@ function Read-GemLineConsole {
             continue
         }
 
-        # Ctrl+V reads the Windows text clipboard. Normalize newline forms
-        # and insert the entire paste as one undoable edit.
-        if ($ctrl -and $k.Key -eq [ConsoleKey]::V) {
-            try {
-                $pasteText = [string](Get-Clipboard -Raw -ErrorAction Stop)
-                if (-not [string]::IsNullOrEmpty($pasteText)) {
-                    $pasteText = $pasteText -replace "`r`n|`r|`n", "`n"
-                    $pasteText = $pasteText.Replace([string][char]0,'')
-                    Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
-                    $old = $b
-                    $b = $b.Insert($c,$pasteText)
-                    $c += $pasteText.Length
-                    $script:MiraHistoryIndex = -1
-                    $historySearchTerm = $null
-                    Redraw $old $b $c
-                }
-            } catch {
-                [Console]::Beep(700,60)
-            }
-            continue
-        }
-
-        # Ctrl+Q inserts the next key literally.
-        if ($ctrl -and $k.Key -eq [ConsoleKey]::Q) {
+        # Ctrl+V/Ctrl+Q insert the next key literally.
+        if ($ctrl -and ($k.Key -eq [ConsoleKey]::V -or $k.Key -eq [ConsoleKey]::Q)) {
             $quoted = [Console]::ReadKey($true)
             $insertText = [string]$quoted.KeyChar
             if ($quoted.Key -eq [ConsoleKey]::Enter -or $quoted.KeyChar -eq [char]13 -or $quoted.KeyChar -eq [char]10) {
