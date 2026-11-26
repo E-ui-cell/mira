@@ -642,8 +642,30 @@ function Read-GemLineConsole {
             continue
         }
 
-        # Ctrl+V/Ctrl+Q insert the next key literally.
-        if ($ctrl -and ($k.Key -eq [ConsoleKey]::V -or $k.Key -eq [ConsoleKey]::Q)) {
+        # Ctrl+V reads the Windows text clipboard. Normalize newline forms
+        # and insert the entire paste as one undoable edit.
+        if ($ctrl -and $k.Key -eq [ConsoleKey]::V) {
+            try {
+                $pasteText = [string](Get-Clipboard -Raw -ErrorAction Stop)
+                if (-not [string]::IsNullOrEmpty($pasteText)) {
+                    $pasteText = $pasteText -replace "`r`n|`r|`n", "`n"
+                    $pasteText = $pasteText.Replace([string][char]0,'')
+                    Add-GemUndoSnapshot -Stack $undoStack -Buffer $b -Cursor $c
+                    $old = $b
+                    $b = $b.Insert($c,$pasteText)
+                    $c += $pasteText.Length
+                    $script:MiraHistoryIndex = -1
+                    $historySearchTerm = $null
+                    Redraw $old $b $c
+                }
+            } catch {
+                [Console]::Beep(700,60)
+            }
+            continue
+        }
+
+        # Ctrl+Q inserts the next key literally.
+        if ($ctrl -and $k.Key -eq [ConsoleKey]::Q) {
             $quoted = [Console]::ReadKey($true)
             $insertText = [string]$quoted.KeyChar
             if ($quoted.Key -eq [ConsoleKey]::Enter -or $quoted.KeyChar -eq [char]13 -or $quoted.KeyChar -eq [char]10) {
