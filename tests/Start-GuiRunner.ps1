@@ -169,9 +169,23 @@ Write-Host "OpenSSH daemon started directly (PID $($sshdProcess.Id)) and is list
 $testKeyBase = Join-Path $env:TEMP ('mira-ssh-smoke-' + [Guid]::NewGuid().ToString('N'))
 $testPublicKey = $null
 try {
-    & $keygenExe -q -t ed25519 -N '' -f $testKeyBase
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Could not generate the temporary SSH smoke-test key.'
+    # Windows PowerShell 5.1 drops an empty native argument in direct invocation.
+    # Build the Windows command line explicitly so ssh-keygen receives -N "".
+    $keygenStartInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $keygenStartInfo.FileName = $keygenExe
+    $keygenStartInfo.Arguments = '-q -t ed25519 -N "" -f "' + $testKeyBase + '"'
+    $keygenStartInfo.UseShellExecute = $false
+    $keygenStartInfo.CreateNoWindow = $true
+    $keygenProcess = [System.Diagnostics.Process]::Start($keygenStartInfo)
+    try {
+        $keygenProcess.WaitForExit()
+        $keygenExitCode = $keygenProcess.ExitCode
+    }
+    finally {
+        $keygenProcess.Dispose()
+    }
+    if ($keygenExitCode -ne 0) {
+        throw "Could not generate the temporary SSH smoke-test key (ssh-keygen exit code $keygenExitCode)."
     }
 
     $testPublicKey = (& $keygenExe -y -f $testKeyBase | Out-String).Trim()
