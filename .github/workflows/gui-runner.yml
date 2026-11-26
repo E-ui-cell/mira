@@ -1,0 +1,32 @@
+name: Temporary Windows GUI runner
+
+on:
+  push:
+    branches:
+      - thin
+
+concurrency:
+  group: mira-temporary-gui-runner
+  cancel-in-progress: true
+
+jobs:
+  gui-runner:
+    if: contains(github.event.head_commit.message, '[gui-runner]')
+    runs-on: windows-2022
+    timeout-minutes: 55
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout thin
+        uses: actions/checkout@v4
+
+      - name: Validate runner scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\tests\Gui-Smoke.ps1
+          .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\tests\Start-GuiRunner.ps1
+
+      - name: Start temporary SSH and VNC desktop
+        shell: powershell
+        run: .\tests\Start-GuiRunner.ps1
