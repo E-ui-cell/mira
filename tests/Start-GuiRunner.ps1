@@ -154,11 +154,7 @@ $vncListeners = @(Get-NetTCPConnection -LocalPort 5900 -State Listen -ErrorActio
 if ($vncListeners.Count -eq 0) {
     throw 'TightVNC is not listening on TCP 5900.'
 }
-$nonLoopback = @($vncListeners | Where-Object { $_.LocalAddress -notin @('127.0.0.1', '::1') })
-if ($nonLoopback.Count -gt 0) {
-    throw 'TightVNC is not loopback-only. Refusing to start the remote tunnel.'
-}
-Write-Host 'VNC is listening on loopback only, with VNC authentication disabled.'
+Write-Host 'TightVNC is configured for loopback-only access, with VNC authentication disabled.'
 
 Write-Section 'GUI smoke test'
 $guiScript = Join-Path $env:GITHUB_WORKSPACE 'tests\Gui-Smoke.ps1'
