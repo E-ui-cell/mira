@@ -2157,18 +2157,20 @@ function Build-GeminiPayload($messages,$summary,[string]$providerName='gemini',[
         $functionDeclarations=@(
             [ordered]@{
                 name='cmd'
-                description='Run a command through Windows cmd.exe. Use for cmd.exe built-ins and Windows command-line utilities.'
+                description='Run a command through Windows cmd.exe. Use for cmd.exe built-ins and Windows command-line utilities. Set elevated=true only when Administrator privileges are required; Windows UAC approval is always required.'
                 parameters=[ordered]@{type='OBJECT';properties=[ordered]@{
                     command=[ordered]@{type='STRING';description='The command line to execute.'}
                     working_directory=[ordered]@{type='STRING';description='Optional working directory. Defaults to the current MIRA directory.'}
+                    elevated=[ordered]@{type='BOOLEAN';description='Set true only when Administrator privileges are required. MIRA starts an elevated shell through Windows UAC. UAC approval is always required, including auto permission mode. Defaults to false.'}
                 };required=@('command')}
             },
             [ordered]@{
                 name='ps'
-                description='Run a script through Windows PowerShell 5.1. Use for PowerShell commands, scripts, Windows management, files, processes, registry and system configuration.'
+                description='Run a script through Windows PowerShell 5.1. Use for PowerShell commands, scripts, Windows management, files, processes, registry and system configuration. Set elevated=true only when Administrator privileges are required; Windows UAC approval is always required.'
                 parameters=[ordered]@{type='OBJECT';properties=[ordered]@{
                     command=[ordered]@{type='STRING';description='The PowerShell script to execute.'}
                     working_directory=[ordered]@{type='STRING';description='Optional working directory. Defaults to the current MIRA directory.'}
+                    elevated=[ordered]@{type='BOOLEAN';description='Set true only when Administrator privileges are required. MIRA starts an elevated shell through Windows UAC. UAC approval is always required, including auto permission mode. Defaults to false.'}
                 };required=@('command')}
             }
         )
@@ -2214,10 +2216,11 @@ function Build-OpenAICompatiblePayload($provider,$messages,$model,$summary,[bool
         $parameters=[ordered]@{type='object';properties=[ordered]@{
             command=[ordered]@{type='string';description='The command or script to execute.'}
             working_directory=[ordered]@{type='string';description='Optional working directory. Defaults to the current MIRA directory.'}
+            elevated=[ordered]@{type='boolean';description='Set true only when Administrator privileges are required. MIRA starts an elevated shell through Windows UAC. UAC approval is always required, including auto permission mode. Defaults to false.'}
         };required=@('command')}
         $payload.tools=@(
-            [ordered]@{type='function';'function'=[ordered]@{name='cmd';description='Run a command through Windows cmd.exe.';parameters=$parameters}},
-            [ordered]@{type='function';'function'=[ordered]@{name='ps';description='Run a script through Windows PowerShell 5.1. Use for Windows management, files, processes, registry and system configuration.';parameters=$parameters}}
+            [ordered]@{type='function';'function'=[ordered]@{name='cmd';description='Run a command through Windows cmd.exe. Set elevated=true only when Administrator privileges are required; Windows UAC approval is always required.';parameters=$parameters}},
+            [ordered]@{type='function';'function'=[ordered]@{name='ps';description='Run a script through Windows PowerShell 5.1. Use for Windows management, files, processes, registry and system configuration. Set elevated=true only when Administrator privileges are required; Windows UAC approval is always required.';parameters=$parameters}}
         )
         $payload.tool_choice='auto'
     }
@@ -6949,6 +6952,169 @@ $query
     }
 }
 
+function Invoke-MiraElevatedToolProcess {
+    param(
+        [ValidateSet('cmd','ps')][string]$Name,
+        [Parameter(Mandatory=$true)][string]$Command,
+        [Parameter(Mandatory=$true)][string]$WorkingDirectory
+    )
+
+    $token=[guid]::NewGuid().ToString('N')
+    $temporaryDirectory=Join-Path ([IO.Path]::GetTempPath()) ('mira-elevated-'+$token)
+    $stdoutPath=Join-Path $temporaryDirectory 'stdout.txt'
+    $stderrPath=Join-Path $temporaryDirectory 'stderr.txt'
+    $statusPath=Join-Path $temporaryDirectory 'status.txt'
+    $process=$null
+
+    try{
+        [void][IO.Directory]::CreateDirectory($temporaryDirectory)
+
+        # A UAC credential prompt may use another administrator account.
+        # Limit the one-use handoff directory to this user and local Administrators.
+        $directoryAcl=Get-Acl -LiteralPath $temporaryDirectory -ErrorAction Stop
+        $directoryAcl.SetAccessRuleProtection($true,$false)
+        $currentUserSid=[Security.Principal.WindowsIdentity]::GetCurrent().User
+        $administratorsSid=New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')
+        $inheritance=[Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+        $propagation=[Security.AccessControl.PropagationFlags]::None
+        $rights=[Security.AccessControl.FileSystemRights]::FullControl
+        $allow=[Security.AccessControl.AccessControlType]::Allow
+        $userRule=New-Object Security.AccessControl.FileSystemAccessRule($currentUserSid,$rights,$inheritance,$propagation,$allow)
+        $adminRule=New-Object Security.AccessControl.FileSystemAccessRule($administratorsSid,$rights,$inheritance,$propagation,$allow)
+        $directoryAcl.SetAccessRule($userRule)
+        $directoryAcl.AddAccessRule($adminRule)
+        Set-Acl -LiteralPath $temporaryDirectory -AclObject $directoryAcl -ErrorAction Stop
+
+        $commandBase64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Command))
+        $nameBase64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Name))
+        $workingDirectoryBase64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($WorkingDirectory))
+        $stdoutPathBase64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($stdoutPath))
+        $stderrPathBase64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($stderrPath))
+        $statusPathBase64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($statusPath))
+
+        # ShellExecute/UAC cannot reliably redirect the elevated process streams.
+        # The elevated child writes its result to this ACL-protected directory.
+        $childScript=@'
+$ErrorActionPreference='Continue'
+$ProgressPreference='SilentlyContinue'
+$InformationPreference='SilentlyContinue'
+$utf8=New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding=$utf8
+try{[Console]::OutputEncoding=$utf8}catch{}
+$command=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__COMMAND_B64__'))
+$name=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__NAME_B64__'))
+$workingDirectory=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__WORKING_DIRECTORY_B64__'))
+$stdoutPath=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__STDOUT_PATH_B64__'))
+$stderrPath=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__STDERR_PATH_B64__'))
+$statusPath=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__STATUS_PATH_B64__'))
+$global:LASTEXITCODE=$null
+$global:Error.Clear()
+$captured=@()
+$exitCode=0
+try{
+    Set-Location -LiteralPath $workingDirectory -ErrorAction Stop
+    if($name -eq 'cmd'){
+        $captured=@(& $env:ComSpec /d /s /c ('chcp 65001>nul & '+$command) 2>&1)
+        if($null -ne $global:LASTEXITCODE){$exitCode=[int]$global:LASTEXITCODE}
+    }else{
+        $captured=@(Invoke-Expression -Command $command *>&1)
+        if($null -ne $global:LASTEXITCODE){$exitCode=[int]$global:LASTEXITCODE}
+        elseif($global:Error.Count -gt 0){$exitCode=1}
+    }
+}catch{
+    $captured+= $_
+    $exitCode=1
+}
+try{
+    $rendered=''
+    if($captured.Count -gt 0){$rendered=[string]($captured | Out-String -Width 4096)}
+    [IO.File]::WriteAllText($stdoutPath,$rendered,$utf8)
+    [IO.File]::WriteAllText($stderrPath,'',$utf8)
+    [IO.File]::WriteAllText($statusPath,[string]$exitCode,[Text.Encoding]::ASCII)
+}catch{
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+}
+exit $exitCode
+'@
+        $childScript=$childScript.Replace('__COMMAND_B64__',$commandBase64)
+        $childScript=$childScript.Replace('__NAME_B64__',$nameBase64)
+        $childScript=$childScript.Replace('__WORKING_DIRECTORY_B64__',$workingDirectoryBase64)
+        $childScript=$childScript.Replace('__STDOUT_PATH_B64__',$stdoutPathBase64)
+        $childScript=$childScript.Replace('__STDERR_PATH_B64__',$stderrPathBase64)
+        $childScript=$childScript.Replace('__STATUS_PATH_B64__',$statusPathBase64)
+        $encodedScript=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childScript))
+
+        $powerShellExe=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if(-not (Test-Path -LiteralPath $powerShellExe -PathType Leaf)){$powerShellExe='powershell.exe'}
+        $process=Start-Process -FilePath $powerShellExe -ArgumentList @(
+            '-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',$encodedScript
+        ) -Verb RunAs -WindowStyle Hidden -WorkingDirectory $WorkingDirectory -PassThru -ErrorAction Stop
+
+        if(-not $process.WaitForExit([int]$script:MiraToolTimeoutSeconds * 1000)){
+            try{$process.Kill()}catch{}
+            try{$process.WaitForExit()}catch{}
+            $timedOut=$true
+        }else{$timedOut=$false}
+
+        $stdout=''
+        $stderr=''
+        if(Test-Path -LiteralPath $stdoutPath -PathType Leaf){$stdout=[IO.File]::ReadAllText($stdoutPath,[Text.Encoding]::UTF8)}
+        if(Test-Path -LiteralPath $stderrPath -PathType Leaf){$stderr=[IO.File]::ReadAllText($stderrPath,[Text.Encoding]::UTF8)}
+        $exitCode=-1
+        if(-not $timedOut){
+            $exitCode=[int]$process.ExitCode
+            if(Test-Path -LiteralPath $statusPath -PathType Leaf){
+                $statusText=[IO.File]::ReadAllText($statusPath,[Text.Encoding]::ASCII).Trim()
+                $parsedExitCode=0
+                if([int]::TryParse($statusText,[ref]$parsedExitCode)){$exitCode=$parsedExitCode}
+            }else{
+                $stderr=($stderr+[Environment]::NewLine+'Elevated shell exited without writing its completion status.').Trim()
+            }
+        }
+
+        return [ordered]@{
+            stdout=$stdout
+            stderr=$stderr
+            exit_code=$exitCode
+            timed_out=$timedOut
+            elevated=$true
+        }
+    }catch{
+        $nativeErrorCode=0
+        $exception=$_.Exception
+        while($null -ne $exception){
+            if($exception -is [System.ComponentModel.Win32Exception]){
+                $nativeErrorCode=[int]$exception.NativeErrorCode
+                break
+            }
+            $exception=$exception.InnerException
+        }
+        if($nativeErrorCode -eq 1223 -or $_.Exception.Message -match '(?i)canceled|cancelled by the user'){
+            return [ordered]@{
+                stdout=''
+                stderr='Windows UAC elevation was cancelled by the user.'
+                exit_code=-1
+                timed_out=$false
+                elevated=$true
+                cancelled=$true
+            }
+        }
+        return [ordered]@{
+            stdout=''
+            stderr=$_.Exception.Message
+            exit_code=-1
+            timed_out=$false
+            elevated=$true
+        }
+    }finally{
+        if($null -ne $process){try{$process.Dispose()}catch{}}
+        if(Test-Path -LiteralPath $temporaryDirectory){
+            Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Invoke-MiraToolCall($ToolCall){
     $function=$ToolCall.function;$name=[string]$function.name
     try{$arguments=ConvertFrom-MiraToolArguments $function.arguments}
@@ -6965,46 +7131,52 @@ function Invoke-MiraToolCall($ToolCall){
     try{$workingDirectory=(Resolve-Path -LiteralPath $workingDirectory -ErrorAction Stop).Path}
     catch{return ([ordered]@{error='Working directory does not exist: '+$workingDirectory} | ConvertTo-Json -Depth 6 -Compress)}
 
-    W ('[tool call] '+$name) Cyan;W ('cwd: '+$workingDirectory) DarkGray;W $command Gray
+    $elevated=[bool]$arguments.elevated
+    W ('[tool call] '+$name+$(if($elevated){' (UAC elevation requested)'}else{''})) Cyan;W ('cwd: '+$workingDirectory) DarkGray;W $command Gray
     if($script:MiraToolPermission -eq 'deny'){return ([ordered]@{denied=$true;message='Tool execution is disabled by MIRA_TOOL_PERMISSION=deny.'} | ConvertTo-Json -Depth 6 -Compress)}
-    if($script:MiraToolPermission -eq 'ask'){
+    # UAC itself is the approval step for elevated calls; do not ask twice.
+    if($script:MiraToolPermission -eq 'ask' -and -not $elevated){
         $approval=Read-Host 'Allow this tool call? [y/N]'
         if($approval -notmatch '^(?i:y|yes)$'){
             W '[tool denied]' Yellow
             return ([ordered]@{denied=$true;message='The user denied this tool call.'} | ConvertTo-Json -Depth 6 -Compress)
         }
     }
-    $result=[ordered]@{stdout='';stderr='';exit_code=-1;timed_out=$false};$process=$null
-    try{
-        $psi=New-Object System.Diagnostics.ProcessStartInfo
-        $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true
-        $psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true;$psi.WorkingDirectory=$workingDirectory
-        try{$psi.StandardOutputEncoding=New-Object System.Text.UTF8Encoding($false);$psi.StandardErrorEncoding=New-Object System.Text.UTF8Encoding($false)}catch{}
-        if($name -eq 'cmd'){
-            $psi.FileName=[string]$env:ComSpec
-            if([string]::IsNullOrWhiteSpace($psi.FileName)){$psi.FileName=Join-Path $env:SystemRoot 'System32\cmd.exe'}
-            $psi.Arguments='/d /s /c "chcp 65001>nul & '+$command+'"'
-        }else{
-            $powershellExe=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-            if(-not (Test-Path -LiteralPath $powershellExe)){$powershellExe='powershell.exe'}
-            $psi.FileName=$powershellExe
-            $scriptText='$OutputEncoding = New-Object System.Text.UTF8Encoding($false)'+[Environment]::NewLine+
-                '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)'+[Environment]::NewLine+
-                $command+[Environment]::NewLine+'if ($?) { exit 0 } else { exit 1 }'
-            $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptText))
-            $psi.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand '+$encoded
-        }
-        $process=New-Object System.Diagnostics.Process;$process.StartInfo=$psi
-        if(-not $process.Start()){throw 'Could not start the shell process.'}
-        $stdoutTask=$process.StandardOutput.ReadToEndAsync();$stderrTask=$process.StandardError.ReadToEndAsync()
-        if(-not $process.WaitForExit([int]$script:MiraToolTimeoutSeconds * 1000)){
-            $result.timed_out=$true;try{$process.Kill()}catch{};try{$process.WaitForExit()}catch{}
-        }
-        $result.stdout=[string]$stdoutTask.GetAwaiter().GetResult()
-        $result.stderr=[string]$stderrTask.GetAwaiter().GetResult()
-        if(-not $result.timed_out){$result.exit_code=[int]$process.ExitCode}
-    }catch{$result.stderr=$_.Exception.Message;$result.exit_code=-1}
-    finally{if($null -ne $process){try{$process.Dispose()}catch{}}}
+    if($elevated){
+        $result=Invoke-MiraElevatedToolProcess -Name $name -Command $command -WorkingDirectory $workingDirectory
+    }else{
+        $result=[ordered]@{stdout='';stderr='';exit_code=-1;timed_out=$false;elevated=$false};$process=$null
+        try{
+            $psi=New-Object System.Diagnostics.ProcessStartInfo
+            $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true
+            $psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true;$psi.WorkingDirectory=$workingDirectory
+            try{$psi.StandardOutputEncoding=New-Object System.Text.UTF8Encoding($false);$psi.StandardErrorEncoding=New-Object System.Text.UTF8Encoding($false)}catch{}
+            if($name -eq 'cmd'){
+                $psi.FileName=[string]$env:ComSpec
+                if([string]::IsNullOrWhiteSpace($psi.FileName)){$psi.FileName=Join-Path $env:SystemRoot 'System32\cmd.exe'}
+                $psi.Arguments='/d /s /c "chcp 65001>nul & '+$command+'"'
+            }else{
+                $powershellExe=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+                if(-not (Test-Path -LiteralPath $powershellExe)){$powershellExe='powershell.exe'}
+                $psi.FileName=$powershellExe
+                $scriptText='$OutputEncoding = New-Object System.Text.UTF8Encoding($false)'+[Environment]::NewLine+
+                    '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)'+[Environment]::NewLine+
+                    $command+[Environment]::NewLine+'if ($?) { exit 0 } else { exit 1 }'
+                $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptText))
+                $psi.Arguments='-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand '+$encoded
+            }
+            $process=New-Object System.Diagnostics.Process;$process.StartInfo=$psi
+            if(-not $process.Start()){throw 'Could not start the shell process.'}
+            $stdoutTask=$process.StandardOutput.ReadToEndAsync();$stderrTask=$process.StandardError.ReadToEndAsync()
+            if(-not $process.WaitForExit([int]$script:MiraToolTimeoutSeconds * 1000)){
+                $result.timed_out=$true;try{$process.Kill()}catch{};try{$process.WaitForExit()}catch{}
+            }
+            $result.stdout=[string]$stdoutTask.GetAwaiter().GetResult()
+            $result.stderr=[string]$stderrTask.GetAwaiter().GetResult()
+            if(-not $result.timed_out){$result.exit_code=[int]$process.ExitCode}
+        }catch{$result.stderr=$_.Exception.Message;$result.exit_code=-1}
+        finally{if($null -ne $process){try{$process.Dispose()}catch{}}}
+    }
     foreach($field in @('stdout','stderr')){
         $fieldText=[string]$result[$field]
         if($fieldText.Length -gt 20000){$result[$field]=$fieldText.Substring(0,20000)+[Environment]::NewLine+'[output truncated by MIRA]'}
@@ -7148,7 +7320,7 @@ function Help(){
     W '' DarkCyan; W 'MIRA-TUI SLIM PROVIDERS / IO TEST' Magenta; W ''
     W 'Enter            submit' Gray; W '.history         show recent command history' Gray; W 'Ctrl+J/Ctrl+Enter insert newline' Gray; W 'Up/Down          history / prefix history' Gray; W 'Ctrl+P            previous prefix match' Gray; W 'PageUp/PageDown   history prefix search' Gray; W 'Tab              completion' Gray; W 'Ctrl+C            clear line' Gray; W 'Ctrl+L            redraw window' Gray
     Show-ApiKeyStatus
-    W ('  LLM tools: cmd, ps'+$(if($script:MiraGroundingEnabled){', google_search (Antigravity native grounding)'}else{''})+' | shell permission: '+$script:MiraToolPermission) DarkGray
+    W ('  LLM tools: cmd, ps (optional UAC elevation)'+$(if($script:MiraGroundingEnabled){', google_search (Antigravity native grounding)'}else{''})+' | shell permission: '+$script:MiraToolPermission) DarkGray
     W '' DarkCyan; W ('COMMANDS:  '+($script:Commands -join '  ')) Gray; W '  .file <path>               send text/image file to model' DarkGray; W '  .read <path>                read text file and send to model' DarkGray; W '  .shot [path]               send clipboard/image to model' DarkGray; W '  .diff <a> <b>              send file diff to model' DarkGray; W '  .model <provider:model>   switch live provider/model; successful text replies learn into used.list' DarkGray; W '  .models                    show cached text-chat models' DarkGray; W '  .models <provider>         refresh one provider model list' DarkGray; W '  .models <Tab>              refresh all configured providers; Antigravity uses OAuth' DarkGray; W '  .models test               pre-filter and probe API-key provider models' DarkGray; W '  .providers                 built-in provider registry' DarkGray; W '  .auth login|status|logout  connect Google Antigravity OAuth' DarkGray; W '  .grounding on|off|status   native Google Search grounding for Antigravity' DarkGray; W '  .enable-session [name]     enable RAM-only context session' DarkGray; W '  .export-session [name]      export active session to a file' DarkGray; W '  .empty session             clear active session' DarkGray; W '  .compress session          summarize old session messages' DarkGray; W '  .delete session             leave session; context is discarded' DarkGray; W '  .request                   show useful summary of last JSON request' DarkGray; W '  .request json|raw           show raw last JSON request' DarkGray; W '  .save [name]               save each fenced snippet as its own source file' DarkGray; W '  .copy                      copy the whole raw last message to clipboard' DarkGray; W '  .grab [name.txt]           save the whole raw last message to TXT' DarkGray; W '  .ui on|off                 enable/disable Markdown renderer' DarkGray; W '  .stream / .stream on|off  live Gemini/Antigravity, NVIDIA NIM, and other OpenAI-compatible streaming (default ON)' DarkGray; W '  .reasoning on|off          toggle current provider thought output' DarkGray; W '  .reasoning <provider> on|off  set a provider independently' DarkGray; W ''
 }
 
