@@ -49,6 +49,8 @@ $requiredFunctions = @(
     'Add-GemmaUsageRecord',
     'Invoke-GemmaUsageCommand',
     'Build-GeminiPayload',
+    'Add-GemmaAntigravitySearchCapabilityInstruction',
+    'Clear-GemmaModelMenu',
     'Build-GemmaOpenAIResponsesPayload',
     'ConvertFrom-GemmaOpenAIResponsesResponse',
     'Format-GemmaOpenAIWebCitations',
@@ -75,6 +77,9 @@ $chatLoopSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\agent\Cha
 $lineEditorSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\ui\LineEditor.ps1') -Raw -Encoding UTF8
 $outputSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\ui\Output.ps1') -Raw -Encoding UTF8
 $modelPickerSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\ui\ModelPicker.ps1') -Raw -Encoding UTF8
+if ($modelPickerSource -notmatch 'Clear-GemmaModelMenu -Top \$top -Height \$menuHeight') {
+    throw 'The model picker must clear its temporary rows when it closes.'
+}
 if ($mainSource -match "'\.provider'" -or
     $chatLoopSource -match 'Invoke-GemmaProviderCommand|\.provider' -or
     $lineEditorSource -match '\.provider' -or
@@ -747,6 +752,7 @@ $searchCases = @(
     @{ Request = 'search news, show dates and sources for each news'; Expected = $true },
     @{ Request = 'show latest lviv news in last hours'; Expected = $true },
     @{ Request = 'why you searching again? talk like engineer, what made you continue searching data'; Expected = $false },
+    @{ Request = 'why you using puthon to search web? you have own builtin tool, google search grounding'; Expected = $false },
     @{ Request = '.grounding off'; Expected = $false },
     @{ Request = "tell me today's date"; Expected = $false },
     @{ Request = 'show weather in Lviv'; Expected = $false },
@@ -757,6 +763,31 @@ foreach ($case in $searchCases) {
     if ($actual -ne [bool]$case.Expected) {
         throw "Search-intent classifier mismatch for '$($case.Request)': expected $($case.Expected), got $actual."
     }
+}
+
+$enabledSearchPolicyPayload = [ordered]@{
+    systemInstruction = [ordered]@{
+        parts = @([ordered]@{ text = 'Base system prompt.' })
+    }
+}
+Add-GemmaAntigravitySearchCapabilityInstruction -Payload $enabledSearchPolicyPayload -GroundingEnabled $true
+$enabledSearchPolicy = (@($enabledSearchPolicyPayload.systemInstruction.parts | ForEach-Object { [string]$_.text }) -join ' ')
+if ($enabledSearchPolicy -notmatch 'separate host-managed preflight' -or
+    $enabledSearchPolicy -notmatch 'not a callable function tool' -or
+    $enabledSearchPolicy -notmatch 'Base system prompt') {
+    throw 'Antigravity native Search capability was not appended to the active system instruction.'
+}
+
+$disabledSearchPolicyPayload = [ordered]@{
+    systemInstruction = [ordered]@{
+        parts = @([ordered]@{ text = 'Base system prompt.' })
+    }
+}
+Add-GemmaAntigravitySearchCapabilityInstruction -Payload $disabledSearchPolicyPayload -GroundingEnabled $false
+$disabledSearchPolicy = (@($disabledSearchPolicyPayload.systemInstruction.parts | ForEach-Object { [string]$_.text }) -join ' ')
+if ($disabledSearchPolicy -notmatch '\.grounding is OFF' -or
+    $disabledSearchPolicy -match 'separate host-managed preflight') {
+    throw 'Antigravity native Search capability instruction did not respect the grounding toggle.'
 }
 
 # Verify common cursor-word calculations independently of terminal interaction.

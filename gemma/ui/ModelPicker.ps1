@@ -104,6 +104,24 @@ function Get-GemmaModelCatalog {
     }
 }
 
+function Clear-GemmaModelMenu {
+    param(
+        [int]$Top,
+        [int]$Height,
+        [int]$Width
+    )
+
+    $bufferHeight = [Console]::BufferHeight
+    $clearWidth = [Math]::Max(1,$Width)
+    for ($rowIndex = 0; $rowIndex -lt $Height; $rowIndex++) {
+        $targetRow = $Top + $rowIndex
+        if ($targetRow -lt 0 -or $targetRow -ge $bufferHeight) { continue }
+        [Console]::SetCursorPosition(0,$targetRow)
+        [Console]::Write((' ' * $clearWidth))
+    }
+    [Console]::SetCursorPosition(0,[Math]::Min($Top,$bufferHeight - 1))
+}
+
 function Read-GemmaModelSelection {
     param(
         [object[]]$Models,
@@ -370,8 +388,10 @@ function Read-GemmaModelSelection {
         [Console]::ForegroundColor = $oldForeground
         [Console]::BackgroundColor = $oldBackground
         try {
-            [Console]::SetCursorPosition(0,[Math]::Min($top + $menuHeight,[Console]::BufferHeight - 1))
-        } catch {}
+            Clear-GemmaModelMenu -Top $top -Height $menuHeight -Width ([Math]::Max(1,[Console]::WindowWidth - 1))
+        } catch {
+            try { [Console]::SetCursorPosition(0,[Math]::Min($top,[Console]::BufferHeight - 1)) } catch {}
+        }
         [Console]::WriteLine()
     }
 

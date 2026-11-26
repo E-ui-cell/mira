@@ -49,6 +49,9 @@
             $payloadObj.stream = $true
         }
         $usingAntigravityOAuth = ($script:Provider -eq 'antigravity')
+        if ($usingAntigravityOAuth -and -not $script:CommandMode) {
+            Add-GemmaAntigravitySearchCapabilityInstruction -Payload $payloadObj -GroundingEnabled ([bool]$script:GoogleSearchGrounding)
+        }
         $requestApiKeys = @()
         $requestKeyIndex = 0
         $requestProviderName = 'gemini'
