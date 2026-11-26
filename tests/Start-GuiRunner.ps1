@@ -123,93 +123,83 @@ New-Item -Path 'HKLM:\SOFTWARE\OpenSSH' -Force | Out-Null
 New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -PropertyType String -Force | Out-Null
 New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShellCommandOption -Value '-Command' -PropertyType String -Force | Out-Null
 New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShellEscapeArguments -Value 1 -PropertyType DWord -Force | Out-Null
-Set-Service -Name sshd -StartupType Automatic
-if ((Get-Service -Name sshd).Status -ne 'Running') {
-    try {
-        Start-Service -Name sshd -ErrorAction Stop
+# The hosted image's sshd service exits with 1067, but the same daemon
+# successfully starts and listens when launched directly.
+$sshService = Get-Service -Name 'sshd' -ErrorAction SilentlyContinue
+if ($sshService -and $sshService.Status -eq 'Running') {
+    Stop-Service -Name 'sshd' -Force
+}
+
+$sshLogFile = Join-Path $sshLogs 'sshd.log'
+$sshStdOut = Join-Path $env:TEMP 'mira-sshd.out'
+$sshStdErr = Join-Path $env:TEMP 'mira-sshd.err'
+Remove-Item -LiteralPath $sshLogFile, $sshStdOut, $sshStdErr -Force -ErrorAction SilentlyContinue
+
+$sshdProcess = Start-Process -FilePath $sshdExe -ArgumentList @('-D', '-E', $sshLogFile, '-f', $sshdConfig) -PassThru -WindowStyle Hidden -RedirectStandardOutput $sshStdOut -RedirectStandardError $sshStdErr
+$sshReady = $false
+for ($attempt = 0; $attempt -lt 30; $attempt++) {
+    Start-Sleep -Milliseconds 500
+    $sshdProcess.Refresh()
+    if ($sshdProcess.HasExited) {
+        break
     }
-    catch {
-        Write-Section 'OpenSSH startup diagnostics'
-        Write-Host 'Service registration:'
-        Get-CimInstance -ClassName Win32_Service -Filter "Name='sshd'" -ErrorAction SilentlyContinue |
-            Format-List Name, State, StartName, StartMode, PathName, ExitCode, ProcessId |
-            Out-String | ForEach-Object { Write-Host $_ }
-
-        Write-Host 'sshd configuration validation:'
-        & $sshdExe -t -f $sshdConfig 2>&1 | ForEach-Object { Write-Host $_ }
-        Write-Host "Configuration validation exit code: $LASTEXITCODE"
-
-        Write-Host 'OpenSSH directory ACLs:'
-        & icacls.exe $sshRoot 2>&1 | ForEach-Object { Write-Host $_ }
-        & icacls.exe $sshLogs 2>&1 | ForEach-Object { Write-Host $_ }
-        & icacls.exe $sshdConfig 2>&1 | ForEach-Object { Write-Host $_ }
-        foreach ($hostKey in @('ssh_host_ed25519_key', 'ssh_host_rsa_key', 'ssh_host_ecdsa_key')) {
-            $hostKeyPath = Join-Path $sshRoot $hostKey
-            if (Test-Path -LiteralPath $hostKeyPath) {
-                & icacls.exe $hostKeyPath 2>&1 | ForEach-Object { Write-Host $_ }
-            }
-        }
-
-        # Run sshd in foreground debug mode: this exposes the daemon's own startup error,
-        # which Service Control Manager's generic 7034 event omits.
-        $debugStdOut = Join-Path $env:TEMP 'mira-sshd-debug.out'
-        $debugStdErr = Join-Path $env:TEMP 'mira-sshd-debug.err'
-        Remove-Item -LiteralPath $debugStdOut, $debugStdErr -Force -ErrorAction SilentlyContinue
-        try {
-            $debugProcess = Start-Process -FilePath $sshdExe -ArgumentList @('-ddd', '-e', '-f', $sshdConfig) -PassThru -NoNewWindow -RedirectStandardOutput $debugStdOut -RedirectStandardError $debugStdErr
-            Start-Sleep -Seconds 4
-            $debugProcess.Refresh()
-            if (-not $debugProcess.HasExited) {
-                Write-Host 'Foreground sshd debug process stayed alive for 4 seconds; terminating diagnostic instance.'
-                Stop-Process -Id $debugProcess.Id -Force -ErrorAction SilentlyContinue
-                try { $debugProcess.WaitForExit() } catch {}
-            }
-            else {
-                Write-Host "Foreground sshd debug process exited with code $($debugProcess.ExitCode)."
-            }
-        }
-        catch {
-            Write-Host "Could not run foreground sshd diagnostics: $($_.Exception.Message)"
-        }
-        foreach ($debugFile in @($debugStdOut, $debugStdErr)) {
-            if (Test-Path -LiteralPath $debugFile) {
-                Write-Host "--- $debugFile ---"
-                Get-Content -LiteralPath $debugFile -Tail 120 -ErrorAction SilentlyContinue
-            }
-        }
-
-        $diagnosticStart = (Get-Date).AddMinutes(-5)
-        foreach ($logName in @('OpenSSH/Operational', 'Application', 'System')) {
-            try {
-                $events = Get-WinEvent -FilterHashtable @{ LogName = $logName; StartTime = $diagnosticStart } -MaxEvents 30 -ErrorAction Stop
-                foreach ($event in $events) {
-                    if ($logName -eq 'System' -and $event.ProviderName -ne 'Service Control Manager') {
-                        continue
-                    }
-                    if ($logName -eq 'Application' -and $event.ProviderName -notmatch 'OpenSSH|Application Error|Windows Error Reporting|\.NET Runtime') {
-                        continue
-                    }
-                    Write-Host ("{0} [{1}] Event {2}: {3}" -f $event.TimeCreated, $event.ProviderName, $event.Id, $event.Message)
-                }
-            }
-            catch {
-                Write-Host "Could not read event log '$logName': $($_.Exception.Message)"
-            }
-        }
-
-        if (Test-Path -LiteralPath $sshLogs) {
-            Get-ChildItem -LiteralPath $sshLogs -File -ErrorAction SilentlyContinue |
-                Sort-Object LastWriteTime -Descending |
-                Select-Object -First 5 |
-                ForEach-Object {
-                    Write-Host "--- $($_.FullName) ---"
-                    Get-Content -LiteralPath $_.FullName -Tail 120 -ErrorAction SilentlyContinue
-                }
-        }
-        throw
+    $sshListener = @(Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue)
+    if ($sshListener | Where-Object { $_.LocalAddress -eq '127.0.0.1' }) {
+        $sshReady = $true
+        break
     }
 }
-Start-Sleep -Seconds 2
+if (-not $sshReady) {
+    $sshdProcess.Refresh()
+    Write-Host "sshd process exited: $($sshdProcess.HasExited)"
+    if ($sshdProcess.HasExited) {
+        Write-Host "sshd exit code: $($sshdProcess.ExitCode)"
+    }
+    foreach ($logFile in @($sshLogFile, $sshStdOut, $sshStdErr)) {
+        if (Test-Path -LiteralPath $logFile) {
+            Write-Host "--- $logFile ---"
+            Get-Content -LiteralPath $logFile -Tail 100 | ForEach-Object { Write-Host $_ }
+        }
+    }
+    throw 'OpenSSH did not start listening on 127.0.0.1:22.'
+}
+Write-Host "OpenSSH daemon started directly (PID $($sshdProcess.Id)) and is listening on 127.0.0.1:22."
+
+# Verify public-key authentication before exposing the reverse tunnel.
+$testKeyBase = Join-Path $env:TEMP ('mira-ssh-smoke-' + [Guid]::NewGuid().ToString('N'))
+$testPublicKey = $null
+try {
+    & $keygenExe -q -t ed25519 -N '' -f $testKeyBase
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not generate the temporary SSH smoke-test key.'
+    }
+
+    $testPublicKey = (& $keygenExe -y -f $testKeyBase | Out-String).Trim()
+    if ([string]::IsNullOrWhiteSpace($testPublicKey)) {
+        throw 'Could not read the temporary SSH smoke-test public key.'
+    }
+
+    Add-Content -LiteralPath $authorizedKeys -Value $testPublicKey -Encoding Ascii
+    $sshTestOutput = & $sshExe -o 'BatchMode=yes' -o 'StrictHostKeyChecking=no' -o 'UserKnownHostsFile=NUL' -o 'IdentitiesOnly=yes' -i $testKeyBase -p 22 "$runnerUser@127.0.0.1" 'whoami' 2>&1
+    $sshTestExitCode = $LASTEXITCODE
+    if ($sshTestExitCode -ne 0) {
+        $sshTestOutput | ForEach-Object { Write-Host $_ }
+        if (Test-Path -LiteralPath $sshLogFile) {
+            Get-Content -LiteralPath $sshLogFile -Tail 100 | ForEach-Object { Write-Host $_ }
+        }
+        throw "SSH public-key smoke test failed with exit code $sshTestExitCode."
+    }
+    Write-Host "SSH public-key smoke test succeeded: $($sshTestOutput -join ' ')"
+}
+finally {
+    if ($testPublicKey) {
+        $remainingKeys = @(Get-Content -LiteralPath $authorizedKeys | Where-Object { $_ -ne $testPublicKey })
+        $remainingKeys | Set-Content -LiteralPath $authorizedKeys -Encoding Ascii
+    }
+    foreach ($keyFile in @($testKeyBase, ($testKeyBase + '.pub'))) {
+        Remove-Item -LiteralPath $keyFile -Force -ErrorAction SilentlyContinue
+    }
+}
 
 $sshListener = @(Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue)
 if (-not ($sshListener | Where-Object { $_.LocalAddress -eq '127.0.0.1' })) {
