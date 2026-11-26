@@ -1,0 +1,28 @@
+name: Temporary Windows GUI runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  gui-runner:
+    concurrency:
+      group: mira-temporary-gui-runner
+      cancel-in-progress: true
+    runs-on: windows-2022
+    timeout-minutes: 55
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+
+      - name: Validate runner scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\tests\Gui-Smoke.ps1
+          .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\tests\Start-GuiRunner.ps1
+
+      - name: Start temporary SSH and VNC desktop
+        shell: powershell
+        run: .\tests\Start-GuiRunner.ps1
