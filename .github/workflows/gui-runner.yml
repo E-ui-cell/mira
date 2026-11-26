@@ -5,13 +5,12 @@ on:
     branches:
       - thin
 
-concurrency:
-  group: mira-temporary-gui-runner
-  cancel-in-progress: true
-
 jobs:
   gui-runner:
     if: contains(github.event.head_commit.message, '[gui-runner]')
+    concurrency:
+      group: mira-temporary-gui-runner
+      cancel-in-progress: true
     runs-on: windows-2022
     timeout-minutes: 55
     permissions:
