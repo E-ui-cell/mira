@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param()
 
 $ErrorActionPreference = 'Stop'
@@ -52,9 +52,21 @@ if ($publicKeys.Count -eq 0) {
 }
 
 New-Item -ItemType Directory -Path $sshRoot -Force | Out-Null
+$sshLogs = Join-Path $sshRoot 'logs'
+New-Item -ItemType Directory -Path $sshLogs -Force | Out-Null
+
+# OpenSSH refuses to start when ProgramData\ssh or its logs directory has unsafe ACLs.
+# Keep write access limited to SYSTEM and Administrators; authenticated users get read-only access.
+foreach ($directory in @($sshRoot, $sshLogs)) {
+    & icacls.exe $directory /inheritance:r /remove:g '*S-1-5-11' /grant '*S-1-5-32-544:(OI)(CI)F' /grant '*S-1-5-18:(OI)(CI)F' /grant '*S-1-5-11:(OI)(CI)RX' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not set secure permissions on $directory."
+    }
+}
+
 $authorizedKeys = Join-Path $sshRoot 'administrators_authorized_keys'
 $publicKeys | Set-Content -LiteralPath $authorizedKeys -Encoding Ascii
-& icacls.exe $authorizedKeys /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null
+& icacls.exe $authorizedKeys /inheritance:r /remove:g '*S-1-5-11' /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F' | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw 'Could not set secure permissions on administrators_authorized_keys.'
 }
@@ -62,6 +74,17 @@ if ($LASTEXITCODE -ne 0) {
 & $keygenExe -A
 if ($LASTEXITCODE -ne 0) {
     throw 'Could not generate the OpenSSH host keys.'
+}
+
+# Host private keys must not inherit read access for Authenticated Users.
+foreach ($hostKey in @('ssh_host_ed25519_key', 'ssh_host_rsa_key', 'ssh_host_ecdsa_key')) {
+    $hostKeyPath = Join-Path $sshRoot $hostKey
+    if (Test-Path -LiteralPath $hostKeyPath) {
+        & icacls.exe $hostKeyPath /inheritance:r /remove:g '*S-1-5-11' /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F' | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not secure OpenSSH host key: $hostKeyPath"
+        }
+    }
 }
 
 $sshdConfig = Join-Path $sshRoot 'sshd_config'
@@ -82,8 +105,14 @@ X11Forwarding no
 AllowUsers $runnerUser
 AuthorizedKeysFile C:/ProgramData/ssh/administrators_authorized_keys
 Subsystem sftp sftp-server.exe
+SyslogFacility LOCAL0
+LogLevel VERBOSE
 "@
 Set-Content -LiteralPath $sshdConfig -Value $config -Encoding Ascii
+& icacls.exe $sshdConfig /inheritance:r /remove:g '*S-1-5-11' /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F' | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw 'Could not set secure permissions on sshd_config.'
+}
 
 & $sshdExe -t -f $sshdConfig
 if ($LASTEXITCODE -ne 0) {
@@ -96,7 +125,41 @@ New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShellCommandOption 
 New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShellEscapeArguments -Value 1 -PropertyType DWord -Force | Out-Null
 Set-Service -Name sshd -StartupType Automatic
 if ((Get-Service -Name sshd).Status -ne 'Running') {
-    Start-Service -Name sshd
+    try {
+        Start-Service -Name sshd -ErrorAction Stop
+    }
+    catch {
+        Write-Section 'OpenSSH startup diagnostics'
+        Write-Host 'sshd configuration validation:'
+        & $sshdExe -t -f $sshdConfig 2>&1 | ForEach-Object { Write-Host $_ }
+
+        $diagnosticStart = (Get-Date).AddMinutes(-5)
+        foreach ($logName in @('OpenSSH/Operational', 'System')) {
+            try {
+                $events = Get-WinEvent -FilterHashtable @{ LogName = $logName; StartTime = $diagnosticStart } -MaxEvents 12 -ErrorAction Stop
+                foreach ($event in $events) {
+                    if ($logName -eq 'System' -and $event.ProviderName -ne 'Service Control Manager') {
+                        continue
+                    }
+                    Write-Host ("{0} [{1}] Event {2}: {3}" -f $event.TimeCreated, $event.ProviderName, $event.Id, $event.Message)
+                }
+            }
+            catch {
+                Write-Host "Could not read event log '$logName': $($_.Exception.Message)"
+            }
+        }
+
+        if (Test-Path -LiteralPath $sshLogs) {
+            Get-ChildItem -LiteralPath $sshLogs -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 3 |
+                ForEach-Object {
+                    Write-Host "--- $($_.FullName) ---"
+                    Get-Content -LiteralPath $_.FullName -Tail 60 -ErrorAction SilentlyContinue
+                }
+        }
+        throw
+    }
 }
 Start-Sleep -Seconds 2
 
