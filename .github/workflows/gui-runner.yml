@@ -1,13 +1,10 @@
 name: Temporary Windows GUI runner
 
 on:
-  push:
-    branches:
-      - thin
+  workflow_dispatch:
 
 jobs:
   gui-runner:
-    if: contains(github.event.head_commit.message, '[gui-runner]')
     concurrency:
       group: mira-temporary-gui-runner
       cancel-in-progress: true
@@ -17,7 +14,7 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout thin
+      - name: Checkout selected branch
         uses: actions/checkout@v4
 
       - name: Validate runner scripts with Windows PowerShell 5.1
