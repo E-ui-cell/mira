@@ -130,15 +130,63 @@ if ((Get-Service -Name sshd).Status -ne 'Running') {
     }
     catch {
         Write-Section 'OpenSSH startup diagnostics'
+        Write-Host 'Service registration:'
+        Get-CimInstance -ClassName Win32_Service -Filter "Name='sshd'" -ErrorAction SilentlyContinue |
+            Format-List Name, State, StartName, StartMode, PathName, ExitCode, ProcessId |
+            Out-String | ForEach-Object { Write-Host $_ }
+
         Write-Host 'sshd configuration validation:'
         & $sshdExe -t -f $sshdConfig 2>&1 | ForEach-Object { Write-Host $_ }
+        Write-Host "Configuration validation exit code: $LASTEXITCODE"
+
+        Write-Host 'OpenSSH directory ACLs:'
+        & icacls.exe $sshRoot 2>&1 | ForEach-Object { Write-Host $_ }
+        & icacls.exe $sshLogs 2>&1 | ForEach-Object { Write-Host $_ }
+        & icacls.exe $sshdConfig 2>&1 | ForEach-Object { Write-Host $_ }
+        foreach ($hostKey in @('ssh_host_ed25519_key', 'ssh_host_rsa_key', 'ssh_host_ecdsa_key')) {
+            $hostKeyPath = Join-Path $sshRoot $hostKey
+            if (Test-Path -LiteralPath $hostKeyPath) {
+                & icacls.exe $hostKeyPath 2>&1 | ForEach-Object { Write-Host $_ }
+            }
+        }
+
+        # Run sshd in foreground debug mode: this exposes the daemon's own startup error,
+        # which Service Control Manager's generic 7034 event omits.
+        $debugStdOut = Join-Path $env:TEMP 'mira-sshd-debug.out'
+        $debugStdErr = Join-Path $env:TEMP 'mira-sshd-debug.err'
+        Remove-Item -LiteralPath $debugStdOut, $debugStdErr -Force -ErrorAction SilentlyContinue
+        try {
+            $debugProcess = Start-Process -FilePath $sshdExe -ArgumentList @('-ddd', '-e', '-f', $sshdConfig) -PassThru -NoNewWindow -RedirectStandardOutput $debugStdOut -RedirectStandardError $debugStdErr
+            Start-Sleep -Seconds 4
+            $debugProcess.Refresh()
+            if (-not $debugProcess.HasExited) {
+                Write-Host 'Foreground sshd debug process stayed alive for 4 seconds; terminating diagnostic instance.'
+                Stop-Process -Id $debugProcess.Id -Force -ErrorAction SilentlyContinue
+                try { $debugProcess.WaitForExit() } catch {}
+            }
+            else {
+                Write-Host "Foreground sshd debug process exited with code $($debugProcess.ExitCode)."
+            }
+        }
+        catch {
+            Write-Host "Could not run foreground sshd diagnostics: $($_.Exception.Message)"
+        }
+        foreach ($debugFile in @($debugStdOut, $debugStdErr)) {
+            if (Test-Path -LiteralPath $debugFile) {
+                Write-Host "--- $debugFile ---"
+                Get-Content -LiteralPath $debugFile -Tail 120 -ErrorAction SilentlyContinue
+            }
+        }
 
         $diagnosticStart = (Get-Date).AddMinutes(-5)
-        foreach ($logName in @('OpenSSH/Operational', 'System')) {
+        foreach ($logName in @('OpenSSH/Operational', 'Application', 'System')) {
             try {
-                $events = Get-WinEvent -FilterHashtable @{ LogName = $logName; StartTime = $diagnosticStart } -MaxEvents 12 -ErrorAction Stop
+                $events = Get-WinEvent -FilterHashtable @{ LogName = $logName; StartTime = $diagnosticStart } -MaxEvents 30 -ErrorAction Stop
                 foreach ($event in $events) {
                     if ($logName -eq 'System' -and $event.ProviderName -ne 'Service Control Manager') {
+                        continue
+                    }
+                    if ($logName -eq 'Application' -and $event.ProviderName -notmatch 'OpenSSH|Application Error|Windows Error Reporting|\.NET Runtime') {
                         continue
                     }
                     Write-Host ("{0} [{1}] Event {2}: {3}" -f $event.TimeCreated, $event.ProviderName, $event.Id, $event.Message)
@@ -152,10 +200,10 @@ if ((Get-Service -Name sshd).Status -ne 'Running') {
         if (Test-Path -LiteralPath $sshLogs) {
             Get-ChildItem -LiteralPath $sshLogs -File -ErrorAction SilentlyContinue |
                 Sort-Object LastWriteTime -Descending |
-                Select-Object -First 3 |
+                Select-Object -First 5 |
                 ForEach-Object {
                     Write-Host "--- $($_.FullName) ---"
-                    Get-Content -LiteralPath $_.FullName -Tail 60 -ErrorAction SilentlyContinue
+                    Get-Content -LiteralPath $_.FullName -Tail 120 -ErrorAction SilentlyContinue
                 }
         }
         throw
