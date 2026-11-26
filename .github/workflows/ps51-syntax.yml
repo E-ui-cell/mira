@@ -11,6 +11,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Parse GUI runner scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\tests\Gui-Smoke.ps1
+          .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\tests\Start-GuiRunner.ps1
+
       - name: Parse mira.ps1 with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-ScriptSyntax.ps1 -ScriptPath .\mira.ps1
