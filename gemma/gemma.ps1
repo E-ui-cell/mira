@@ -47,7 +47,7 @@ $script:MiraInputHistory = [System.Collections.Generic.List[string]]::new()
 $script:MiraHistoryIndex = -1
 $script:MiraHistoryDraft = ''
 $script:MiraHistoryMax = $MIRA_MAX_HISTORY
-$script:GemCommands = @('.q','.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.model','.sysprompt','.effort','.verbose','.oneshot','.streaming','.auth','.grounding','.ask','.autopilot','.skills','.skill','.usage','.speak','.stop','.replay')
+$script:GemCommands = @('.q','.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.model','.sysprompt','.effort','.verbose','.oneshot','.streaming','.auth','.grounding','.ask','.autopilot','.skills','.skill','.usage','.speak','.stop','.replay','.kill')
 
 . (Join-Path $PSScriptRoot 'ui\LineEditor.ps1')
 
