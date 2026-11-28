@@ -541,6 +541,17 @@ if ($turnRoutingSource -notmatch '\$usingOpenAI\s*=\s*\(\$script:Provider -eq ''
     throw 'Gemma request execution does not route from the active model picker provider.'
 }
 
+if ($turnRoutingSource -notmatch '\$groqReplayState\.Text\.Length -gt 0' -or
+    $turnRoutingSource -notmatch 'Groq stream was interrupted after emitting text; automatic retry suppressed' -or
+    $turnRoutingSource -notmatch '\$status -eq 429' -or
+    $turnRoutingSource -notmatch 'Groq rate limit reached \(HTTP 429\); automatic retries and key rotation are disabled') {
+    throw 'Groq streaming must not regenerate after visible output or hammer the API after HTTP 429.'
+}
+if ($MIRA_GROQ_EFFORT -ne 'low') {
+    throw 'Groq default reasoning effort must be low to avoid expensive high-effort reasoning on short prompts.'
+}
+
+
 if ($MIRA_DEFAULT_PROVIDER -notin @('antigravity','gemini','openai','groq')) {
     throw 'Gemma defaults did not initialize a supported provider.'
 }
