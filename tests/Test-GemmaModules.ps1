@@ -65,6 +65,7 @@ $requiredFunctions = @(
     'Read-GemLineConsole',
     'Read-GemLineFallback',
     'Add-GemUndoSnapshot',
+    'Get-GemmaGoogleBlockDiagnostic',
     'Get-GemWordStart',
     'Get-GemWordEnd',
     'Find-GemHistoryMatch',
@@ -800,6 +801,36 @@ $disabledSearchPolicy = (@($disabledSearchPolicyPayload.systemInstruction.parts 
 if ($disabledSearchPolicy -notmatch '\.grounding is OFF' -or
     $disabledSearchPolicy -match 'separate host-managed preflight') {
     throw 'Antigravity native Search capability instruction did not respect the grounding toggle.'
+}
+
+# Gemini prompt/candidate safety metadata must be distinguished from malformed empty responses.
+$promptBlocked = Get-GemmaGoogleBlockDiagnostic -Response ([pscustomobject]@{
+    promptFeedback = [pscustomobject]@{
+        blockReason = 'SAFETY'
+        blockReasonMessage = 'Prompt blocked by safety policy.'
+        safetyRatings = @()
+    }
+    candidates = @()
+})
+if (-not $promptBlocked.Blocked -or
+    $promptBlocked.Code -ne 'PROMPT_BLOCKED_SAFETY' -or
+    $promptBlocked.Message -notmatch 'blocked the prompt') {
+    throw 'Gemini prompt-level safety block was not diagnosed specifically.'
+}
+$candidateBlocked = Get-GemmaGoogleBlockDiagnostic -Response ([pscustomobject]@{
+    promptFeedback = $null
+    candidates = @([pscustomobject]@{ finishReason='SAFETY'; finishMessage='Blocked by safety filter.' })
+})
+if (-not $candidateBlocked.Blocked -or
+    $candidateBlocked.Code -ne 'CANDIDATE_BLOCKED_SAFETY') {
+    throw 'Gemini candidate-level safety finish reason was not diagnosed specifically.'
+}
+$ordinaryEmpty = Get-GemmaGoogleBlockDiagnostic -Response ([pscustomobject]@{
+    promptFeedback = $null
+    candidates = @()
+})
+if ($ordinaryEmpty.Blocked -or $ordinaryEmpty.Code) {
+    throw 'An ordinary empty Gemini response was incorrectly classified as a safety block.'
 }
 
 # Verify common cursor-word calculations independently of terminal interaction.
