@@ -932,6 +932,14 @@ if ($gemmaBootstrapSource -notmatch 'MIRA_PROFILE_STARTUP' -or
     throw 'Optional GEMMA startup load profiling is missing.'
 }
 
+# Tool commands temporarily release Ctrl+C to the active PowerShell pipeline and restore the caller's console mode.
+$executionSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\agent\Execution.ps1') -Raw -Encoding UTF8
+if ($executionSource -notmatch '\[Console\]::TreatControlCAsInput\s*=\s*\$false' -or
+    $executionSource -notmatch 'PipelineStoppedException' -or
+    $executionSource -notmatch 'cancelled\s*=\s*\$true' -or
+    $executionSource -notmatch '\[Console\]::TreatControlCAsInput\s*=\s*\$previousTreatControlCAsInput') {
+    throw 'LLM PowerShell commands do not isolate Ctrl+C cancellation from the GEMMA host.'
+}
 # Tracked child processes can be stopped independently without ending the GEMMA host.
 $trackedProcess = Start-GemmaTrackedProcess -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden
 try {
