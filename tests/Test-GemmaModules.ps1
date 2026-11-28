@@ -1,6 +1,21 @@
 #requires -Version 5.1
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+# Parse every GEMMA script before dot-sourcing any module. This catches a
+# broken startup file before a missing function can surface later at tool dispatch.
+$gemmaRoot = Join-Path $repoRoot 'gemma'
+$gemmaScriptFiles = @(Get-ChildItem -LiteralPath $gemmaRoot -Filter '*.ps1' -File -Recurse)
+foreach ($changedFile in $gemmaScriptFiles) {
+    $relativePath = $changedFile.FullName.Substring($repoRoot.Length).TrimStart('\','/')
+    $changedTokens = $null
+    $changedErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($changedFile.FullName, [ref]$changedTokens, [ref]$changedErrors) | Out-Null
+    if ($changedErrors.Count -gt 0) {
+        $firstError = $changedErrors[0]
+        throw ("PowerShell syntax error in {0} at line {1}, column {2}: {3}" -f $relativePath,$firstError.Extent.StartLineNumber,$firstError.Extent.StartColumnNumber,$firstError.Message)
+    }
+}
+
 # Keep this dot-source order identical to gemma/gemma.ps1. The test must
 # exercise the same dependency order that users get during startup.
 $modules = @(
@@ -27,6 +42,10 @@ foreach ($modulePath in $modules) {
         throw "Missing Gemma component: $modulePath"
     }
     . $modulePath
+}
+
+if ($MIRA_DEFAULT_SYSTEM_PROMPT.Length -gt 500) {
+    throw 'The default system prompt must stay compact to avoid unnecessary input-token overhead.'
 }
 
 $requiredFunctions = @(
@@ -565,30 +584,7 @@ if ($script:StreamingMode -notin @('off','line','delta')) {
     throw 'Gemma defaults did not initialize a supported streaming mode.'
 }
 
-# Parse every PowerShell file shipped under gemma, not just the files touched
-# in the latest change. This catches syntax errors in any startup-loaded module.
-$gemmaRoot = Join-Path $repoRoot 'gemma'
-$gemmaScriptFiles = @(Get-ChildItem -LiteralPath $gemmaRoot -Filter '*.ps1' -File -Recurse)
-foreach ($changedFile in $gemmaScriptFiles) {
-    $relativePath = $changedFile.FullName.Substring($repoRoot.Length).TrimStart('\','/')
-    $changedTokens = $null
-    $changedErrors = $null
-    [System.Management.Automation.Language.Parser]::ParseFile($changedFile.FullName, [ref]$changedTokens, [ref]$changedErrors) | Out-Null
-    if ($changedErrors.Count -gt 0) {
-        $firstError = $changedErrors[0]
-        throw ("PowerShell syntax error in {0} at line {1}, column {2}: {3}" -f $relativePath,$firstError.Extent.StartLineNumber,$firstError.Extent.StartColumnNumber,$firstError.Message)
-    }
-}
-
-# Parse Turn.ps1 without executing the interactive request loop.
 $turnPath = Join-Path $repoRoot 'gemma\agent\Turn.ps1'
-$turnTokens = $null
-$turnErrors = $null
-[System.Management.Automation.Language.Parser]::ParseFile($turnPath, [ref]$turnTokens, [ref]$turnErrors) | Out-Null
-if ($turnErrors.Count -gt 0) {
-    $firstTurnError = $turnErrors[0]
-    throw ("Turn.ps1 syntax error at line {0}, column {1}: {2}" -f $firstTurnError.Extent.StartLineNumber, $firstTurnError.Extent.StartColumnNumber, $firstTurnError.Message)
-}
 $turnSource = Get-Content -LiteralPath $turnPath -Raw
 $maxTokensCheck = $turnSource.IndexOf('if ([string]$parseState.Candidate.finishReason -match ''(?i)MAX_TOKENS'')', [StringComparison]::OrdinalIgnoreCase)
 $thoughtOnlyCheck = $turnSource.IndexOf('if ($parseState.HasThoughts)', [StringComparison]::OrdinalIgnoreCase)
@@ -936,15 +932,36 @@ try {
     $script:Provider = 'antigravity'
     $script:GoogleSearchGrounding = $true
     $script:AgenticWebSearchEnabled = $true
-    $toolSet = Get-GemmaToolConfiguration
+    $chatToolSet = Get-GemmaToolConfiguration -InputText 'wow'
+    if ($null -ne $chatToolSet.Tools -or $null -ne $chatToolSet.ToolConfig) {
+        throw 'Ordinary chat must not send unused tool schemas.'
+    }
+
+    $toolSet = Get-GemmaToolConfiguration -InputText 'list files'
     $toolNames = @($toolSet.Tools[0].functionDeclarations | ForEach-Object { $_.name })
+    if ($toolNames.Count -ne 1 -or $toolNames[0] -ne 'run_powershell') {
+        throw 'A local file-list request must expose only the PowerShell execution tool.'
+    }
     if ($toolNames -contains 'web_search') {
         throw 'Antigravity tools must not expose Gemini API web_search.'
     }
-    foreach ($requiredTool in @('get_current_datetime','run_powershell','quick_web','get_skill')) {
-        if ($toolNames -notcontains $requiredTool) {
-            throw "Shared tool registry omitted $requiredTool."
-        }
+
+    $dateToolSet = Get-GemmaToolConfiguration -InputText 'what time is it'
+    $dateToolNames = @($dateToolSet.Tools[0].functionDeclarations | ForEach-Object { $_.name })
+    if ($dateToolNames.Count -ne 1 -or $dateToolNames[0] -ne 'get_current_datetime') {
+        throw 'A local time request must expose only the date/time tool.'
+    }
+
+    $weatherToolSet = Get-GemmaToolConfiguration -InputText 'weather in Lviv'
+    $weatherToolNames = @($weatherToolSet.Tools[0].functionDeclarations | ForEach-Object { $_.name })
+    if ($weatherToolNames.Count -ne 1 -or $weatherToolNames[0] -ne 'quick_web') {
+        throw 'A weather request must expose only the quick web tool.'
+    }
+
+    $skillToolSet = Get-GemmaToolConfiguration -InputText 'organize my files into folders'
+    $skillToolNames = @($skillToolSet.Tools[0].functionDeclarations | ForEach-Object { $_.name })
+    if ($skillToolNames -notcontains 'run_powershell' -or $skillToolNames -notcontains 'get_skill') {
+        throw 'A complex file-organization request must expose the execution tool and file-management skill.'
     }
 
     $dateResult = Invoke-GemmaToolCall -Call @{ name = 'get_current_datetime'; args = @{} }
@@ -979,7 +996,7 @@ try {
     $script:Provider = 'openai'
     $script:MODEL = 'gpt-6-luna'
     $script:CommandMode = $false
-    $GeminiTools = (Get-GemmaToolConfiguration).Tools
+    $GeminiTools = (Get-GemmaToolConfiguration -InputText 'list files').Tools
 
     $lunaPayload = Build-GemmaOpenAIResponsesPayload -SystemInstruction $SystemInstruction -Contents (New-Object System.Collections.ArrayList)
     $nativeSearchTools = @($lunaPayload.tools | Where-Object { $_.type -eq 'web_search' })
@@ -998,7 +1015,7 @@ try {
         throw 'Luna system instructions must direct current-information requests to native web_search.'
     }
     $localToolNames = @($lunaPayload.tools | Where-Object { $_.type -eq 'function' } | ForEach-Object { $_.name })
-    foreach ($localTool in @('get_current_datetime','run_powershell','quick_web','get_skill')) {
+    foreach ($localTool in @('run_powershell')) {
         if ($localToolNames -notcontains $localTool) {
             throw "Adding native web_search removed Luna's local $localTool function."
         }
@@ -1173,7 +1190,7 @@ if ($executionSource -notmatch 'Command completed successfully with no output') 
 $previousExecutionPermission = $script:ExecutionPermission
 try {
     $script:ExecutionPermission = 'autopilot'
-    $emptyCommandResult = Invoke-GemmaPowerShellTool -Command '$null'
+    $emptyCommandResult = Invoke-GemmaToolCall -Call @{ name = 'run_powershell'; args = @{ command = '$null'; elevated = $false } }
     if ([string]::IsNullOrWhiteSpace([string]$emptyCommandResult.output) -or
         $emptyCommandResult.output -notmatch 'completed successfully with no output') {
         throw 'A PowerShell command with no pipeline output returned an empty tool result.'

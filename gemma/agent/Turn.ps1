@@ -1,4 +1,4 @@
-    $toolConfiguration = Get-GemmaToolConfiguration
+    $toolConfiguration = Get-GemmaToolConfiguration -InputText $rawInput -History $Contents
     $GeminiTools = $toolConfiguration.Tools
     $GeminiToolConfig = $toolConfiguration.ToolConfig
 

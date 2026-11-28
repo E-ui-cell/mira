@@ -222,19 +222,9 @@ function Add-GemmaAntigravitySearchCapabilityInstruction {
     )
 
     if ($GroundingEnabled) {
-        $policy = @(
-            'ANTIGRAVITY GOOGLE SEARCH: GEMMA provides native Google Search through a separate host-managed preflight for explicit web-search and current-information requests.'
-            'This is not a callable function tool in the chat tool list. Do not claim Google Search is unavailable merely because it is absent from functionDeclarations.'
-            'The host decides when to run the preflight and appends its grounded results to the current user turn. If no grounded results or sources were attached, do not claim a search was performed.'
-            'Questions about whether or why a previous search was used are meta-questions: answer from conversation context and do not start a new search unless the user also asks for current research.'
-            'quick_web is limited to weather, public IP, and command cheat sheets; it is not a replacement for native Google Search.'
-        ) -join ' '
+        $policy = 'Native Google Search is host-managed and runs only for current-information requests. Never claim it ran unless grounded results are attached. Meta-questions about prior searches use chat history; quick_web is limited to weather, public IP, and command help.'
     } else {
-        $policy = @(
-            'ANTIGRAVITY GOOGLE SEARCH: .grounding is OFF. Native Google Search preflight will not run.'
-            'Do not claim a Google Search was performed or that results were verified. Do not fabricate search sources.'
-            'quick_web remains limited to weather, public IP, and command cheat sheets.'
-        ) -join ' '
+        $policy = 'Google Search grounding is OFF. Do not claim searches or verified sources. quick_web is limited to weather, public IP, and command help.'
     }
 
     $instruction = $Payload['systemInstruction']

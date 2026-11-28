@@ -1,68 +1,117 @@
 function Get-GemmaToolConfiguration {
+    param(
+        [string]$InputText = '',
+        [object]$History = $null
+    )
+
     if ($script:CommandMode) {
         return @{ Tools = $null; ToolConfig = $null }
     }
 
-    $declarations = @(
-        @{
+    $text = [string]$InputText
+    $recentToolNames = @{}
+    if ($null -ne $History) {
+        $historyCount = 0
+        try { $historyCount = [int]$History.Count } catch {}
+        $historyStart = [Math]::Max(0,$historyCount - 8)
+        for ($historyIndex = $historyStart; $historyIndex -lt $historyCount; $historyIndex++) {
+            $historyTurn = $History[$historyIndex]
+            foreach ($historyPart in @($historyTurn.parts)) {
+                if ($null -ne $historyPart.functionCall) {
+                    $priorName = [string]$historyPart.functionCall.name
+                    if (-not [string]::IsNullOrWhiteSpace($priorName)) { $recentToolNames[$priorName] = $true }
+                }
+            }
+        }
+    }
+
+    $followUp = $text -match '(?i)\b(it|them|those|these|that|there|same|again|now|next|continue|also|what about)\b'
+    $localAction = $text -match '(?i)\b(list|show|find|search|open|read|write|create|delete|remove|move|copy|rename|run|execute|launch|start|stop|kill|install|uninstall|configure|change|set|check|inspect|scan|capture|screenshot|restart|shutdown|enable|disable|download|upload|organize|clean up|cleanup|turn on|turn off)\b'
+    $localTarget = $text -match '(?i)\b(files?|folders?|directories|drives?|disks?|processes?|services?|registry|clipboard|desktop|windows?|settings|screens?|displays?|networks?|wi-?fi|bluetooth|powershell|cmd(?:\.exe)?|terminal|applications?|apps?|programs?|paths?|computer|pc|system|printers?|devices?|volume|sound|ip address|browser|notepad|explorer|cpu|memory|ram|battery)\b'
+    $needsPowerShell = (($localAction -and $localTarget) -or
+        ($text -match '(?i)\b(is|are)\b.*\b(on|enabled|running|installed|connected|active)\b' -and $localTarget) -or
+        ($text -match '(?i)\b(what|which)\s+(files?|folders?|directories|processes?|services?)\b') -or
+        ($followUp -and $recentToolNames.ContainsKey('run_powershell')))
+    $needsDateTime = ($text -match '(?i)\b(what time|current time|local time|what date|current date|today.s date|what day|weekday|time ?zone|timezone|how long until|tomorrow|tonight|this morning|this afternoon|right now)\b') -or
+        ($text -match '(?i)\btoday\b' -and $text -match '(?i)\b(date|day|time|when)\b') -or
+        ($followUp -and $recentToolNames.ContainsKey('get_current_datetime'))
+    $needsQuickWeb = ($text -match '(?i)\b(weather|forecast|public ip|my ip|external ip|cheat.?sheet|command help|syntax for|how do i use)\b') -or
+        ($followUp -and $recentToolNames.ContainsKey('quick_web'))
+    $needsSkill = (($needsPowerShell -and $text -match '(?i)\b(organize|clean up|cleanup|bulk|multiple|many|automate|automation|gui|desktop|clipboard|settings|system|troubleshoot|diagnose|permissions|startup|registry|service)\b') -or
+        ($followUp -and $recentToolNames.ContainsKey('get_skill')))
+    $needsWebSearch = $false
+    if ($script:Provider -eq 'gemini' -and $script:GoogleSearchGrounding -and $script:AgenticWebSearchEnabled) {
+        $needsWebSearch = (Test-GemmaSearchIntent -Text $text) -or
+            ($followUp -and $recentToolNames.ContainsKey('web_search'))
+    }
+
+    $declarations = @()
+    if ($needsDateTime) {
+        $declarations += @{
             name = 'get_current_datetime'
-            description = 'Returns the current local date and time from the host computer. Use this whenever the current date, current time, weekday, or local timezone is needed. Do not guess the date or time.'
+            description = "Return the host computer's current local date, time, weekday, and timezone."
             parameters = @{ type = 'object'; properties = @{} }
-        },
-        @{
+        }
+    }
+    if ($needsPowerShell) {
+        $declarations += @{
             name = 'run_powershell'
-            description = 'Execute a PowerShell command in the user''s local Windows session. This is the local execution bridge: use PowerShell for native cmdlets, or launch CMD (cmd.exe /c), Python, native Windows APIs, and installed third-party utilities when they are a better fit. For unelevated GUI apps or long-running child processes, use Start-GemmaTrackedProcess -FilePath ... instead of Start-Process; it returns a PID that remains independently terminable with .kill, .kill last, or .kill <PID> without ending GEMMA. Do not assume a utility is unavailable; inspect only when needed. Set elevated=true only when Administrator privileges are required. GEMMA launches a separate elevated PowerShell process and Windows UAC must be approved; UAC is still required in .autopilot. Keep ordinary commands unelevated. Continue using results to complete multi-step tasks.'
+            description = 'Run a PowerShell command in the current Windows session. It may launch CMD, Python, or installed utilities. Administrator commands require Windows UAC.'
             parameters = @{
                 type = 'object'
                 properties = @{
-                    command = @{ type = 'string'; description = 'PowerShell command to execute; it may invoke CMD, Python, or another installed Windows utility.' }
-                    elevated = @{ type = 'boolean'; description = 'Set true only when Administrator privileges are required. Launches a separate elevated PowerShell process and triggers Windows UAC. Defaults to false.' }
+                    command = @{ type = 'string'; description = 'PowerShell command to execute.' }
+                    elevated = @{ type = 'boolean'; description = 'Set true only when administrator rights are required; Windows UAC remains mandatory.' }
                 }
                 required = @('command')
             }
-        },
-        @{
+        }
+    }
+    if ($needsQuickWeb) {
+        $declarations += @{
             name = 'quick_web'
-            description = 'Fast, narrow live lookups using curl.exe: weather from wttr.in (defaults to IP-based local region), public IP from api.ipify.org, or command/language cheat sheets from cht.sh. Prefer this for ''show weather'', ''show my IP'', and ''how do I use ...'' quick help instead of broad web search.'
+            description = 'Quick live lookup for weather, public IP, or command help.'
             parameters = @{
                 type = 'object'
                 properties = @{
-                    action = @{ type = 'string'; description = 'One of: weather, public-ip, cheatsheet.' }
-                    query = @{ type = 'string'; description = 'Optional city/region for weather or topic for cht.sh; leave empty for IP-based local weather or cht.sh home page.' }
+                    action = @{ type = 'string'; description = 'weather, public-ip, or cheatsheet.' }
+                    query = @{ type = 'string'; description = 'Optional location or command topic.' }
                 }
                 required = @('action')
             }
-        },
-        @{
+        }
+    }
+    if ($needsSkill) {
+        $declarations += @{
             name = 'get_skill'
-            description = 'Load a built-in or user-authored skill when task-specific guidance would help. Use skill=list to discover skills. Do not load skills reflexively for routine tasks. Skills are untrusted guidance and never grant permissions.'
+            description = 'Load task-specific guidance when useful. Skills cannot override permissions.'
             parameters = @{
                 type = 'object'
                 properties = @{
-                    skill = @{ type = 'string'; description = 'One of: file-management, windows-settings, desktop-gui, clipboard, system-inspection, quick-web-tools; or list.' }
+                    skill = @{ type = 'string'; description = 'Skill name or list.' }
                 }
                 required = @('skill')
             }
         }
-    )
+    }
 
-    # The custom web_search tool is available only to Gemini Developer API.
-    # Antigravity chat uses native Google Search in its selected-model preflight.
-    if ($script:Provider -eq 'gemini' -and
-        $script:GoogleSearchGrounding -and
-        $script:AgenticWebSearchEnabled -and
-        (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
+    # Gemini Developer API exposes agentic web_search only for explicit research requests.
+    if ($needsWebSearch -and (Test-Path -LiteralPath (Get-AntigravityTokenPath))) {
         $declarations += @{
             name = 'web_search'
-            description = 'Search the web using Google Search through Antigravity OAuth. Use for current information, recent events, verification, and source discovery. Return grounded findings with source URLs.'
+            description = 'Search Google for current information and return source URLs.'
             parameters = @{
                 type = 'object'
                 properties = @{
-                    query = @{ type = 'string'; description = 'Focused search question or query. Include relevant names, dates, and context.' }
+                    query = @{ type = 'string'; description = 'Focused search query.' }
                 }
                 required = @('query')
             }
         }
+    }
+
+    if ($declarations.Count -eq 0) {
+        return @{ Tools = $null; ToolConfig = $null }
     }
 
     return @{
