@@ -129,21 +129,101 @@ function Invoke-GemmaPlayTtsWave {
 function Invoke-GemmaTtsModelPicker {
     $models = @($script:MiraTtsModels)
     if ($models.Count -eq 0) { return }
-    Write-Host 'TTS models:' -ForegroundColor Cyan
-    for ($i = 0; $i -lt $models.Count; $i++) {
-        $marker = if ($models[$i] -ieq $script:MiraTtsModel) { '  [CURRENT]' } else { '' }
-        Write-Host ('  {0}. {1}{2}' -f ($i + 1),$models[$i],$marker)
-    }
-    $choice = Read-Host 'Select model number; Enter cancels'
-    if ([string]::IsNullOrWhiteSpace($choice)) { return }
-    $selectionNumber = 0
-    if (-not [int]::TryParse($choice.Trim(),[ref]$selectionNumber) -or
-        $selectionNumber -lt 1 -or $selectionNumber -gt $models.Count) {
-        Write-Host '[Invalid TTS model selection; unchanged.]' -ForegroundColor Yellow
+    $selected = [Array]::IndexOf($models,[string]$script:MiraTtsModel)
+    if ($selected -lt 0) { $selected = 0 }
+    $interactive = $false
+    try { $interactive = -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected } catch {}
+
+    if (-not $interactive) {
+        for ($i = 0; $i -lt $models.Count; $i++) {
+            $marker = if ($i -eq $selected) { '  [CURRENT]' } else { '' }
+            Write-Host ('{0}. {1}{2}' -f ($i + 1),$models[$i],$marker)
+        }
+        $choice = Read-Host 'Select TTS model number; Enter cancels'
+        if ([string]::IsNullOrWhiteSpace($choice)) { return }
+        $selectionNumber = 0
+        if (-not [int]::TryParse($choice.Trim(),[ref]$selectionNumber) -or $selectionNumber -lt 1 -or $selectionNumber -gt $models.Count) {
+            Write-Host '[Invalid TTS model selection; unchanged.]' -ForegroundColor Yellow
+            return
+        }
+        $script:MiraTtsModel = $models[$selectionNumber - 1]
+        Write-Host (('[TTS model: {0}]' -f $script:MiraTtsModel)) -ForegroundColor Green
         return
     }
-    $script:MiraTtsModel = $models[$selectionNumber - 1]
-    Write-Host ("[TTS model: {0}]" -f $script:MiraTtsModel) -ForegroundColor Green
+
+    $top = [Console]::CursorTop
+    $width = [Math]::Max(1,[Console]::WindowWidth - 1)
+    $oldForeground = [Console]::ForegroundColor
+    $oldBackground = [Console]::BackgroundColor
+    $confirmed = $false
+    $cancelled = $false
+    $draw = {
+        [Console]::SetCursorPosition(0,$top)
+        [Console]::ForegroundColor = [ConsoleColor]::Cyan
+        [Console]::BackgroundColor = $oldBackground
+        [Console]::Write(('Select TTS model'.PadRight($width)).Substring(0,$width))
+        [Console]::WriteLine()
+        [Console]::ForegroundColor = [ConsoleColor]::DarkGray
+        [Console]::Write(('Up/Down or j/k move; Enter select; Esc cancel'.PadRight($width)).Substring(0,$width))
+        [Console]::WriteLine()
+        for ($i = 0; $i -lt $models.Count; $i++) {
+            $marker = if ($models[$i] -ieq $script:MiraTtsModel) { '  [current]' } else { '' }
+            $label = ('  {0} {1}{2}' -f $(if ($i -eq $selected) { '>' } else { ' ' }),$models[$i],$marker)
+            if ($i -eq $selected) {
+                [Console]::ForegroundColor = [ConsoleColor]::White
+                [Console]::BackgroundColor = [ConsoleColor]::DarkCyan
+            } else {
+                [Console]::ForegroundColor = [ConsoleColor]::Gray
+                [Console]::BackgroundColor = $oldBackground
+            }
+            [Console]::Write(($label.PadRight($width)).Substring(0,$width))
+            [Console]::WriteLine()
+        }
+        [Console]::ForegroundColor = $oldForeground
+        [Console]::BackgroundColor = $oldBackground
+        [Console]::SetCursorPosition(0,[Math]::Min($top + $models.Count + 2,[Console]::BufferHeight - 1))
+    }
+    try {
+        & $draw
+        while (-not $confirmed -and -not $cancelled) {
+            $key = [Console]::ReadKey($true)
+            $character = [char]::ToLowerInvariant($key.KeyChar)
+            if ($key.Key -eq [ConsoleKey]::UpArrow -or $character -eq 'k') {
+                $selected = ($selected - 1 + $models.Count) % $models.Count
+                & $draw
+            } elseif ($key.Key -eq [ConsoleKey]::DownArrow -or $character -eq 'j') {
+                $selected = ($selected + 1) % $models.Count
+                & $draw
+            } elseif ($key.Key -eq [ConsoleKey]::Home) {
+                $selected = 0
+                & $draw
+            } elseif ($key.Key -eq [ConsoleKey]::End) {
+                $selected = $models.Count - 1
+                & $draw
+            } elseif ($key.Key -eq [ConsoleKey]::Enter) {
+                $confirmed = $true
+            } elseif ($key.Key -eq [ConsoleKey]::Escape -or $character -eq 'q' -or
+                ($key.Key -eq [ConsoleKey]::C -and (($key.Modifiers -band [ConsoleModifiers]::Control) -ne 0))) {
+                $cancelled = $true
+            }
+        }
+    } finally {
+        [Console]::ForegroundColor = $oldForeground
+        [Console]::BackgroundColor = $oldBackground
+        for ($i = 0; $i -lt ($models.Count + 2); $i++) {
+            $target = $top + $i
+            if ($target -ge 0 -and $target -lt [Console]::BufferHeight) {
+                [Console]::SetCursorPosition(0,$target)
+                [Console]::Write((' ' * $width))
+            }
+        }
+        [Console]::SetCursorPosition(0,[Math]::Min($top,[Console]::BufferHeight - 1))
+        [Console]::WriteLine()
+    }
+    if ($confirmed) {
+        $script:MiraTtsModel = $models[$selected]
+        Write-Host (('[TTS model: {0}]' -f $script:MiraTtsModel)) -ForegroundColor Green
+    }
 }
 function Invoke-GemmaReplayLatest {
     param([System.Collections.IList]$Contents)
