@@ -101,18 +101,28 @@ function Invoke-GemmaPowerShellTool {
     $previousProgressPreference = $ProgressPreference
     $previousInformationPreference = $InformationPreference
     $previousApprovedToolState = $script:InApprovedPowerShellTool
+    $previousTreatControlCAsInput = $null
     try {
         $script:InApprovedPowerShellTool = $true
         $ProgressPreference = 'SilentlyContinue'
         $InformationPreference = 'SilentlyContinue'
+        try {
+            $previousTreatControlCAsInput = [Console]::TreatControlCAsInput
+            [Console]::TreatControlCAsInput = $false
+        } catch {}
         $output = Invoke-Expression $Command *>&1 | Out-String -Width $MIRA_POWERSHELL_OUTPUT_WIDTH
         if ($output.Length -gt $MIRA_MAX_POWERSHELL_OUTPUT_CHARS) {
             $output = $output.Substring(0,$MIRA_MAX_POWERSHELL_OUTPUT_CHARS) + [Environment]::NewLine + '[PowerShell output truncated]'
         }
         return @{ approved=$true; output=$output; current_location=(Get-Location).Path }
+    } catch [System.Management.Automation.PipelineStoppedException] {
+        return @{ approved=$true; cancelled=$true; output='Command cancelled with Ctrl+C.'; current_location=(Get-Location).Path }
     } catch {
         return @{ approved=$true; error=$_.Exception.Message }
     } finally {
+        if ($null -ne $previousTreatControlCAsInput) {
+            try { [Console]::TreatControlCAsInput = $previousTreatControlCAsInput } catch {}
+        }
         $ProgressPreference = $previousProgressPreference
         $InformationPreference = $previousInformationPreference
         $script:InApprovedPowerShellTool = $previousApprovedToolState
