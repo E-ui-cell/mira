@@ -79,6 +79,8 @@ function Get-GemmaEffortResolution {
         @('none','minimal','low','medium','high','xhigh','max')
     } elseif ($Provider -eq 'groq' -and $Model -match '(?i)^meta-models/muse-spark-open$') {
         @('low','medium','high','xhigh')
+    } elseif ($Provider -eq 'groq' -and $Model -match '(?i)^qwen/qwen3\.8-27b$') {
+        @('none','default','low','medium','high')
     } else {
         @('low','medium','high')
     }
