@@ -415,11 +415,18 @@ try {
     $groqPayload = Build-GemmaGroqChatPayload -SystemInstruction $null -Contents (New-Object System.Collections.ArrayList) -Streaming $true
     if ($groqPayload.model -ne 'openai/gpt-oss-120b' -or
         $groqPayload.reasoning_effort -ne 'high' -or
-        $groqPayload.reasoning_format -ne 'parsed' -or
+        -not $groqPayload.include_reasoning -or
+        $groqPayload.Contains('reasoning_format') -or
         -not $groqPayload.stream -or
         $groqPayload.Contains('stream_options')) {
-        throw 'Groq GPT-OSS payload did not apply supported reasoning effort/format and streaming correctly.'
+        throw 'Groq GPT-OSS payload did not apply its supported reasoning controls and streaming correctly.'
     }
+    $script:VerboseOutput = $false
+    $groqHiddenPayload = Build-GemmaGroqChatPayload -SystemInstruction $null -Contents (New-Object System.Collections.ArrayList)
+    if ($groqHiddenPayload.include_reasoning -ne $false -or $groqHiddenPayload.Contains('reasoning_format')) {
+        throw 'Groq GPT-OSS did not hide reasoning when .verbose is disabled.'
+    }
+    $script:VerboseOutput = $true
 
     $script:MODEL = 'minimaxai/minimax-m2.7'
     $groqReasoningOnlyPayload = Build-GemmaGroqChatPayload -SystemInstruction $null -Contents (New-Object System.Collections.ArrayList)
