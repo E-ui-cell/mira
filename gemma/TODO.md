@@ -341,6 +341,7 @@ NON-NEGOTIABLE PRODUCT PRINCIPLES
 [ ] Investigate intermittent Ctrl+C behavior where GEMMA exits instead of
     cancelling only the active operation; identify the triggering contexts.
 [ ] Make LLM-launched commands independently cancellable. Retain the child
+    Progress: added `Start-GemmaTrackedProcess`, which retains a process handle and returns a PID, plus `.kill`, `.kill last`, and `.kill <PID>` (also `.kill all`) to terminate tracked process trees without ending GEMMA. Updated the tool instructions to use this helper for GUI apps/long-running children. A Windows PowerShell 5.1 process-lifecycle regression test is added; Ctrl+C behavior for arbitrary in-process commands remains a separate validation item.
     process handle and support terminating the launched process/tree (including
     applications started by a command) without exiting the GEMMA session.
 
