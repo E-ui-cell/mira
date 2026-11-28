@@ -970,9 +970,37 @@ function Read-GemLineConsole {
             }
             elseif ($b -match '^\.model\s+(\S*)$') {
                 $modelPrefix = $matches[1]
-                $modelOptions = @('openai:gpt-6-luna','gpt-6-luna','antigravity:','google-ai-studio:')
-                foreach ($item in @($modelOptions | Where-Object { $_.StartsWith($modelPrefix,[StringComparison]::OrdinalIgnoreCase) -and ('.model ' + $_) -ne $b })) {
+                foreach ($item in @(Get-GemmaModelCompletionCandidates -Prefix $modelPrefix)) {
                     $candidateBuffers += ('.model ' + $item); $candidateLabels += $item
+                }
+            }
+            elseif ($b -match '^\.sysprompt\s+(\S*)$') {
+                $promptPrefix = $matches[1]
+                foreach ($item in @(Get-GemmaSystemPromptNames | Where-Object { $_.StartsWith($promptPrefix,[StringComparison]::OrdinalIgnoreCase) -and ('.sysprompt ' + $_) -ne $b })) {
+                    $candidateBuffers += ('.sysprompt ' + $item); $candidateLabels += $item
+                }
+            }
+            elseif ($b -match '^\.skill\s+(\S*)$') {
+                $skillPrefix = $matches[1]
+                $skillResult = Get-GemmaSkill -Name 'list'
+                foreach ($item in @($skillResult.skills | Where-Object { $_.StartsWith($skillPrefix,[StringComparison]::OrdinalIgnoreCase) -and ('.skill ' + $_) -ne $b })) {
+                    $candidateBuffers += ('.skill ' + $item); $candidateLabels += $item
+                }
+            }
+            elseif ($b -match '^\.verbose\s+(\S*)$') {
+                $verbosePrefix = $matches[1]
+                foreach ($item in @('on','off' | Where-Object { $_.StartsWith($verbosePrefix,[StringComparison]::OrdinalIgnoreCase) -and ('.verbose ' + $_) -ne $b })) {
+                    $candidateBuffers += ('.verbose ' + $item); $candidateLabels += $item
+                }
+            }
+            elseif ($b -match '^\.kill\s+(\S*)$') {
+                $killPrefix = $matches[1]
+                $killOptions = @('last','all')
+                if ($null -ne $script:MiraTrackedProcessOrder) {
+                    $killOptions += @($script:MiraTrackedProcessOrder.ToArray() | ForEach-Object { [string]$_ })
+                }
+                foreach ($item in @($killOptions | Select-Object -Unique | Where-Object { $_.StartsWith($killPrefix,[StringComparison]::OrdinalIgnoreCase) -and ('.kill ' + $_) -ne $b })) {
+                    $candidateBuffers += ('.kill ' + $item); $candidateLabels += $item
                 }
             }
             elseif ($b -match '^\.oneshot\s+(\S*)$') {
