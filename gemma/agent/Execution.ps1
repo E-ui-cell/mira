@@ -135,6 +135,11 @@ function Invoke-GemmaPowerShellTool {
             [Console]::TreatControlCAsInput = $false
         } catch {}
         $output = Invoke-Expression $Command *>&1 | Out-String -Width $MIRA_POWERSHELL_OUTPUT_WIDTH
+        # Some Antigravity model adapters reject an empty tool-result text block.
+        # Keep the function response structurally useful when a command emits nothing.
+        if ([string]::IsNullOrWhiteSpace([string]$output)) {
+            $output = '[Command completed successfully with no output.]'
+        }
         if ($output.Length -gt $MIRA_MAX_POWERSHELL_OUTPUT_CHARS) {
             $output = $output.Substring(0,$MIRA_MAX_POWERSHELL_OUTPUT_CHARS) + [Environment]::NewLine + '[PowerShell output truncated]'
         }
