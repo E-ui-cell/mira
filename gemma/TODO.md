@@ -456,7 +456,7 @@ DECISIONS NEEDED BEFORE GUI CODING:
     and approve the feature-parity list. Do not start implementation before GO.
 
 [ ] Phase 1 — Freeze behavior and safety contracts.
-    Write focused tests and fixtures for both provider request envelopes,
+    Write focused tests and fixtures for all four provider request envelopes,
     token refresh, model discovery, Search metadata, tool calls, command mode,
     permissions, cancellation and context rollback. No live credentials in CI.
 
@@ -467,10 +467,10 @@ DECISIONS NEEDED BEFORE GUI CODING:
     Keep gemma.ps1 as a small launcher if that remains the agreed interface.
 
 [ ] Phase 3 — Implement provider and agent core.
-    Rebuild the two providers, model list, auth, generation settings, tool
+    Rebuild all four providers, model list, auth, generation settings, tool
     loop, mandatory grounding rules, PowerShell execution and error handling.
     Test with mocked responses first; then perform live manual checks per
-    provider using the owner's own OAuth/API credentials.
+    providers using the owner's own OAuth/API credentials.
 
 [ ] Phase 4 — Restore CLI parity.
     Implement interactive input, completion, paste, commands, sessions,
@@ -487,7 +487,7 @@ DECISIONS NEEDED BEFORE GUI CODING:
     Ensure that UI responsiveness never blocks network/tool execution.
 
 [ ] Phase 7 — Validation and release.
-    Test Windows PowerShell 5.1 parsing, both providers, Search-grounding
+    Test Windows PowerShell 5.1 parsing, all four providers, Search-grounding
     success/failure, no-fallback behavior, tool safety, multiline input,
     Unicode, paths with spaces, cancellation, session files, GUI DPI/resizing,
     process exit and dependency-free clean-machine startup. Keep CI green.
@@ -495,7 +495,7 @@ DECISIONS NEEDED BEFORE GUI CODING:
 10. ACCEPTANCE CRITERIA
 -----------------------
 [ ] The launcher is genuinely small; implementation is divided by responsibility.
-[ ] Exactly two provider adapters work independently and can be switched explicitly.
+[ ] All four provider adapters work independently and can be switched explicitly.
 [ ] OAuth and API-key authentication work without exposing secrets.
 [ ] Grounding is real, source-backed and strict; no ungrounded fallback.
 [ ] The agent can inspect and modify the local Windows environment through
