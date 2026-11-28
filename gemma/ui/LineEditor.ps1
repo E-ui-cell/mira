@@ -111,6 +111,34 @@ function Read-GemLineConsole {
     function Redraw($old,$new,$pos) {
         $w = [Math]::Max(12,[Console]::WindowWidth)
         $usable = $w - 1
+
+        # Fast path for the common single-line case when it fits on one row.
+        # Only rewrite the suffix that changed; console output is far more
+        # expensive than moving the cursor or comparing the immutable strings.
+        $oldText = [string]$old
+        $newText = [string]$new
+        $firstCapacity = [Math]::Max(1,$usable - $prompt)
+        if ($oldText.IndexOf([char]10) -lt 0 -and
+            $newText.IndexOf([char]10) -lt 0 -and
+            $oldText.Length -le $firstCapacity -and
+            $newText.Length -le $firstCapacity) {
+            $common = 0
+            $commonLimit = [Math]::Min($oldText.Length,$newText.Length)
+            while ($common -lt $commonLimit -and
+                   $oldText[$common] -ceq $newText[$common]) {
+                ++$common
+            }
+            [Console]::SetCursorPosition($prompt + $common,$row)
+            if ($common -lt $newText.Length) {
+                [Console]::Write($newText.Substring($common))
+            }
+            $stale = $oldText.Length - $newText.Length
+            if ($stale -gt 0) { [Console]::Write((' ' * $stale)) }
+            [Console]::SetCursorPosition($prompt + [Math]::Min($pos,$firstCapacity),$row)
+            $renderedRows = 1
+            return
+        }
+        $usable = $w - 1
         $lines = @(([string]$new) -split [string][char]10,-1)
         $rowOffsets = New-Object 'System.Collections.Generic.List[int]'
         $totalRows = 0
@@ -177,7 +205,8 @@ function Read-GemLineConsole {
             $cursorRowOffset = 1 + [int][Math]::Floor($afterFirst / [double]$usable)
             $cursorColumn = $afterFirst % $usable
         }
-        $cursorRow = [Math]::Min($row + $rowOffsets[$lineIndex] + $cursorRowOffset,[Console]::BufferHeight - 1)
+        $cursorRow = $row + $rowOffsets[$lineIndex] + $cursorRowOffset - $visibleRowOffset
+        $cursorRow = [Math]::Max(0,[Math]::Min($cursorRow,[Console]::BufferHeight - 1))
         [Console]::SetCursorPosition([Math]::Min($cursorColumn,$usable - 1),$cursorRow)
         $renderedRows = [Math]::Max(1,$totalRows)
     }
