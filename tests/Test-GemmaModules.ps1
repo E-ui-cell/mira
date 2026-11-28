@@ -506,6 +506,7 @@ foreach ($requiredRotationCode in @(
     'authentication_error',
     'insufficient_permissions',
     'rate_limit_exceeded',
+    'rate_limit_error',
     'insufficient_quota',
     'credit_balance_exhausted',
     'organization_usage_limit_exceeded',
@@ -522,6 +523,11 @@ if ($rotationCodes -contains 'slow_down' -or $rotationCodes -contains 'server_is
 if ($turnSource -notmatch '\$retryErrorCodes\s*=\s*@\(' -or
     $turnSource -notmatch '\$retryErrorCodes -contains \$errorType\.ToLowerInvariant\(\)') {
     throw 'OpenAI transient error codes/types are not wired to the same-key retry path.'
+}
+if ($turnSource -notmatch '\$requestStats\.HttpStatus\s*=\s*\$status' -or
+    $turnSource -notmatch '\$successResponse\.error\.code' -or
+    $turnSource -notmatch '\$successResponse\.error\.type') {
+    throw 'OpenAI Responses API body failures must preserve HTTP status separately and extract body error code/type.'
 }
 
 # Verify the Responses SSE worker extracts failure codes and can replay without
