@@ -10,7 +10,15 @@ param(
 # suffix before Gemma processes any remaining CLI arguments.
 . (Join-Path $PSScriptRoot 'config\Cli.ps1')
 $Prompt = Initialize-GemmaCliMode -Prompt $Prompt -ExplainCommand $ExplainCommand -RemainingArgs $RemainingArgs
+$script:GemmaRoot = $PSScriptRoot
 . (Join-Path $PSScriptRoot 'config\Defaults.ps1')
+$script:GemmaTtsLoaded = $false
+function Initialize-GemmaTts {
+    if (-not $script:GemmaTtsLoaded) {
+        . (Join-Path $script:GemmaRoot 'agent\Tts.ps1')
+        $script:GemmaTtsLoaded = $true
+    }
+}
 $script:GemmaPromptDirectory = Join-Path $PSScriptRoot 'prompts'
 
 . (Join-Path $PSScriptRoot 'providers\GeminiApi.ps1')
@@ -25,7 +33,6 @@ $script:GemmaPromptDirectory = Join-Path $PSScriptRoot 'prompts'
 . (Join-Path $PSScriptRoot 'agent\Settings.ps1')
 . (Join-Path $PSScriptRoot 'agent\Conversation.ps1')
 . (Join-Path $PSScriptRoot 'ui\Output.ps1')
-. (Join-Path $PSScriptRoot 'agent\Tts.ps1')
 
 $Contents = [System.Collections.ArrayList]::new()
 $script:NoSession = $false
@@ -35,7 +42,7 @@ $script:MiraInputHistory = [System.Collections.Generic.List[string]]::new()
 $script:MiraHistoryIndex = -1
 $script:MiraHistoryDraft = ''
 $script:MiraHistoryMax = $MIRA_MAX_HISTORY
-$script:GemCommands = @('.q','.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.model','.sysprompt','.effort','.verbose','.oneshot','.streaming','.auth','.grounding','.ask','.autopilot','.skills','.skill','.usage','.replay')
+$script:GemCommands = @('.q','.clear','.diff','.file','.text','.save','.exportsession','.loadsession','.shot','.model','.sysprompt','.effort','.verbose','.oneshot','.streaming','.auth','.grounding','.ask','.autopilot','.skills','.skill','.usage','.speak','.stop','.replay')
 
 . (Join-Path $PSScriptRoot 'ui\LineEditor.ps1')
 
