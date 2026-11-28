@@ -377,6 +377,98 @@ try {
     $script:Effort = $oldCrossProvider.Effort
 }
 
+# Groq must use native effort only on models that document it, while still
+# preserving parsed reasoning for supported reasoning models without effort controls.
+$oldGroqPayloadState = @{
+    Provider = $script:Provider
+    Model = $script:MODEL
+    Effort = $script:Effort
+    VerboseOutput = $script:VerboseOutput
+    GroqEffort = $MIRA_GROQ_EFFORT
+    MaxTokens = $MIRA_GROQ_MAX_COMPLETION_TOKENS
+    Temperature = $MIRA_GROQ_TEMPERATURE
+    TopP = $MIRA_GROQ_TOP_P
+    ResponseFormat = $MIRA_GROQ_RESPONSE_FORMAT
+    Tools = $GeminiTools
+}
+try {
+    $script:Provider = 'groq'
+    $script:Effort = 'high'
+    $script:VerboseOutput = $true
+    $MIRA_GROQ_EFFORT = $null
+    $MIRA_GROQ_MAX_COMPLETION_TOKENS = $null
+    $MIRA_GROQ_TEMPERATURE = $null
+    $MIRA_GROQ_TOP_P = $null
+    $MIRA_GROQ_RESPONSE_FORMAT = $null
+    $GeminiTools = @()
+
+    $script:MODEL = 'openai/gpt-oss-120b'
+    $groqPayload = Build-GemmaGroqChatPayload -SystemInstruction $null -Contents (New-Object System.Collections.ArrayList) -Streaming $true
+    if ($groqPayload.model -ne 'openai/gpt-oss-120b' -or
+        $groqPayload.reasoning_effort -ne 'high' -or
+        $groqPayload.reasoning_format -ne 'parsed' -or
+        -not $groqPayload.stream -or
+        $groqPayload.Contains('stream_options')) {
+        throw 'Groq GPT-OSS payload did not apply supported reasoning effort/format and streaming correctly.'
+    }
+
+    $script:MODEL = 'minimaxai/minimax-m2.7'
+    $groqReasoningOnlyPayload = Build-GemmaGroqChatPayload -SystemInstruction $null -Contents (New-Object System.Collections.ArrayList)
+    if ($groqReasoningOnlyPayload.reasoning_format -ne 'parsed' -or
+        $groqReasoningOnlyPayload.Contains('reasoning_effort')) {
+        throw 'Groq reasoning-only model received an unsupported reasoning_effort override.'
+    }
+
+    $script:MODEL = 'llama-3.3-70b-versatile'
+    $groqStandardPayload = Build-GemmaGroqChatPayload -SystemInstruction $null -Contents (New-Object System.Collections.ArrayList)
+    if ($groqStandardPayload.Contains('reasoning_effort') -or $groqStandardPayload.Contains('reasoning_format')) {
+        throw 'A standard Groq chat model received reasoning-only request parameters.'
+    }
+
+    $groqFixture = [pscustomobject]@{
+        id = 'chatcmpl-test'
+        model = 'openai/gpt-oss-120b'
+        choices = @([pscustomobject]@{
+            finish_reason = 'stop'
+            message = [pscustomobject]@{
+                role = 'assistant'
+                content = 'Final answer'
+                reasoning = 'Private reasoning'
+                tool_calls = @()
+            }
+        })
+        usage = [pscustomobject]@{ prompt_tokens = 10; completion_tokens = 5; total_tokens = 15 }
+    }
+    $groqConverted = ConvertFrom-GemmaOpenAIResponse -OpenAIResponse $groqFixture
+    $groqParts = @($groqConverted.candidates[0].content.parts)
+    if ($groqParts.Count -lt 2 -or
+        $groqParts[0].thought -ne $true -or
+        $groqParts[0].text -ne 'Private reasoning' -or
+        $groqParts[1].text -ne 'Final answer') {
+        throw 'Groq parsed reasoning was not preserved as a thought part ahead of final text.'
+    }
+
+    $groqEffort = Get-GemmaEffortResolution -Provider 'groq' -Model 'qwen/qwen3.8-27b'
+    if (-not $groqEffort.Supported -or $groqEffort.Parameter -ne 'reasoning_effort' -or $groqEffort.Effort -ne 'high') {
+        throw 'Groq Qwen 3.8 reasoning effort was not resolved to the native API parameter.'
+    }
+    $groqUnsupportedEffort = Get-GemmaEffortResolution -Provider 'groq' -Model 'minimaxai/minimax-m2.7'
+    if ($groqUnsupportedEffort.Supported) {
+        throw 'Groq MiniMax received an effort parameter not documented for that model.'
+    }
+} finally {
+    $script:Provider = $oldGroqPayloadState.Provider
+    $script:MODEL = $oldGroqPayloadState.Model
+    $script:Effort = $oldGroqPayloadState.Effort
+    $script:VerboseOutput = $oldGroqPayloadState.VerboseOutput
+    $MIRA_GROQ_EFFORT = $oldGroqPayloadState.GroqEffort
+    $MIRA_GROQ_MAX_COMPLETION_TOKENS = $oldGroqPayloadState.MaxTokens
+    $MIRA_GROQ_TEMPERATURE = $oldGroqPayloadState.Temperature
+    $MIRA_GROQ_TOP_P = $oldGroqPayloadState.TopP
+    $MIRA_GROQ_RESPONSE_FORMAT = $oldGroqPayloadState.ResponseFormat
+    $GeminiTools = $oldGroqPayloadState.Tools
+}
+
 $turnRoutingSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\agent\Turn.ps1') -Raw -Encoding UTF8
 if ($turnRoutingSource -notmatch '\$usingOpenAI\s*=\s*\(\$script:Provider -eq ''openai''\)' -or
     $turnRoutingSource -notmatch '\$usingGroq\s*=\s*\(\$script:Provider -eq ''groq''\)' -or
