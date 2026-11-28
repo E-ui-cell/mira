@@ -40,6 +40,7 @@ function Add-GemmaModelCatalogEntry {
 
 $script:GemmaModelCatalogCache = $null
 $script:GemmaModelCatalogCacheAt = [DateTime]::MinValue
+$script:GemmaProviderCompletionCache = @{}
 
 function Get-GemmaModelCatalog {
     param([switch]$Refresh)
@@ -133,6 +134,60 @@ function Get-GemmaModelCatalog {
     return $catalog
 }
 
+function Get-GemmaProviderCompletionModels {
+    param([ValidateSet('openai','antigravity','gemini','groq')][string]$Provider)
+
+    $now = Get-Date
+    if ($null -ne $script:GemmaModelCatalogCache -and
+        (($now - $script:GemmaModelCatalogCacheAt).TotalMinutes -lt 5)) {
+        return @($script:GemmaModelCatalogCache.Models | Where-Object { [string]$_.provider -eq $Provider })
+    }
+
+    if ($null -ne $script:GemmaProviderCompletionCache[$Provider] -and
+        (($now - $script:GemmaProviderCompletionCache[$Provider].At).TotalMinutes -lt 5)) {
+        return @($script:GemmaProviderCompletionCache[$Provider].Models)
+    }
+
+    $models = New-Object 'System.Collections.Generic.List[object]'
+    $seen = @{}
+    try {
+        switch ($Provider) {
+            'openai' {
+                if (@(Get-GemmaOpenAIApiKeys).Count -gt 0) {
+                    Add-GemmaModelCatalogEntry -List $models -Seen $seen -Provider 'openai' -Item ([pscustomobject]@{ name = [string]$MIRA_OPENAI_DEFAULT_MODEL })
+                }
+            }
+            'antigravity' {
+                if (Test-Path -LiteralPath (Get-AntigravityTokenPath) -PathType Leaf) {
+                    foreach ($item in @(Get-AntigravityModels)) {
+                        Add-GemmaModelCatalogEntry -List $models -Seen $seen -Provider 'antigravity' -Item $item
+                    }
+                }
+            }
+            'gemini' {
+                if (@(Get-GeminiApiKeys).Count -gt 0) {
+                    foreach ($item in @(Get-GeminiModels)) {
+                        Add-GemmaModelCatalogEntry -List $models -Seen $seen -Provider 'gemini' -Item $item
+                    }
+                }
+            }
+            'groq' {
+                if (@(Get-GroqApiKeys).Count -gt 0) {
+                    foreach ($item in @(Get-GroqModels)) {
+                        Add-GemmaModelCatalogEntry -List $models -Seen $seen -Provider 'groq' -Item $item
+                    }
+                }
+            }
+        }
+    } catch {
+        # Completion must not block the editor with provider errors.
+    }
+
+    $result = @($models.ToArray())
+    $script:GemmaProviderCompletionCache[$Provider] = @{ At = $now; Models = $result }
+    return $result
+}
+
 function Get-GemmaModelCompletionCandidates {
     param([string]$Prefix = '')
 
@@ -141,10 +196,18 @@ function Get-GemmaModelCompletionCandidates {
     foreach ($providerId in @('openai','antigravity','gemini','groq')) {
         [void]$values.Add($providerId + ':')
     }
-    $catalog = Get-GemmaModelCatalog
-    foreach ($model in @($catalog.Models)) {
-        $qualified = ([string]$model.provider + ':' + [string]$model.name)
-        [void]$values.Add($qualified)
+
+    $providerMatch = [regex]::Match($prefixValue,'^(openai|antigravity|gemini|groq):')
+    if ($providerMatch.Success) {
+        $providerId = $providerMatch.Groups[1].Value.ToLowerInvariant()
+        foreach ($model in @(Get-GemmaProviderCompletionModels -Provider $providerId)) {
+            [void]$values.Add([string]$model.provider + ':' + [string]$model.name)
+        }
+    } elseif ($null -ne $script:GemmaModelCatalogCache -and
+        ((Get-Date) - $script:GemmaModelCatalogCacheAt).TotalMinutes -lt 5) {
+        foreach ($model in @($script:GemmaModelCatalogCache.Models)) {
+            [void]$values.Add([string]$model.provider + ':' + [string]$model.name)
+        }
     }
 
     $seenValues = @{}
