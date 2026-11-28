@@ -6,6 +6,7 @@ $modules = @(
     (Join-Path $repoRoot 'gemma\config\Defaults.ps1'),
     (Join-Path $repoRoot 'gemma\providers\GeminiApi.ps1'),
     (Join-Path $repoRoot 'gemma\providers\OpenAI.ps1'),
+    (Join-Path $repoRoot 'gemma\providers\Groq.ps1'),
     (Join-Path $repoRoot 'gemma\providers\Antigravity.ps1'),
     (Join-Path $repoRoot 'gemma\ui\ModelPicker.ps1'),
     (Join-Path $repoRoot 'gemma\agent\Execution.ps1'),
@@ -49,6 +50,11 @@ $requiredFunctions = @(
     'Add-GemmaUsageRecord',
     'Invoke-GemmaUsageCommand',
     'Build-GeminiPayload',
+    'Get-GroqApiKeys',
+    'Get-GroqModels',
+    'Test-GemmaGroqReasoningModel',
+    'Test-GemmaGroqReasoningEffortModel',
+    'Build-GemmaGroqChatPayload',
     'Add-GemmaAntigravitySearchCapabilityInstruction',
     'Clear-GemmaModelMenu',
     'Build-GemmaOpenAIResponsesPayload',
@@ -59,6 +65,8 @@ $requiredFunctions = @(
     'Normalize-MiraReply',
     'Add-GemmaModelCatalogEntry',
     'Get-GemmaModelCatalog',
+    'Get-GemmaModelCompletionCandidates',
+    'Get-GemmaSystemPromptNames',
     'Read-GemmaModelSelection',
     'Set-GemmaActiveModel',
     'Invoke-GemmaModelPicker',
@@ -88,16 +96,19 @@ if ($mainSource -match "'\.provider'" -or
     $null -ne (Get-Command Invoke-GemmaProviderCommand -ErrorAction SilentlyContinue)) {
     throw 'The retired .provider command is still registered, dispatched, completed, or advertised.'
 }
-foreach ($requiredProvider in @('openai','antigravity','gemini')) {
+foreach ($requiredProvider in @('openai','antigravity','gemini','groq')) {
     if ($modelPickerSource -notmatch ("Id = '" + $requiredProvider + "'")) {
         throw "The unified model picker is missing the '$requiredProvider' provider group."
     }
 }
 if ($modelPickerSource -notmatch 'Get-AntigravityModels' -or
     $modelPickerSource -notmatch 'Get-GeminiModels' -or
+    $modelPickerSource -notmatch 'Get-GroqModels' -or
     $modelPickerSource -notmatch 'Google AI Studio API' -or
-    $modelPickerSource -notmatch 'MIRA_OPENAI_DEFAULT_MODEL') {
-    throw 'The model picker does not independently load and label all three provider catalogues.'
+    $modelPickerSource -notmatch 'Groq' -or
+    $modelPickerSource -notmatch 'MIRA_OPENAI_DEFAULT_MODEL' -or
+    $modelPickerSource -notmatch '\$model\.provider \+ '':'') {
+    throw 'The model picker does not independently load and label all four provider catalogues as provider:model.'
 }
 
 # Gemini's model list can still advertise 2.5 models even when generation access
@@ -113,10 +124,11 @@ if (-not $catalogProbe[0].legacyAccessRestricted -or
     $modelPickerSource -notmatch '\[legacy access\]') {
     throw 'The model picker must flag only Google AI Studio Gemini 2.5 models with restricted project access.'
 }
-if ($lineEditorSource -notmatch "openai:gpt-6-luna" -or
-    $lineEditorSource -notmatch "antigravity:" -or
-    $lineEditorSource -notmatch "google-ai-studio:") {
-    throw 'The .model provider-qualified tab completions are incomplete.'
+if ($lineEditorSource -notmatch 'Get-GemmaModelCompletionCandidates' -or
+    $lineEditorSource -notmatch 'Get-GemmaSystemPromptNames' -or
+    $lineEditorSource -notmatch "^\\.sysprompt\\s+" -or
+    $lineEditorSource -match "openai:gpt-6-luna|google-ai-studio:") {
+    throw 'The .model or .sysprompt argument tab completions are incomplete or still hard-coded.'
 }
 
 # The main Mira TUI and Gemma line editor must defer queued control keys rather
@@ -245,18 +257,21 @@ $oldGemmaProvider = $script:Provider
 $oldGemmaModel = $script:MODEL
 $oldOpenAIApiKeys = @($script:OpenAIApiKeys)
 $oldGeminiApiKeys = @($script:GeminiApiKeys)
+$oldGroqApiKeys = @($script:GroqApiKeys)
 $oldModelCatalogFunction = (Get-Command Get-GemmaModelCatalog -CommandType Function).ScriptBlock
 $oldAntigravityPathFunction = (Get-Command Get-AntigravityTokenPath -CommandType Function).ScriptBlock
 $script:TestAntigravityTokenPath = [IO.Path]::Combine([IO.Path]::GetTempPath(),'mira-antigravity-test-' + [guid]::NewGuid().ToString('N') + '.json')
 try {
     $script:OpenAIApiKeys = @('unit-test-openai-key')
     $script:GeminiApiKeys = @('unit-test-gemini-key')
+    $script:GroqApiKeys = @('unit-test-groq-key')
     [IO.File]::WriteAllText($script:TestAntigravityTokenPath,'{}')
     Set-Item -Path Function:\Get-GemmaModelCatalog -Value {
         return [pscustomobject]@{
             Models = @(
                 [pscustomobject]@{ name='gemini-test-model'; provider='gemini' }
                 [pscustomobject]@{ name='agy-test-model'; provider='antigravity' }
+                [pscustomobject]@{ name='openai/gpt-oss-120b'; provider='groq' }
             )
             ProviderStatuses = @{}
         }
@@ -277,11 +292,20 @@ try {
     if ($script:Provider -ne 'antigravity' -or $script:MODEL -ne 'agy-test-model') {
         throw 'Gemma .model antigravity:model did not switch to Antigravity.'
     }
+    Invoke-GemmaModelPicker -RequestedModel 'groq:openai/gpt-oss-120b'
+    if ($script:Provider -ne 'groq' -or $script:MODEL -ne 'openai/gpt-oss-120b') {
+        throw 'Gemma .model groq:model did not switch to Groq.'
+    }
+    $groqCompletionOptions = @(Get-GemmaModelCompletionCandidates -Prefix 'groq:')
+    if ($groqCompletionOptions -notcontains 'groq:openai/gpt-oss-120b') {
+        throw 'The .model completion catalogue omitted the provider-qualified Groq model.'
+    }
 } finally {
     $script:Provider = $oldGemmaProvider
     $script:MODEL = $oldGemmaModel
     $script:OpenAIApiKeys = $oldOpenAIApiKeys
     $script:GeminiApiKeys = $oldGeminiApiKeys
+    $script:GroqApiKeys = $oldGroqApiKeys
     Set-Item -Path Function:\Get-GemmaModelCatalog -Value $oldModelCatalogFunction
     Set-Item -Path Function:\Get-AntigravityTokenPath -Value $oldAntigravityPathFunction
     if (Test-Path -LiteralPath $script:TestAntigravityTokenPath) {
@@ -341,12 +365,16 @@ try {
 
 $turnRoutingSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\agent\Turn.ps1') -Raw -Encoding UTF8
 if ($turnRoutingSource -notmatch '\$usingOpenAI\s*=\s*\(\$script:Provider -eq ''openai''\)' -or
+    $turnRoutingSource -notmatch '\$usingGroq\s*=\s*\(\$script:Provider -eq ''groq''\)' -or
+    $turnRoutingSource -notmatch 'Build-GemmaGroqChatPayload' -or
+    $turnRoutingSource -notmatch 'api\.groq\.com/openai/v1/chat/completions' -or
+    $turnRoutingSource -notmatch 'Groq Chat Completions stream ended before' -or
     $turnRoutingSource -notmatch '\$usingAntigravityOAuth\s*=\s*\(\$script:Provider -eq ''antigravity''\)' -or
     $turnRoutingSource -notmatch 'Build-GeminiPayload -SystemInstruction') {
     throw 'Gemma request execution does not route from the active model picker provider.'
 }
 
-if ($MIRA_DEFAULT_PROVIDER -notin @('antigravity','gemini')) {
+if ($MIRA_DEFAULT_PROVIDER -notin @('antigravity','gemini','openai','groq')) {
     throw 'Gemma defaults did not initialize a supported provider.'
 }
 if ([string]::IsNullOrWhiteSpace($MIRA_DEFAULT_MODEL)) {
@@ -364,6 +392,9 @@ foreach ($relativePath in @(
     'gemma\agent\Settings.ps1',
     'gemma\ui\LineEditor.ps1',
     'gemma\ui\ModelPicker.ps1',
+    'gemma\providers\Groq.ps1',
+    'gemma\agent\Conversation.ps1',
+    'gemma\agent\Turn.ps1',
     'gemma\ui\Output.ps1'
 )) {
     $changedPath = Join-Path $repoRoot $relativePath
