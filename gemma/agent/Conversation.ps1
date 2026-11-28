@@ -49,7 +49,7 @@ function Get-GemmaGoogleBlockDiagnostic {
 
 function Get-GemmaEffortResolution {
     param(
-        [ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider,
+        [ValidateSet('openai','gemini','antigravity','groq')][string]$Provider = $script:Provider,
         [string]$Model = $script:MODEL
     )
 
@@ -61,6 +61,7 @@ function Get-GemmaEffortResolution {
         'openai' { $MIRA_OPENAI_EFFORT }
         'gemini' { $MIRA_GEMINI_EFFORT }
         'antigravity' { $MIRA_ANTIGRAVITY_EFFORT }
+        'groq' { $MIRA_GROQ_EFFORT }
     }
     if (-not [string]::IsNullOrWhiteSpace([string]$providerOverride)) {
         $value = [string]$providerOverride
@@ -76,6 +77,8 @@ function Get-GemmaEffortResolution {
     $value = $value.Trim().ToLowerInvariant()
     $allowed = if ($Provider -eq 'openai') {
         @('none','minimal','low','medium','high','xhigh','max')
+    } elseif ($Provider -eq 'groq' -and $Model -match '(?i)^meta-models/muse-spark-open$') {
+        @('low','medium','high','xhigh')
     } else {
         @('low','medium','high')
     }
@@ -90,6 +93,8 @@ function Get-GemmaEffortResolution {
         $parameter = 'generationConfig.thinkingConfig.thinkingLevel'
     } elseif ($Model -match '(?i)gemini[-.]?2.5') {
         $parameter = 'generationConfig.thinkingConfig.thinkingBudget'
+    } elseif ($Provider -eq 'groq' -and (Test-GemmaGroqReasoningEffortModel -Model $Model)) {
+        $parameter = 'reasoning_effort'
     }
 
     return [pscustomobject]@{
@@ -104,7 +109,7 @@ function Get-GemmaEffortResolution {
 
 function Get-GemmaEffectiveEffort {
     param(
-        [ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider,
+        [ValidateSet('openai','gemini','antigravity','groq')][string]$Provider = $script:Provider,
         [string]$Model = $script:MODEL
     )
     return (Get-GemmaEffortResolution -Provider $Provider -Model $Model).Effort
@@ -112,7 +117,7 @@ function Get-GemmaEffectiveEffort {
 
 function Get-GemmaRequestEffort {
     param(
-        [ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider,
+        [ValidateSet('openai','gemini','antigravity','groq')][string]$Provider = $script:Provider,
         [string]$Model = $script:MODEL
     )
     # Keep the reported value identical to the value serialized into the request.
@@ -122,7 +127,7 @@ function Get-GemmaRequestEffort {
 
 function Get-GemmaEffortStatusText {
     param(
-        [ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider,
+        [ValidateSet('openai','gemini','antigravity','groq')][string]$Provider = $script:Provider,
         [string]$Model = $script:MODEL
     )
     $resolution = Get-GemmaEffortResolution -Provider $Provider -Model $Model
