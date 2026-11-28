@@ -272,6 +272,11 @@ NON-NEGOTIABLE PRODUCT PRINCIPLES
     cannot drift from the implementation.
 [ ] Preserve a clean spinner/progress indicator and Ctrl+C cancellation.
     The spinner is progress feedback; API retry internals remain hidden.
+[ ] Investigate intermittent Ctrl+C behavior where GEMMA exits instead of
+    cancelling only the active operation; identify the triggering contexts.
+[ ] Make LLM-launched commands independently cancellable. Retain the child
+    process handle and support terminating the launched process/tree (including
+    applications started by a command) without exiting the GEMMA session.
 
 8. NATIVE WINDOWS GUI — DESIGN DISCUSSION BEFORE IMPLEMENTATION
 ---------------------------------------------------------------
