@@ -1470,6 +1470,9 @@
                 if ($usingOpenAI -and $requestApiKeys.Count -gt 1 -and
                     $requestStats.KeySlotsTried.Count -gt 1 -and $requestStats.LastKeyIndex -ge 0) {
                     $script:MiraOpenAIApiKeyIndex = ($requestStats.LastKeyIndex + 1) % $requestApiKeys.Count
+                } elseif ($usingGroq -and $requestApiKeys.Count -gt 1 -and
+                    $requestStats.KeySlotsTried.Count -gt 1 -and $requestStats.LastKeyIndex -ge 0) {
+                    $script:MiraGroqApiKeyIndex = ($requestStats.LastKeyIndex + 1) % $requestApiKeys.Count
                 } elseif ($requestProviderName -eq 'gemini' -and $requestApiKeys.Count -gt 1 -and
                     $requestStats.KeySlotsTried.Count -gt 1 -and $requestStats.LastKeyIndex -ge 0) {
                     $script:MiraGeminiApiKeyIndex = ($requestStats.LastKeyIndex + 1) % $requestApiKeys.Count
@@ -1504,7 +1507,7 @@
                                 $failureStream.Dispose()
                             }
                         } catch {}
-                        $requestProviderLabel = if ($usingAntigravityOAuth) { 'Antigravity' } elseif ($usingOpenAI) { 'OpenAI' } else { 'Gemini API' }
+                        $requestProviderLabel = if ($usingAntigravityOAuth) { 'Antigravity' } elseif ($usingOpenAI) { 'OpenAI' } elseif ($usingGroq) { 'Groq' } else { 'Gemini API' }
                         if ($failureBody) {
                             Write-Host ("[{0} API Failure]: HTTP {1}" -f $requestProviderLabel,$failureStatus) -ForegroundColor Red
                             Write-Host $failureBody -ForegroundColor Gray
@@ -1514,7 +1517,7 @@
                         throw "$requestProviderLabel request failed with HTTP $failureStatus."
                     }
 
-                    if (($usingOpenAI -or $streamGoogle) -and $runspaceErrors.Count -gt 0) {
+                    if (($usingOpenAICompatible -or $streamGoogle) -and $runspaceErrors.Count -gt 0) {
                         $workerError = [string]$runspaceErrors[$runspaceErrors.Count - 1].Exception.Message
                         if ($streamGoogle -and [int]$requestStats.HttpStatus -gt 0 -and
                             -not [string]::IsNullOrWhiteSpace([string]$requestStats.ErrorMessage)) {
@@ -1522,7 +1525,7 @@
                             throw "$workerLabel streaming failure (HTTP $([int]$requestStats.HttpStatus)): $([string]$requestStats.ErrorMessage)"
                         }
                         if (-not [string]::IsNullOrWhiteSpace($workerError)) {
-                            $workerLabel = if ($usingAntigravityOAuth) { 'Antigravity' } elseif ($usingOpenAI) { 'OpenAI' } else { 'Gemini' }
+                            $workerLabel = if ($usingAntigravityOAuth) { 'Antigravity' } elseif ($usingOpenAI) { 'OpenAI' } elseif ($usingGroq) { 'Groq' } else { 'Gemini' }
                             throw "$workerLabel API Failure: $workerError"
                         }
                     }
@@ -1605,6 +1608,13 @@
                 } else {
                     $response = ConvertFrom-GemmaOpenAIResponse -OpenAIResponse $response
                 }
+            } elseif ($usingGroq) {
+                $usedKeyIndex = $requestKeyIndex
+                if ($null -ne $response._gemmaKeyIndex) { $usedKeyIndex = [int]$response._gemmaKeyIndex }
+                $script:MiraGroqApiKeyIndex = ($usedKeyIndex + 1) % $requestApiKeys.Count
+                $requestStats.LastKeyIndex = $usedKeyIndex
+                $requestStats.KeyCount = $requestApiKeys.Count
+                $response = ConvertFrom-GemmaOpenAIResponse -OpenAIResponse $response
             } elseif ($requestProviderName -eq 'gemini') {
                 $usedKeyIndex = $requestKeyIndex
                 if ($null -ne $response._gemmaKeyIndex) { $usedKeyIndex = [int]$response._gemmaKeyIndex }
