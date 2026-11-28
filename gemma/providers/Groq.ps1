@@ -84,9 +84,13 @@ function Build-GemmaGroqChatPayload {
         if ($effortResolution.Supported) {
             $payload.reasoning_effort = [string]$effortResolution.Effort
         }
-        # Parsed reasoning is retained as a thought part and shown only when
-        # .verbose is enabled. Hidden mode avoids leaking reasoning into text.
-        $payload.reasoning_format = if ($script:VerboseOutput) { 'parsed' } else { 'hidden' }
+        if ([string]$script:MODEL -match '(?i)^openai/gpt-oss-') {
+            # GPT-OSS does not accept reasoning_format; use its separate flag.
+            $payload.include_reasoning = [bool]$script:VerboseOutput
+        } else {
+            # Other reasoning models expose parsed reasoning in a dedicated field.
+            $payload.reasoning_format = if ($script:VerboseOutput) { 'parsed' } else { 'hidden' }
+        }
     }
 
     if ($null -ne $MIRA_GROQ_MAX_COMPLETION_TOKENS) {
