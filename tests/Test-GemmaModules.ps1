@@ -502,10 +502,15 @@ try {
     if ($groqNoReasoning.Effort -ne 'none' -or -not $groqNoReasoning.Supported) {
         throw 'Groq Qwen 3.8 did not accept its documented none reasoning-effort setting.'
     }
+    $MIRA_GROQ_EFFORT = 'xhigh'
+    $groqMuseEffort = Get-GemmaEffortResolution -Provider 'groq' -Model 'meta-models/muse-spark-open'
+    if (-not $groqMuseEffort.Supported -or $groqMuseEffort.Effort -ne 'xhigh') {
+        throw 'Groq Muse Spark Open did not accept its documented xhigh effort setting.'
+    }
     $MIRA_GROQ_EFFORT = $null
     $groqUnsupportedEffort = Get-GemmaEffortResolution -Provider 'groq' -Model 'openai/gpt-oss-safeguard-20b'
     if ($groqUnsupportedEffort.Supported) {
-        throw 'Groq MiniMax received an effort parameter not documented for that model.'
+        throw 'Groq GPT-OSS Safeguard received an effort parameter not documented for that model.'
     }
 } finally {
     $script:Provider = $oldGroqPayloadState.Provider
