@@ -53,7 +53,20 @@ while ($true) {
         continue
     }
 
+    if ($trimmedInput -ieq '.speak') {
+        Initialize-GemmaTts
+        Invoke-GemmaSpeakLatest -Contents $Contents
+        continue
+    }
+
+    if ($trimmedInput -ieq '.stop') {
+        Initialize-GemmaTts
+        Stop-GemmaTtsPlayback
+        continue
+    }
+
     if ($trimmedInput -ieq '.replay') {
+        Initialize-GemmaTts
         Invoke-GemmaReplayLatest -Contents $Contents
         continue
     }
