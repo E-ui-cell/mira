@@ -166,8 +166,14 @@ function Get-GemmaProviderCompletionModels {
             }
             'gemini' {
                 if (@(Get-GeminiApiKeys).Count -gt 0) {
-                    foreach ($item in @(Get-GeminiModels)) {
-                        Add-GemmaModelCatalogEntry -List $models -Seen $seen -Provider 'gemini' -Item $item
+                    $originalProvider = [string]$script:Provider
+                    try {
+                        $script:Provider = 'gemini'
+                        foreach ($item in @(Get-GeminiModels)) {
+                            Add-GemmaModelCatalogEntry -List $models -Seen $seen -Provider 'gemini' -Item $item
+                        }
+                    } finally {
+                        $script:Provider = $originalProvider
                     }
                 }
             }
