@@ -451,6 +451,52 @@ try {
     $script:MiraTtsModels = $oldTtsModels
     $SystemInstruction = $oldSystemInstruction
 }
+# Mock the complete TTS model fallback path: 503 on the preferred model, success on the next model.
+$oldTtsRequestFunction = (Get-Command Invoke-GemmaTtsWithKeyRotation -CommandType Function).ScriptBlock
+$oldTtsPlayFunction = (Get-Command Invoke-GemmaPlayTtsWave -CommandType Function).ScriptBlock
+$oldGeminiKeysFunction = (Get-Command Get-GeminiApiKeys -CommandType Function).ScriptBlock
+$oldTtsModelForFallback = $script:MiraTtsModel
+$oldTtsDirectoryForFallback = $script:MiraTtsAudioDirectory
+$oldTtsModelsForFallback = $script:MiraTtsModels
+$script:TtsMockUris = New-Object 'System.Collections.Generic.List[string]'
+$script:TtsMockAudioBytes = New-Object byte[] 44
+[Array]::Copy([Text.Encoding]::ASCII.GetBytes('RIFF'),0,$script:TtsMockAudioBytes,0,4)
+$script:TtsMockAudioBase64 = [Convert]::ToBase64String($script:TtsMockAudioBytes)
+$script:TtsMockPlayedPath = ''
+$script:MiraTtsAudioDirectory = Join-Path ([IO.Path]::GetTempPath()) ('gemma-tts-mock-' + [guid]::NewGuid().ToString('N'))
+$script:MiraTtsModel = 'gemini-3.8-flash-tts'
+$script:MiraTtsModels = @('gemini-3.8-flash-tts','gemini-3.1-flash-tts-preview','gemini-2.5-flash-preview-tts','gemini-3.8-flash-lite-tts')
+try {
+    Set-Item -Path Function:\Get-GeminiApiKeys -Value { return @('mock-gemini-key') }
+    Set-Item -Path Function:\Invoke-GemmaTtsWithKeyRotation -Value {
+        param([string]$Uri,[string]$Json)
+        [void]$script:TtsMockUris.Add($Uri)
+        if ($Uri.Contains('gemini-3.8-flash-tts:')) { throw 'Gemini TTS failed with every configured API key: HTTP 503: UNAVAILABLE' }
+        return [pscustomobject]@{ candidates = @([pscustomobject]@{ content = [pscustomobject]@{ parts = @([pscustomobject]@{ inlineData = [pscustomobject]@{ data = $script:TtsMockAudioBase64 } }) } }) }
+    }
+    Set-Item -Path Function:\Invoke-GemmaPlayTtsWave -Value { param([string]$Path) $script:TtsMockPlayedPath = $Path }
+    $mockContents = [System.Collections.ArrayList]::new()
+    [void]$mockContents.Add([pscustomobject]@{ role='user'; parts=@([pscustomobject]@{ text='speak this' }) })
+    [void]$mockContents.Add([pscustomobject]@{ role='model'; parts=@([pscustomobject]@{ text='mock transcript' }) })
+    Invoke-GemmaSpeakLatest -Contents $mockContents
+    if ($script:TtsMockUris.Count -ne 2 -or
+        -not $script:TtsMockUris[0].Contains('gemini-3.8-flash-tts:') -or
+        -not $script:TtsMockUris[1].Contains('gemini-3.1-flash-tts-preview:') -or
+        $script:MiraTtsModel -ne 'gemini-3.1-flash-tts-preview' -or
+        -not (Test-Path -LiteralPath $script:TtsMockPlayedPath -PathType Leaf)) {
+        throw 'TTS did not rotate from the preferred 503 model to the next model and cache/play the successful response.'
+    }
+} finally {
+    Set-Item -Path Function:\Invoke-GemmaTtsWithKeyRotation -Value $oldTtsRequestFunction
+    Set-Item -Path Function:\Invoke-GemmaPlayTtsWave -Value $oldTtsPlayFunction
+    Set-Item -Path Function:\Get-GeminiApiKeys -Value $oldGeminiKeysFunction
+    $script:MiraTtsModel = $oldTtsModelForFallback
+    $script:MiraTtsAudioDirectory = $oldTtsDirectoryForFallback
+    $script:MiraTtsModels = $oldTtsModelsForFallback
+    if (Test-Path -LiteralPath $script:MiraTtsAudioDirectory -PathType Container) { }
+    if (Test-Path -LiteralPath $script:TtsMockPlayedPath -PathType Leaf) { Remove-Item -LiteralPath (Split-Path -Parent $script:TtsMockPlayedPath) -Recurse -Force -ErrorAction SilentlyContinue }
+    Remove-Variable -Name TtsMockUris,TtsMockAudioBytes,TtsMockAudioBase64,TtsMockPlayedPath -Scope Script -ErrorAction SilentlyContinue
+}
 # Verify the line/delta/off streaming mode command changes runtime state.
 $oldStreamingMode = $script:StreamingMode
 try {
