@@ -456,11 +456,12 @@ try {
     }
     $script:VerboseOutput = $true
 
-    $script:MODEL = 'minimaxai/minimax-m2.7'
+    $script:MODEL = 'openai/gpt-oss-safeguard-20b'
     $groqReasoningOnlyPayload = Build-GemmaGroqChatPayload -SystemInstruction $null -Contents (New-Object System.Collections.ArrayList)
-    if ($groqReasoningOnlyPayload.reasoning_format -ne 'parsed' -or
-        $groqReasoningOnlyPayload.Contains('reasoning_effort')) {
-        throw 'Groq reasoning-only model received an unsupported reasoning_effort override.'
+    if (-not $groqReasoningOnlyPayload.include_reasoning -or
+        $groqReasoningOnlyPayload.Contains('reasoning_effort') -or
+        $groqReasoningOnlyPayload.Contains('reasoning_format')) {
+        throw 'Groq GPT-OSS Safeguard received unsupported reasoning parameters.'
     }
 
     $script:MODEL = 'llama-3.3-70b-versatile'
@@ -502,7 +503,7 @@ try {
         throw 'Groq Qwen 3.8 did not accept its documented none reasoning-effort setting.'
     }
     $MIRA_GROQ_EFFORT = $null
-    $groqUnsupportedEffort = Get-GemmaEffortResolution -Provider 'groq' -Model 'minimaxai/minimax-m2.7'
+    $groqUnsupportedEffort = Get-GemmaEffortResolution -Provider 'groq' -Model 'openai/gpt-oss-safeguard-20b'
     if ($groqUnsupportedEffort.Supported) {
         throw 'Groq MiniMax received an effort parameter not documented for that model.'
     }
