@@ -463,8 +463,10 @@ $script:TtsMockAudioBytes = New-Object byte[] 44
 [Array]::Copy([Text.Encoding]::ASCII.GetBytes('RIFF'),0,$script:TtsMockAudioBytes,0,4)
 $script:TtsMockAudioBase64 = [Convert]::ToBase64String($script:TtsMockAudioBytes)
 $script:TtsMockPlayedPath = ''
-$script:MiraTtsAudioDirectory = Join-Path ([IO.Path]::GetTempPath()) ('gemma-tts-mock-' + [guid]::NewGuid().ToString('N'))
+$mockTtsDirectory = Join-Path ([IO.Path]::GetTempPath()) ('gemma-tts-mock-' + [guid]::NewGuid().ToString('N'))
+$script:MiraTtsAudioDirectory = $mockTtsDirectory
 $script:MiraTtsModel = 'gemini-3.8-flash-tts'
+$script:MiraTtsVoice = 'Kore'
 $script:MiraTtsModels = @('gemini-3.8-flash-tts','gemini-3.1-flash-tts-preview','gemini-2.5-flash-preview-tts','gemini-3.8-flash-lite-tts')
 try {
     Set-Item -Path Function:\Get-GeminiApiKeys -Value { return @('mock-gemini-key') }
@@ -493,8 +495,7 @@ try {
     $script:MiraTtsModel = $oldTtsModelForFallback
     $script:MiraTtsAudioDirectory = $oldTtsDirectoryForFallback
     $script:MiraTtsModels = $oldTtsModelsForFallback
-    if (Test-Path -LiteralPath $script:MiraTtsAudioDirectory -PathType Container) { }
-    if (Test-Path -LiteralPath $script:TtsMockPlayedPath -PathType Leaf) { Remove-Item -LiteralPath (Split-Path -Parent $script:TtsMockPlayedPath) -Recurse -Force -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $mockTtsDirectory -PathType Container) { Remove-Item -LiteralPath $mockTtsDirectory -Recurse -Force -ErrorAction SilentlyContinue }
     Remove-Variable -Name TtsMockUris,TtsMockAudioBytes,TtsMockAudioBase64,TtsMockPlayedPath -Scope Script -ErrorAction SilentlyContinue
 }
 # Verify the line/delta/off streaming mode command changes runtime state.
