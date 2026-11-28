@@ -12,6 +12,13 @@ function Test-GemmaGroqReasoningEffortModel {
     return ($id -match '(?i)^(openai/gpt-oss-(20b|120b)|qwen/qwen3\.8-27b|meta-models/muse-spark-open)$')
 }
 
+function Test-GemmaGroqReasoningModel {
+    param([string]$Model)
+
+    $id = ([string]$Model).Trim()
+    return ($id -match '(?i)^(openai/gpt-oss-(20b|120b|safeguard-20b)|qwen/qwen3\.8-27b|minimaxai/minimax-m2\.7|meta-models/muse-spark-open)$')
+}
+
 function Get-GroqModels {
     $keys = @(Get-GroqApiKeys)
     if ($keys.Count -eq 0) { return @() }
@@ -73,8 +80,10 @@ function Build-GemmaGroqChatPayload {
     }
 
     $effortResolution = Get-GemmaEffortResolution -Provider 'groq' -Model $script:MODEL
-    if ($effortResolution.Supported) {
-        $payload.reasoning_effort = [string]$effortResolution.Effort
+    if (Test-GemmaGroqReasoningModel -Model $script:MODEL) {
+        if ($effortResolution.Supported) {
+            $payload.reasoning_effort = [string]$effortResolution.Effort
+        }
         # Parsed reasoning is retained as a thought part and shown only when
         # .verbose is enabled. Hidden mode avoids leaking reasoning into text.
         $payload.reasoning_format = if ($script:VerboseOutput) { 'parsed' } else { 'hidden' }
@@ -95,7 +104,6 @@ function Build-GemmaGroqChatPayload {
 
     if ($Streaming) {
         $payload.stream = $true
-        $payload.stream_options = @{ include_usage = $true }
     }
 
     return $payload
