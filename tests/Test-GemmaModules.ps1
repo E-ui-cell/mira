@@ -275,6 +275,8 @@ try {
             Models = @(
                 [pscustomobject]@{ name='gemini-test-model'; provider='gemini' }
                 [pscustomobject]@{ name='agy-test-model'; provider='antigravity' }
+                [pscustomobject]@{ name='gemini-3-flash'; provider='gemini' }
+                [pscustomobject]@{ name='gemini-3-flash'; provider='antigravity' }
                 [pscustomobject]@{ name='openai/gpt-oss-120b'; provider='groq' }
             )
             ProviderStatuses = @{}
@@ -305,6 +307,12 @@ try {
     $groqCompletionOptions = @(Get-GemmaModelCompletionCandidates -Prefix 'groq:')
     if ($groqCompletionOptions -notcontains 'groq:openai/gpt-oss-120b') {
         throw 'The .model completion catalogue omitted the provider-qualified Groq model.'
+    }
+    $geminiCompletionOptions = @(Get-GemmaModelCompletionCandidates -Prefix 'gemini:gemini-3-flash')
+    $antigravityCompletionOptions = @(Get-GemmaModelCompletionCandidates -Prefix 'antigravity:gemini-3-flash')
+    if ($geminiCompletionOptions -notcontains 'gemini:gemini-3-flash' -or
+        $antigravityCompletionOptions -notcontains 'antigravity:gemini-3-flash') {
+        throw 'The .model completion catalogue did not keep identical model IDs distinct by provider.'
     }
     $oldPromptDirectory = $script:GemmaPromptDirectory
     $testPromptDirectory = Join-Path ([IO.Path]::GetTempPath()) ('gemma-prompts-' + [guid]::NewGuid().ToString('N'))
