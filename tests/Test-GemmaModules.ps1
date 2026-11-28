@@ -128,6 +128,8 @@ if (-not $catalogProbe[0].legacyAccessRestricted -or
 if ($lineEditorSource -notmatch 'Get-GemmaModelCompletionCandidates' -or
     $lineEditorSource -notmatch 'Get-GemmaSystemPromptNames' -or
     $lineEditorSource -notmatch '\.sysprompt\s+' -or
+    -not $lineEditorSource.Contains("'.sysprompt'") -or
+    -not $lineEditorSource.Contains("completion += ' '") -or
     $lineEditorSource -match 'openai:gpt-6-luna|google-ai-studio:') {
     throw 'The .model or .sysprompt argument tab completions are incomplete or still hard-coded.'
 }
