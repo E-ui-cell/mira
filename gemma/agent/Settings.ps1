@@ -55,18 +55,25 @@ function Invoke-GemmaEffortCommand {
     Write-Host "[Shared effort set to: $script:Effort | active request: $activeEffort]" -ForegroundColor Green
 }
 
+function Get-GemmaSystemPromptNames {
+    $names = New-Object 'System.Collections.Generic.List[string]'
+    [void]$names.Add('default')
+    if (Test-Path -LiteralPath $script:GemmaPromptDirectory -PathType Container) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $script:GemmaPromptDirectory -Filter '*.md' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+            $name = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+            if ($name -match '^[a-zA-Z0-9_-]+$' -and -not $names.Contains($name)) {
+                [void]$names.Add($name)
+            }
+        }
+    }
+    return @($names.ToArray())
+}
+
 function Invoke-GemmaSystemPromptCommand {
     param([string]$Argument = '')
 
     $value = $Argument.Trim()
-    $available = @('default')
-    if (Test-Path -LiteralPath $script:GemmaPromptDirectory -PathType Container) {
-        $available += @(
-            Get-ChildItem -LiteralPath $script:GemmaPromptDirectory -Filter '*.md' -File |
-                ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Name) } |
-                Sort-Object
-        )
-    }
+    $available = @(Get-GemmaSystemPromptNames)
 
     if ([string]::IsNullOrWhiteSpace($value)) {
         Write-Host ("[System prompt: {0}]" -f $script:ActiveSystemPromptName) -ForegroundColor Cyan
@@ -110,7 +117,7 @@ function Invoke-GemmaSystemPromptCommand {
 
 function Add-GemmaUsageRecord {
     param(
-        [Parameter(Mandatory=$true)][ValidateSet('openai','gemini','antigravity')][string]$Provider,
+        [Parameter(Mandatory=$true)][ValidateSet('openai','gemini','antigravity','groq')][string]$Provider,
         [Parameter(Mandatory=$true)][string]$Model,
         [bool]$Succeeded = $true,
         [int]$InputTokens = 0,
@@ -244,6 +251,7 @@ function Invoke-GemmaUsageCommand {
         'openai' { 'OpenAI' }
         'gemini' { 'Google AI Studio API' }
         'antigravity' { 'Antigravity' }
+        'groq' { 'Groq' }
         default { if ($activeProvider) { $activeProvider } else { 'Unknown provider' } }
     }
 
@@ -271,7 +279,7 @@ function Invoke-GemmaUsageCommand {
     if ($null -ne $stats.LastRequest) {
         $last = $stats.LastRequest
         $keyText = ''
-        if ($last.Provider -in @('openai','gemini') -and $last.KeyCount -gt 0) {
+        if ($last.Provider -in @('openai','gemini','groq') -and $last.KeyCount -gt 0) {
             $triedText = ''
             if (@($last.KeySlotsTried).Count -gt 0) {
                 $triedText = ' (tried ' + ((@($last.KeySlotsTried) | ForEach-Object { [string]$_ }) -join ',') + ')'
@@ -310,6 +318,18 @@ function Invoke-GemmaUsageCommand {
                     $activeKeys.Count,($nextKeyIndex + 1),$activeKeys.Count) -ForegroundColor DarkGray
             } else {
                 Write-Host 'OpenAI key candidates: none configured.' -ForegroundColor DarkGray
+            }
+        }
+        'groq' {
+            $activeKeys = @(Get-GroqApiKeys)
+            $nextKeyIndex = 0
+            if ($null -ne $script:MiraGroqApiKeyIndex -and $activeKeys.Count -gt 0) {
+                $nextKeyIndex = [int]$script:MiraGroqApiKeyIndex % $activeKeys.Count
+            }
+            if ($activeKeys.Count -gt 0) {
+                Write-Host ("Groq API key candidates: {0} configured | next slot {1}/{2}" -f $activeKeys.Count,($nextKeyIndex + 1),$activeKeys.Count) -ForegroundColor DarkGray
+            } else {
+                Write-Host 'Groq API key candidates: none configured.' -ForegroundColor DarkGray
             }
         }
         'gemini' {
