@@ -1,3 +1,52 @@
+function Get-GemmaGoogleBlockDiagnostic {
+    param([Parameter(Mandatory = $true)]$Response)
+
+    $promptFeedback = $Response.promptFeedback
+    $blockReason = [string]$promptFeedback.blockReason
+    if (-not [string]::IsNullOrWhiteSpace($blockReason) -and $blockReason -notin @('BLOCK_REASON_UNSPECIFIED','UNSPECIFIED')) {
+        $detail = [string]$promptFeedback.blockReasonMessage
+        if ([string]::IsNullOrWhiteSpace($detail)) {
+            $detail = "Google's prompt safety filter reported $blockReason."
+        }
+        return [pscustomobject]@{
+            Blocked = $true
+            Code = 'PROMPT_BLOCKED_' + $blockReason.ToUpperInvariant()
+            Message = "Google blocked the prompt before generating a response ($blockReason). $detail"
+        }
+    }
+
+    foreach ($candidate in @($Response.candidates)) {
+        $finishReason = [string]$candidate.finishReason
+        if ($finishReason -match '^(?i:SAFETY|RECITATION|BLOCKLIST|PROHIBITED_CONTENT|SPII|IMAGE_SAFETY|MODEL_ARMOR)$') {
+            $detail = [string]$candidate.finishMessage
+            if ([string]::IsNullOrWhiteSpace($detail)) { $detail = 'The response was blocked by Google content-safety controls.' }
+            return [pscustomobject]@{
+                Blocked = $true
+                Code = 'CANDIDATE_BLOCKED_' + $finishReason.ToUpperInvariant()
+                Message = "Google blocked candidate generation ($finishReason). $detail"
+            }
+        }
+    }
+
+    foreach ($rating in @($promptFeedback.safetyRatings)) {
+        if ($rating.blocked -eq $true) {
+            $category = [string]$rating.category
+            $probability = [string]$rating.probability
+            return [pscustomobject]@{
+                Blocked = $true
+                Code = 'PROMPT_BLOCKED_SAFETY_RATING'
+                Message = "Google blocked the prompt based on safety rating $category ($probability)."
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        Blocked = $false
+        Code = ''
+        Message = ''
+    }
+}
+
 function Get-GemmaEffortResolution {
     param(
         [ValidateSet('openai','gemini','antigravity')][string]$Provider = $script:Provider,
