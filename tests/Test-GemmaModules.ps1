@@ -409,6 +409,48 @@ if ($turnSource -notmatch '\$streamState\.Response\s*=\s*\$streamResponse' -or
     throw 'Gemini streaming response handoff, streamed-text recovery, or structured API error diagnostics are missing.'
 }
 
+# TTS model-specific payloads and bounded server-error fallback classification.
+$oldTtsModel = $script:MiraTtsModel
+$oldTtsVoice = $script:MiraTtsVoice
+$oldTtsAudioDirectory = $script:MiraTtsAudioDirectory
+$oldTtsModels = $script:MiraTtsModels
+$oldSystemInstruction = $SystemInstruction
+try {
+    . (Join-Path $repoRoot 'gemma\agent\Tts.ps1')
+    $script:MiraTtsVoice = 'Kore'
+    $SystemInstruction = [pscustomobject]@{
+        parts = @([pscustomobject]@{ text = ('## TTS scene' + [Environment]::NewLine + 'A quiet room at night.' + [Environment]::NewLine + '## Other section' + [Environment]::NewLine + 'Not part of the scene.') })
+    }
+    $scene = Get-GemmaTtsScene
+    if ($scene -ne 'A quiet room at night.') { throw 'TTS scene extraction did not stop at the next prompt section.' }
+    $transcript = 'Hello <whispers> there <short pause> friend.'
+    $modernPart = New-GemmaTtsSpeechPart -Transcript $transcript -Style 'warm and calm' -Scene $scene -Model 'gemini-3.8-flash-tts'
+    if ($modernPart.text -ne $transcript -or $modernPart.speechMetadata.style -ne 'warm and calm') {
+        throw 'Gemini 3.8 TTS payload must keep the transcript separate and use speechMetadata.style.'
+    }
+    $legacy31Part = New-GemmaTtsSpeechPart -Transcript $transcript -Style 'warm and calm' -Scene $scene -Model 'gemini-3.1-flash-tts-preview'
+    if ($legacy31Part.ContainsKey('speechMetadata') -or $legacy31Part.text -notmatch '\[Scene\]' -or
+        $legacy31Part.text -notmatch "\[Director's Notes\]" -or $legacy31Part.text -notmatch '\[whispers\]') {
+        throw 'Gemini 3.1 TTS must use its legacy scene/director-note format and square-bracket tags.'
+    }
+    $legacy25Part = New-GemmaTtsSpeechPart -Transcript $transcript -Style 'warm and calm' -Scene $scene -Model 'gemini-2.5-flash-preview-tts'
+    if ($legacy25Part.ContainsKey('speechMetadata') -or $legacy25Part.text -notmatch 'Scene: A quiet room at night\.' -or
+        $legacy25Part.text -notmatch "Director's notes: warm and calm" -or $legacy25Part.text -match '<whispers>|\[whispers\]') {
+        throw 'Gemini 2.5 TTS must use plain-text scene/director instructions and omit unsupported inline tags.'
+    }
+    if (-not (Test-GemmaTtsModelRetryableFailure -Message 'Gemini TTS failed with every configured API key: HTTP 503: UNAVAILABLE') -or
+        -not (Test-GemmaTtsModelRetryableFailure -Message 'HTTP 429: RESOURCE_EXHAUSTED') -or
+        (Test-GemmaTtsModelRetryableFailure -Message 'HTTP 400: INVALID_ARGUMENT')) {
+        throw 'TTS model fallback must retry server/quota failures but not non-retryable 400 responses.'
+    }
+    if (@($script:MiraTtsModels).Count -ne 4) { throw 'The configured TTS model list must contain all four supported model IDs.' }
+} finally {
+    $script:MiraTtsModel = $oldTtsModel
+    $script:MiraTtsVoice = $oldTtsVoice
+    $script:MiraTtsAudioDirectory = $oldTtsAudioDirectory
+    $script:MiraTtsModels = $oldTtsModels
+    $SystemInstruction = $oldSystemInstruction
+}
 # Verify the line/delta/off streaming mode command changes runtime state.
 $oldStreamingMode = $script:StreamingMode
 try {
