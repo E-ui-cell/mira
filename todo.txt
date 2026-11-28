@@ -196,8 +196,17 @@ NON-NEGOTIABLE PRODUCT PRINCIPLES
 7. CLI / CONSOLE FRONTEND
 -------------------------
 [ ] Keep a small PowerShell launcher/CLI for users who prefer the terminal.
-[x] Keep useful command completion, path completion, model completion,
-    multiline input/paste, history navigation and common editing shortcuts.
+[ ] Restore reliable long and multiline text input (major regression):
+    the current editor no longer supports long prompts and multiline input
+    reliably. Restore long single-line buffers, multiple lines, multiline
+    paste, editing/cursor movement across lines, and exact full-buffer
+    submission. Prevent truncation, dropped pasted text, redraw corruption
+    and accidental submission. Add regression tests for long single-line and
+    multiline prompts, multiline paste, edits at the beginning/middle/end,
+    and exact submitted content. Validate interactively in Windows PowerShell
+    5.1; parser-only/module tests are not sufficient.
+[ ] Preserve useful command completion, path completion, model completion,
+    history navigation and common editing shortcuts.
 [x] Implement Bash Readline / Emacs editing keys in the custom input editor:
        - Ctrl+A / Ctrl+E: beginning / end of the current line.
        - Ctrl+B / Ctrl+F: move backward / forward one character.
