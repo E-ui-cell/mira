@@ -563,22 +563,15 @@ if ($script:StreamingMode -notin @('off','line','delta')) {
     throw 'Gemma defaults did not initialize a supported streaming mode.'
 }
 
-# Parse every changed command/UI module without executing the interactive loop.
-foreach ($relativePath in @(
-    'gemma\gemma.ps1',
-    'gemma\agent\ChatLoop.ps1',
-    'gemma\agent\Settings.ps1',
-    'gemma\ui\LineEditor.ps1',
-    'gemma\ui\ModelPicker.ps1',
-    'gemma\providers\Groq.ps1',
-    'gemma\agent\Conversation.ps1',
-    'gemma\agent\Turn.ps1',
-    'gemma\ui\Output.ps1'
-)) {
-    $changedPath = Join-Path $repoRoot $relativePath
+# Parse every PowerShell file shipped under gemma, not just the files touched
+# in the latest change. This catches syntax errors in any startup-loaded module.
+$gemmaRoot = Join-Path $repoRoot 'gemma'
+$gemmaScriptFiles = @(Get-ChildItem -LiteralPath $gemmaRoot -Filter '*.ps1' -File -Recurse)
+foreach ($changedFile in $gemmaScriptFiles) {
+    $relativePath = $changedFile.FullName.Substring($repoRoot.Length).TrimStart('\','/')
     $changedTokens = $null
     $changedErrors = $null
-    [System.Management.Automation.Language.Parser]::ParseFile($changedPath, [ref]$changedTokens, [ref]$changedErrors) | Out-Null
+    [System.Management.Automation.Language.Parser]::ParseFile($changedFile.FullName, [ref]$changedTokens, [ref]$changedErrors) | Out-Null
     if ($changedErrors.Count -gt 0) {
         $firstError = $changedErrors[0]
         throw ("PowerShell syntax error in {0} at line {1}, column {2}: {3}" -f $relativePath,$firstError.Extent.StartLineNumber,$firstError.Extent.StartColumnNumber,$firstError.Message)
