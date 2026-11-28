@@ -5,6 +5,11 @@ param(
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArgs
 )
 
+$script:GemmaStartupProfile = ([string]$env:MIRA_PROFILE_STARTUP -eq '1')
+if ($script:GemmaStartupProfile) {
+    $script:GemmaStartupStopwatch = [Diagnostics.Stopwatch]::StartNew()
+}
+
 # Explorer's legacy "Run with PowerShell" association can append an
 # execution-policy wrapper after -File. Capture and remove only that exact
 # suffix before Gemma processes any remaining CLI arguments.
@@ -47,4 +52,8 @@ $script:GemCommands = @('.q','.clear','.diff','.file','.text','.save','.exportse
 . (Join-Path $PSScriptRoot 'ui\LineEditor.ps1')
 
 . (Join-Path $PSScriptRoot 'agent\ChatLoop.ps1')
+if ($script:GemmaStartupProfile) {
+    $script:GemmaStartupStopwatch.Stop()
+    Write-Host (('[GEMMA startup] Module load: {0} ms' -f $script:GemmaStartupStopwatch.ElapsedMilliseconds)) -ForegroundColor DarkGray
+}
 Start-GemmaChatLoop
