@@ -456,6 +456,7 @@ $oldTtsRequestFunction = (Get-Command Invoke-GemmaTtsWithKeyRotation -CommandTyp
 $oldTtsPlayFunction = (Get-Command Invoke-GemmaPlayTtsWave -CommandType Function).ScriptBlock
 $oldGeminiKeysFunction = (Get-Command Get-GeminiApiKeys -CommandType Function).ScriptBlock
 $oldTtsModelForFallback = $script:MiraTtsModel
+$oldTtsVoiceForFallback = $script:MiraTtsVoice
 $oldTtsDirectoryForFallback = $script:MiraTtsAudioDirectory
 $oldTtsModelsForFallback = $script:MiraTtsModels
 $script:TtsMockUris = New-Object 'System.Collections.Generic.List[string]'
@@ -493,6 +494,7 @@ try {
     Set-Item -Path Function:\Invoke-GemmaPlayTtsWave -Value $oldTtsPlayFunction
     Set-Item -Path Function:\Get-GeminiApiKeys -Value $oldGeminiKeysFunction
     $script:MiraTtsModel = $oldTtsModelForFallback
+    $script:MiraTtsVoice = $oldTtsVoiceForFallback
     $script:MiraTtsAudioDirectory = $oldTtsDirectoryForFallback
     $script:MiraTtsModels = $oldTtsModelsForFallback
     if (Test-Path -LiteralPath $mockTtsDirectory -PathType Container) { Remove-Item -LiteralPath $mockTtsDirectory -Recurse -Force -ErrorAction SilentlyContinue }
