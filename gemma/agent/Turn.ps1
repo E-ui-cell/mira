@@ -834,6 +834,9 @@
                                                 $chatState.Reasoning += [string]$delta.reasoning
                                             }
                                             foreach ($toolDelta in @($delta.tool_calls)) {
+                                                # Text chunks commonly omit tool_calls. In PowerShell @($null)
+                                                # is a one-item array, so discard that null delta explicitly.
+                                                if ($null -eq $toolDelta) { continue }
                                                 $toolIndex = 0
                                                 if ($null -ne $toolDelta.index) { $toolIndex = [int]$toolDelta.index }
                                                 if (-not $chatState.ToolCalls.ContainsKey($toolIndex)) {
@@ -904,6 +907,16 @@
                             } catch {
                                 $failure = $_
                                 $response = $failure.Exception.Response
+                                if ($null -eq $response) {
+                                    # HttpWebRequest.GetResponse() nests WebException under MethodInvocationException.
+                                    $exceptionCursor = $failure.Exception
+                                    while ($null -ne $exceptionCursor -and $null -eq $response) {
+                                        try { $response = $exceptionCursor.Response } catch {}
+                                        if ($null -eq $response) {
+                                            try { $exceptionCursor = $exceptionCursor.InnerException } catch { $exceptionCursor = $null }
+                                        }
+                                    }
+                                }
                                 if ($null -ne $response) { $errorResponse = $response }
                                 if ($null -eq $response -and $null -ne $httpResponse) { $response = $httpResponse }
                                 $status = 0
@@ -915,7 +928,7 @@
                                     try { & $captureProviderResponse $response } catch {}
                                     try { [void][int]::TryParse([string]$response.Headers['Retry-After'],[ref]$retryAfter) } catch {}
                                     try {
-                                        if ($null -ne $failure.Exception.Response) {
+                                        if ($null -ne $response) {
                                             $errorStream = $response.GetResponseStream()
                                             if ($null -ne $errorStream) {
                                                 $errorReader = New-Object System.IO.StreamReader($errorStream)
@@ -1192,6 +1205,16 @@
                             } catch {
                                 $failure = $_
                                 $response = $failure.Exception.Response
+                                if ($null -eq $response) {
+                                    # HttpWebRequest.GetResponse() nests WebException under MethodInvocationException.
+                                    $exceptionCursor = $failure.Exception
+                                    while ($null -ne $exceptionCursor -and $null -eq $response) {
+                                        try { $response = $exceptionCursor.Response } catch {}
+                                        if ($null -eq $response) {
+                                            try { $exceptionCursor = $exceptionCursor.InnerException } catch { $exceptionCursor = $null }
+                                        }
+                                    }
+                                }
                                 if ($null -eq $response -and $null -ne $httpResponse) { $response = $httpResponse }
                                 $status = 0; $retryAfter = 0; $errorCode = ''; $errorBody = ''
                                 if ($null -ne $response) {
@@ -1202,7 +1225,7 @@
                                     } catch {}
                                     try { [void][int]::TryParse([string]$response.Headers['Retry-After'],[ref]$retryAfter) } catch {}
                                     try {
-                                        if ($null -ne $failure.Exception.Response) {
+                                        if ($null -ne $response) {
                                             $errorStream = $response.GetResponseStream()
                                             if ($null -ne $errorStream) {
                                                 $errorReader = New-Object System.IO.StreamReader($errorStream)

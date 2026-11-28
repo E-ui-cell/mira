@@ -133,6 +133,8 @@ function ConvertFrom-GemmaOpenAIResponse {
         }
     }
     foreach ($toolCall in @($message.tool_calls)) {
+        # Text-only Chat Completions omit tool_calls; @($null) still contains one item.
+        if ($null -eq $toolCall) { continue }
         $arguments = @{}
         try { if ($toolCall.function.arguments) { $arguments = [string]$toolCall.function.arguments | ConvertFrom-Json -ErrorAction Stop } }
         catch { $arguments = @{ _raw_arguments=[string]$toolCall.function.arguments } }

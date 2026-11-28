@@ -93,6 +93,40 @@ try {
 }
 Write-Host 'GEMMA tool registry and PowerShell dispatch checks passed.'
 
+# PowerShell's @($null) contains one null item; tool stream parsers must skip it.
+$nullArrayFixture = @($null)
+if ($nullArrayFixture.Count -ne 1) {
+    throw 'PowerShell @($null) behavior changed; review null tool-delta handling.'
+}
+
+$plainCompletionFixture = [pscustomobject]@{
+    choices = @([pscustomobject]@{
+        message = [pscustomobject]@{
+            role = 'assistant'
+            content = 'plain text response'
+        }
+        finish_reason = 'stop'
+    })
+    usage = $null
+}
+$plainCompletion = ConvertFrom-GemmaOpenAIResponse -OpenAIResponse $plainCompletionFixture
+$plainCompletionCalls = @(
+    $plainCompletion.candidates[0].content.parts |
+        Where-Object { $null -ne $_.functionCall }
+)
+if ($plainCompletionCalls.Count -ne 0) {
+    throw 'A Chat Completions text-only response without tool_calls created a fake function call.'
+}
+
+$groqTurnSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\agent\Turn.ps1') -Raw -Encoding UTF8
+if ($groqTurnSource -notmatch '(?s)foreach \(\$toolDelta in @\(\$delta\.tool_calls\)\) \{\s*# Text chunks commonly omit tool_calls\..*?if \(\$null -eq \$toolDelta\) \{ continue \}') {
+    throw 'Groq streaming does not skip null tool-call deltas.'
+}
+if ([regex]::Matches($groqTurnSource,'HttpWebRequest\.GetResponse\(\) nests WebException').Count -ne 2) {
+    throw 'Groq/OpenAI HTTP error handling does not inspect nested WebException responses.'
+}
+Write-Host 'GEMMA text-only tool-call and HTTP-error regression checks passed.'
+
 if ($MIRA_DEFAULT_SYSTEM_PROMPT.Length -gt 500) {
     throw 'The default system prompt must stay compact to avoid unnecessary input-token overhead.'
 }
