@@ -130,6 +130,10 @@ if ($lineEditorSource -notmatch 'Get-GemmaModelCompletionCandidates' -or
     $lineEditorSource -notmatch '\.sysprompt\s+' -or
     -not $lineEditorSource.Contains("'.sysprompt'") -or
     -not $lineEditorSource.Contains("completion += ' '") -or
+    $lineEditorSource -notmatch '\.exportsession' -or
+    $lineEditorSource -notmatch '\.loadsession' -or
+    $lineEditorSource -notmatch "argumentCommands = .*\.exportsession.*\.loadsession" -or
+    $lineEditorSource -notmatch '\(\?:file\|text\|exportsession\|loadsession\)' -or
     $lineEditorSource -match 'openai:gpt-6-luna|google-ai-studio:') {
     throw 'The .model or .sysprompt argument tab completions are incomplete or still hard-coded.'
 }
