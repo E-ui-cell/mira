@@ -16,7 +16,7 @@ function Test-GemmaGroqReasoningModel {
     param([string]$Model)
 
     $id = ([string]$Model).Trim()
-    return ($id -match '(?i)^(openai/gpt-oss-(20b|120b|safeguard-20b)|qwen/qwen3\.8-27b|minimaxai/minimax-m2\.7|meta-models/muse-spark-open)$')
+    return ($id -match '(?i)^(openai/gpt-oss-(20b|120b|safeguard-20b)|qwen/qwen3\.8-27b|meta-models/muse-spark-open)$')
 }
 
 function Get-GroqModels {
