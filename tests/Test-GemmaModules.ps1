@@ -66,6 +66,7 @@ $requiredFunctions = @(
     'Add-GemmaModelCatalogEntry',
     'Get-GemmaModelCatalog',
     'Get-GemmaModelCompletionCandidates',
+    'Get-GemmaProviderCompletionModels',
     'Get-GemmaSystemPromptNames',
     'Read-GemmaModelSelection',
     'Set-GemmaActiveModel',
@@ -258,6 +259,9 @@ $oldGemmaModel = $script:MODEL
 $oldOpenAIApiKeys = @($script:OpenAIApiKeys)
 $oldGeminiApiKeys = @($script:GeminiApiKeys)
 $oldGroqApiKeys = @($script:GroqApiKeys)
+$oldModelCatalogCache = $script:GemmaModelCatalogCache
+$oldModelCatalogCacheAt = $script:GemmaModelCatalogCacheAt
+$oldProviderCompletionCache = $script:GemmaProviderCompletionCache
 $oldModelCatalogFunction = (Get-Command Get-GemmaModelCatalog -CommandType Function).ScriptBlock
 $oldAntigravityPathFunction = (Get-Command Get-AntigravityTokenPath -CommandType Function).ScriptBlock
 $script:TestAntigravityTokenPath = [IO.Path]::Combine([IO.Path]::GetTempPath(),'mira-antigravity-test-' + [guid]::NewGuid().ToString('N') + '.json')
@@ -296,6 +300,8 @@ try {
     if ($script:Provider -ne 'groq' -or $script:MODEL -ne 'openai/gpt-oss-120b') {
         throw 'Gemma .model groq:model did not switch to Groq.'
     }
+    $script:GemmaModelCatalogCache = Get-GemmaModelCatalog
+    $script:GemmaModelCatalogCacheAt = Get-Date
     $groqCompletionOptions = @(Get-GemmaModelCompletionCandidates -Prefix 'groq:')
     if ($groqCompletionOptions -notcontains 'groq:openai/gpt-oss-120b') {
         throw 'The .model completion catalogue omitted the provider-qualified Groq model.'
@@ -320,6 +326,9 @@ try {
     $script:OpenAIApiKeys = $oldOpenAIApiKeys
     $script:GeminiApiKeys = $oldGeminiApiKeys
     $script:GroqApiKeys = $oldGroqApiKeys
+    $script:GemmaModelCatalogCache = $oldModelCatalogCache
+    $script:GemmaModelCatalogCacheAt = $oldModelCatalogCacheAt
+    $script:GemmaProviderCompletionCache = $oldProviderCompletionCache
     Set-Item -Path Function:\Get-GemmaModelCatalog -Value $oldModelCatalogFunction
     Set-Item -Path Function:\Get-AntigravityTokenPath -Value $oldAntigravityPathFunction
     if (Test-Path -LiteralPath $script:TestAntigravityTokenPath) {
