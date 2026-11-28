@@ -25,7 +25,7 @@
 - [x] **OpenAI API provider:** Added provider switching, pinned GPT-6 Luna Responses API support, Chat Completions for other models, explicit key candidates, conversation/image/tool conversion, usage reporting, bounded retries, and key rotation.
 - [x] **System-prompt argument completion:** `.sysprompt` now completes `default` and the available prompt-file names through the same helper used by the command; Tab on the command name advances directly to its argument.
 - [x] **Provider-qualified model picker:** Every model entry is shown and completed as `provider:model`, keeping identical IDs from Gemini API and Antigravity separate. `.model` completion is provider-scoped and cached.
-- [ ] **Groq provider:** Added the Groq model catalogue, Chat Completions requests and SSE streaming, explicit key rotation, tool-call conversion, usage diagnostics, and model-specific reasoning controls. Deterministic regression tests are included; Windows PowerShell 5.1 CI and live API validation remain pending.
+- [ ] **Groq provider:** Added the Groq model catalogue, Chat Completions requests and SSE streaming, tool-call conversion, usage diagnostics, and model-specific reasoning controls. Follow-up fix: never retry a stream after visible text, and stop immediately on HTTP 429 instead of retrying/rotating keys; default Groq reasoning effort is now `low` to reduce short-turn reasoning overhead. Regression assertions cover these safeguards, and the parser test now checks every `.ps1` under `gemma/`. Windows PowerShell 5.1 CI and live Groq API validation remain pending.
 
 ---
 
