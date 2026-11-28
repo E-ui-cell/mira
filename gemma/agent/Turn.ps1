@@ -699,6 +699,288 @@
                     }
                     throw "Gemini request failed with all configured API keys. $lastFailure"
                 }
+                if ($providerName -eq 'groq') {
+                    $lastFailure = ''
+                    $groqReplayState = @{ Text = ''; ReplayLimit = 0; ReplayOffset = 0 }
+                    $emitGroqText = {
+                        param([string]$Value)
+                        if ([string]::IsNullOrEmpty($Value)) { return }
+                        if ($groqReplayState.ReplayLimit -gt 0 -and $groqReplayState.ReplayOffset -lt $groqReplayState.ReplayLimit) {
+                            $matched = 0
+                            while ($matched -lt $Value.Length -and
+                                   $groqReplayState.ReplayOffset -lt $groqReplayState.ReplayLimit -and
+                                   $Value[$matched] -ceq $groqReplayState.Text[$groqReplayState.ReplayOffset]) {
+                                $matched++
+                                $groqReplayState.ReplayOffset++
+                            }
+                            if ($matched -gt 0) { $Value = $Value.Substring($matched) }
+                            if ($Value.Length -gt 0 -and $groqReplayState.ReplayOffset -lt $groqReplayState.ReplayLimit) {
+                                $groqReplayState.ReplayOffset = $groqReplayState.ReplayLimit
+                            }
+                        }
+                        if (-not [string]::IsNullOrEmpty($Value)) {
+                            $groqReplayState.Text += $Value
+                            $streamState.TextStarted = $true
+                            $streamQueue.Enqueue($Value)
+                        }
+                    }
+
+                    for ($keyOffset = 0; $keyOffset -lt $keyPool.Count; $keyOffset++) {
+                        $keyIndex = ($keyStart + $keyOffset) % $keyPool.Count
+                        for ($attempt = 0; $attempt -lt 3; $attempt++) {
+                            $requestStats.ErrorCode = ''
+                            $requestStats.ErrorType = ''
+                            $requestStats.ErrorMessage = ''
+                            if ($groqReplayState.Text.Length -gt 0) {
+                                $groqReplayState.ReplayLimit = $groqReplayState.Text.Length
+                                $groqReplayState.ReplayOffset = 0
+                            }
+                            $requestStats.HttpAttempts = [int]$requestStats.HttpAttempts + 1
+                            $requestStats.LastKeyIndex = $keyIndex
+                            $requestStats.KeyCount = $keyPool.Count
+                            if (-not $requestStats.KeySlotsTried.Contains($keyIndex + 1)) {
+                                [void]$requestStats.KeySlotsTried.Add($keyIndex + 1)
+                            }
+
+                            $httpRequest = $null
+                            $httpResponse = $null
+                            $responseReader = $null
+                            try {
+                                $httpRequest = [System.Net.HttpWebRequest]::Create($u)
+                                $httpRequest.Method = 'POST'
+                                $httpRequest.ContentType = 'application/json; charset=utf-8'
+                                $httpRequest.Accept = if ($streamResponses) { 'text/event-stream' } else { 'application/json' }
+                                $httpRequest.Headers['Authorization'] = ('Bearer ' + [string]$keyPool[$keyIndex])
+                                $httpRequest.Timeout = 180000
+                                $httpRequest.ReadWriteTimeout = 180000
+                                $httpRequest.ContentLength = [long]$b.Length
+                                if ($streamResponses) {
+                                    $httpRequest.AllowReadStreamBuffering = $false
+                                    $streamState.Request = $httpRequest
+                                }
+
+                                $requestStream = $httpRequest.GetRequestStream()
+                                try { $requestStream.Write($b,0,$b.Length) }
+                                finally { $requestStream.Dispose() }
+
+                                $httpResponse = $httpRequest.GetResponse()
+                                & $captureProviderResponse $httpResponse
+                                $responseStream = $httpResponse.GetResponseStream()
+                                $responseReader = New-Object System.IO.StreamReader($responseStream,[System.Text.Encoding]::UTF8,$true)
+
+                                if (-not $streamResponses) {
+                                    $responseText = $responseReader.ReadToEnd()
+                                    $successResponse = $responseText | ConvertFrom-Json -ErrorAction Stop
+                                    if ($null -ne $successResponse.error) {
+                                        $requestStats.ErrorCode = [string]$successResponse.error.code
+                                        $requestStats.ErrorType = [string]$successResponse.error.type
+                                        $requestStats.ErrorMessage = [string]$successResponse.error.message
+                                        throw ('Groq Chat Completions request failed: ' + [string]$requestStats.ErrorMessage)
+                                    }
+                                    if ($null -eq $successResponse.choices -or @($successResponse.choices).Count -eq 0) {
+                                        throw 'Groq returned no Chat Completions choices.'
+                                    }
+                                    return ($successResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru)
+                                }
+
+                                $eventData = New-Object 'System.Collections.Generic.List[string]'
+                                $chatState = @{
+                                    Id = ''
+                                    Model = ''
+                                    Created = 0
+                                    Content = ''
+                                    Reasoning = ''
+                                    FinishReason = ''
+                                    Usage = $null
+                                    ToolCalls = @{}
+                                    Done = $false
+                                }
+                                while (($sseLine = $responseReader.ReadLine()) -ne $null) {
+                                    if ($sseLine.Length -eq 0) {
+                                        if ($eventData.Count -eq 0) { continue }
+                                        $eventJson = [string]::Join("`n",$eventData.ToArray())
+                                        $eventData.Clear()
+                                        if ($eventJson -eq '[DONE]') {
+                                            $chatState.Done = $true
+                                            break
+                                        }
+                                        try { $chunk = $eventJson | ConvertFrom-Json -ErrorAction Stop }
+                                        catch { throw "Groq returned malformed Chat Completions SSE data: $($_.Exception.Message)" }
+
+                                        if ($null -ne $chunk.error) {
+                                            $requestStats.ErrorCode = [string]$chunk.error.code
+                                            $requestStats.ErrorType = [string]$chunk.error.type
+                                            $requestStats.ErrorMessage = [string]$chunk.error.message
+                                            throw ('Groq Chat Completions stream failed: ' + [string]$requestStats.ErrorMessage)
+                                        }
+                                        if ($null -ne $chunk.id) { $chatState.Id = [string]$chunk.id }
+                                        if ($null -ne $chunk.model) { $chatState.Model = [string]$chunk.model }
+                                        if ($null -ne $chunk.created) { $chatState.Created = [long]$chunk.created }
+                                        if ($null -ne $chunk.usage) { $chatState.Usage = $chunk.usage }
+
+                                        foreach ($choice in @($chunk.choices)) {
+                                            if ($null -ne $choice.finish_reason) { $chatState.FinishReason = [string]$choice.finish_reason }
+                                            $delta = $choice.delta
+                                            if ($null -eq $delta) { continue }
+                                            if (-not [string]::IsNullOrEmpty([string]$delta.content)) {
+                                                $deltaText = [string]$delta.content
+                                                $chatState.Content += $deltaText
+                                                & $emitGroqText $deltaText
+                                            }
+                                            if (-not [string]::IsNullOrEmpty([string]$delta.reasoning)) {
+                                                $chatState.Reasoning += [string]$delta.reasoning
+                                            }
+                                            foreach ($toolDelta in @($delta.tool_calls)) {
+                                                $toolIndex = 0
+                                                if ($null -ne $toolDelta.index) { $toolIndex = [int]$toolDelta.index }
+                                                if (-not $chatState.ToolCalls.ContainsKey($toolIndex)) {
+                                                    $chatState.ToolCalls[$toolIndex] = @{
+                                                        id = ''
+                                                        type = 'function'
+                                                        name = ''
+                                                        arguments = ''
+                                                    }
+                                                }
+                                                $toolState = $chatState.ToolCalls[$toolIndex]
+                                                if (-not [string]::IsNullOrWhiteSpace([string]$toolDelta.id)) { $toolState.id = [string]$toolDelta.id }
+                                                if (-not [string]::IsNullOrWhiteSpace([string]$toolDelta.type)) { $toolState.type = [string]$toolDelta.type }
+                                                if ($null -ne $toolDelta.function) {
+                                                    if (-not [string]::IsNullOrWhiteSpace([string]$toolDelta.function.name)) {
+                                                        $toolState.name += [string]$toolDelta.function.name
+                                                    }
+                                                    if ($null -ne $toolDelta.function.arguments) {
+                                                        $toolState.arguments += [string]$toolDelta.function.arguments
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } elseif ($sseLine.StartsWith('data:')) {
+                                        [void]$eventData.Add($sseLine.Substring(5).TrimStart())
+                                    }
+                                }
+
+                                if (-not $chatState.Done) {
+                                    throw 'Groq Chat Completions stream ended before [DONE].'
+                                }
+
+                                $toolCalls = @(
+                                    foreach ($toolIndex in @($chatState.ToolCalls.Keys | Sort-Object { [int]$_ })) {
+                                        $toolState = $chatState.ToolCalls[$toolIndex]
+                                        [pscustomobject]@{
+                                            id = [string]$toolState.id
+                                            type = [string]$toolState.type
+                                            function = [pscustomobject]@{
+                                                name = [string]$toolState.name
+                                                arguments = [string]$toolState.arguments
+                                            }
+                                        }
+                                    }
+                                )
+                                $successResponse = [pscustomobject]@{
+                                    id = [string]$chatState.Id
+                                    model = [string]$chatState.Model
+                                    created = [long]$chatState.Created
+                                    choices = @([pscustomobject]@{
+                                        index = 0
+                                        finish_reason = [string]$chatState.FinishReason
+                                        message = [pscustomobject]@{
+                                            role = 'assistant'
+                                            content = [string]$chatState.Content
+                                            reasoning = [string]$chatState.Reasoning
+                                            tool_calls = @($toolCalls)
+                                        }
+                                    })
+                                    usage = $chatState.Usage
+                                }
+                                return ($successResponse | Add-Member -NotePropertyName _gemmaKeyIndex -NotePropertyValue $keyIndex -Force -PassThru)
+                            } catch {
+                                $failure = $_
+                                $response = $failure.Exception.Response
+                                if ($null -eq $response -and $null -ne $httpResponse) { $response = $httpResponse }
+                                $status = 0
+                                $retryAfter = 0
+                                $errorBody = ''
+                                if ($null -ne $response) {
+                                    try { $status = [int]$response.StatusCode } catch {}
+                                    $requestStats.HttpStatus = $status
+                                    try { & $captureProviderResponse $response } catch {}
+                                    try { [void][int]::TryParse([string]$response.Headers['Retry-After'],[ref]$retryAfter) } catch {}
+                                    try {
+                                        if ($null -ne $failure.Exception.Response) {
+                                            $errorStream = $response.GetResponseStream()
+                                            if ($null -ne $errorStream) {
+                                                $errorReader = New-Object System.IO.StreamReader($errorStream)
+                                                $errorBody = $errorReader.ReadToEnd()
+                                                $errorReader.Dispose()
+                                                $errorStream.Dispose()
+                                            }
+                                        }
+                                    } catch {}
+                                }
+
+                                try {
+                                    $errorObject = $errorBody | ConvertFrom-Json -ErrorAction Stop
+                                    if ([string]::IsNullOrWhiteSpace([string]$requestStats.ErrorCode)) {
+                                        $requestStats.ErrorCode = [string]$errorObject.error.code
+                                    }
+                                    if ([string]::IsNullOrWhiteSpace([string]$requestStats.ErrorType)) {
+                                        $requestStats.ErrorType = [string]$errorObject.error.type
+                                    }
+                                    if ([string]::IsNullOrWhiteSpace([string]$requestStats.ErrorMessage)) {
+                                        $requestStats.ErrorMessage = [string]$errorObject.error.message
+                                    }
+                                } catch {}
+
+                                $errorCode = [string]$requestStats.ErrorCode
+                                $errorType = [string]$requestStats.ErrorType
+                                $errorMessage = [string]$requestStats.ErrorMessage
+                                if ([string]::IsNullOrWhiteSpace($errorMessage)) { $errorMessage = [string]$failure.Exception.Message }
+                                if ([string]::IsNullOrWhiteSpace($errorCode)) {
+                                    if ($errorMessage -match '(?i)rate limit|tokens per minute|requests per minute') {
+                                        $errorCode = 'rate_limit_exceeded'
+                                    } elseif ($errorMessage -match '(?i)invalid api key|incorrect api key') {
+                                        $errorCode = 'invalid_api_key'
+                                    }
+                                    $requestStats.ErrorCode = $errorCode
+                                }
+                                if ([string]::IsNullOrWhiteSpace([string]$requestStats.ErrorMessage)) {
+                                    $requestStats.ErrorMessage = $errorMessage
+                                }
+                                $lastFailure = "HTTP $status $errorCode $errorMessage $errorBody"
+
+                                $rotateKey = ($keyRotationErrorCodes -contains $errorCode.ToLowerInvariant()) -or
+                                    ($keyRotationErrorCodes -contains $errorType.ToLowerInvariant()) -or
+                                    ($status -eq 401) -or
+                                    ($status -eq 403 -and ($errorMessage -match '(?i)api.?key|permission denied'))
+                                if ($rotateKey) {
+                                    if ($keyOffset -lt ($keyPool.Count - 1)) { break }
+                                    throw $lastFailure
+                                }
+                                $transient = ($status -in @(0,408,409,429,500,502,503,504)) -or
+                                    ($errorMessage -match '(?i)timeout|connection reset|connection closed|name resolution|stream ended before \[DONE\]')
+                                if (-not $transient) { throw $lastFailure }
+                                if ($attempt -ge 2) {
+                                    if ($keyOffset -lt ($keyPool.Count - 1)) { break }
+                                    throw $lastFailure
+                                }
+                                if ($retryAfter -gt 0) {
+                                    if ($retryAfter -gt 60) { throw "Groq Retry-After is $retryAfter seconds; deferring request. $lastFailure" }
+                                    $delay = $retryAfter
+                                } else {
+                                    $delay = [Math]::Min(8,[Math]::Pow(2,$attempt))
+                                }
+                                Start-Sleep -Seconds ([int]$delay)
+                            } finally {
+                                if ($null -ne $responseReader) { try { $responseReader.Dispose() } catch {} }
+                                if ($null -ne $httpResponse) { try { $httpResponse.Close() } catch {} }
+                                if ($null -ne $httpRequest) { try { $httpRequest.Abort() } catch {} }
+                                if ($null -ne $streamState) { $streamState.Request = $null }
+                            }
+                        }
+                    }
+                    throw "Groq request failed with all configured API keys. $lastFailure"
+                }
+
                 if ($providerName -eq 'openai') {
                     $lastFailure = ''
                     $openAIReplayState = @{ Text = ''; ReplayLimit = 0; ReplayOffset = 0 }
