@@ -61,9 +61,12 @@ function Get-GemmaSystemPromptNames {
     if (Test-Path -LiteralPath $script:GemmaPromptDirectory -PathType Container) {
         foreach ($file in @(Get-ChildItem -LiteralPath $script:GemmaPromptDirectory -Filter '*.md' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
             $name = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
-            if (-not [string]::IsNullOrWhiteSpace($name) -and -not $names.Contains($name)) {
-                [void]$names.Add($name)
+            if ([string]::IsNullOrWhiteSpace($name)) { continue }
+            $alreadyPresent = $false
+            foreach ($existingName in $names) {
+                if ($existingName -ieq $name) { $alreadyPresent = $true; break }
             }
+            if (-not $alreadyPresent) { [void]$names.Add($name) }
         }
     }
     return @($names.ToArray())
