@@ -468,6 +468,12 @@ try {
     if (-not $groqEffort.Supported -or $groqEffort.Parameter -ne 'reasoning_effort' -or $groqEffort.Effort -ne 'high') {
         throw 'Groq Qwen 3.8 reasoning effort was not resolved to the native API parameter.'
     }
+    $MIRA_GROQ_EFFORT = 'none'
+    $groqNoReasoning = Get-GemmaEffortResolution -Provider 'groq' -Model 'qwen/qwen3.8-27b'
+    if ($groqNoReasoning.Effort -ne 'none' -or -not $groqNoReasoning.Supported) {
+        throw 'Groq Qwen 3.8 did not accept its documented none reasoning-effort setting.'
+    }
+    $MIRA_GROQ_EFFORT = $null
     $groqUnsupportedEffort = Get-GemmaEffortResolution -Provider 'groq' -Model 'minimaxai/minimax-m2.7'
     if ($groqUnsupportedEffort.Supported) {
         throw 'Groq MiniMax received an effort parameter not documented for that model.'
