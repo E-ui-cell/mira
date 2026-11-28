@@ -205,6 +205,33 @@ NON-NEGOTIABLE PRODUCT PRINCIPLES
     multiline prompts, multiline paste, edits at the beginning/middle/end,
     and exact submitted content. Validate interactively in Windows PowerShell
     5.1; parser-only/module tests are not sufficient.
+[ ] Input editor performance: profile and optimize the custom editor's edit
+    path. Current behavior stores full-buffer undo snapshots (up to 100) and
+    recalculates layout, clears the previous/new screen region, and redraws the
+    complete buffer on each edit. Avoid full-buffer/full-screen work for every
+    keystroke where possible; use incremental/dirty-region redraw while keeping
+    undo correct. Benchmark short and very long prompts, typing, cursor moves,
+    paste and deletion. Latency must not grow unacceptably with buffer length.
+    Preserve Unicode, multiline behavior and Windows PowerShell 5.1 support.
+[ ] Startup latency: measure cold and warm startup and profile PowerShell
+    parsing/module-loading costs. The launcher currently dot-sources 16
+    component scripts eagerly; ChatLoop loads Turn.ps1 when the chat loop is
+    entered. Evaluate safe lazy loading or consolidation without introducing
+    first-use stalls, changing behavior, or breaking Windows PowerShell 5.1.
+    Record before/after timings; do not treat the suspected overhead as a
+    measured result until timings confirm it.
+[ ] API-key rotation consistency and tests: rotation is implemented for
+    Gemini and OpenAI, but streaming and non-streaming error classification
+    is not fully consistent. OpenAI non-streaming Responses API body failures
+    returned with HTTP 200 use the central rotation-code list; streaming also
+    recognizes additional codes such as rate_limit_error. Reconcile handling
+    so equivalent API-level failures rotate consistently, while keeping HTTP
+    status separate from response-body status (completed/failed/incomplete).
+    Add mocked tests for invalid keys, quota/rate-limit and billing/account
+    limits, transient HTTP/network failures, unrecognized errors, single-key
+    pools and multi-key pools. Verify index advancement on success/failure;
+    never use live credentials in tests.
+
 [ ] Preserve useful command completion, path completion, model completion,
     history navigation and common editing shortcuts.
 [x] Implement Bash Readline / Emacs editing keys in the custom input editor:
