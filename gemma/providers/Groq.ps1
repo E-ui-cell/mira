@@ -32,6 +32,7 @@ function Get-GroqModels {
             } -TimeoutSec 20 -ErrorAction Stop
 
             $models = New-Object 'System.Collections.Generic.List[object]'
+            $script:MiraGroqApiKeyIndex = $keyIndex
             foreach ($item in @($response.data)) {
                 if ($null -eq $item) { continue }
                 $id = ([string]$item.id).Trim()
