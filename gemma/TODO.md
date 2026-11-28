@@ -339,6 +339,7 @@ NON-NEGOTIABLE PRODUCT PRINCIPLES
 [ ] Preserve a clean spinner/progress indicator and Ctrl+C cancellation.
     The spinner is progress feedback; API retry internals remain hidden.
 [ ] Investigate intermittent Ctrl+C behavior where GEMMA exits instead of
+    Progress: `Invoke-GemmaPowerShellTool` now temporarily disables `TreatControlCAsInput` while a model-requested command runs, catches `PipelineStoppedException` as a cancelled tool result, and restores the caller's console mode in `finally`. Static regression assertions added; interactive Ctrl+C testing in Windows PowerShell 5.1 remains required.
     cancelling only the active operation; identify the triggering contexts.
 [ ] Make LLM-launched commands independently cancellable. Retain the child
     Progress: added `Start-GemmaTrackedProcess`, which retains a process handle and returns a PID, plus `.kill`, `.kill last`, and `.kill <PID>` (also `.kill all`) to terminate tracked process trees without ending GEMMA. Updated the tool instructions to use this helper for GUI apps/long-running children. A Windows PowerShell 5.1 process-lifecycle regression test is added; Ctrl+C behavior for arbitrary in-process commands remains a separate validation item.
