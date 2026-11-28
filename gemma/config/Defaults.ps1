@@ -30,7 +30,7 @@ $MIRA_OPENAI_EFFORT = $null                  # none, minimal, low, medium, high,
 $MIRA_OPENAI_LUNA_EFFORT = $null            # Optional model-specific override; $null inherits .effort
 $MIRA_GEMINI_EFFORT = $null                  # low, medium, high
 $MIRA_ANTIGRAVITY_EFFORT = $null             # low, medium, high
-$MIRA_GROQ_EFFORT = $null                     # low, medium, high; model-validated before sending
+$MIRA_GROQ_EFFORT = 'low'                    # Keep short chat turns economical; override with low/medium/high as needed
 $MIRA_SEARCH_MODEL = 'gemini-3.1-flash-lite' # Dedicated Antigravity OAuth research model for Gemini API web_search
 
 # Generation defaults ($null means: let the selected model use its own default)
@@ -120,8 +120,6 @@ $script:MiraGroqApiKeyIndex = 0
 $script:GroqKeyRotationErrorCodes = @(
     'invalid_api_key'
     'authentication_error'
-    'rate_limit_exceeded'
-    'rate_limit_error'
     'insufficient_quota'
     'billing_hard_limit_reached'
 )
