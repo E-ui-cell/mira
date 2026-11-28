@@ -925,6 +925,13 @@ if ($ordinaryEmpty.Blocked -or $ordinaryEmpty.Code) {
     throw 'An ordinary empty Gemini response was incorrectly classified as a safety block.'
 }
 
+$gemmaBootstrapSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\gemma.ps1') -Raw -Encoding UTF8
+if ($gemmaBootstrapSource -notmatch 'MIRA_PROFILE_STARTUP' -or
+    $gemmaBootstrapSource -notmatch 'GemmaStartupStopwatch' -or
+    $gemmaBootstrapSource -notmatch 'Module load:') {
+    throw 'Optional GEMMA startup load profiling is missing.'
+}
+
 # TTS playback must be asynchronous; Tab must no longer trigger speech and Ctrl+Tab must own the picker.
 $ttsSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\agent\Tts.ps1') -Raw -Encoding UTF8
 if ($ttsSource -notmatch '\$player\.Play\(\)' -or
