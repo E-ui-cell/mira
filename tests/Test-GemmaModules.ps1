@@ -1,6 +1,8 @@
 #requires -Version 5.1
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+# Keep this dot-source order identical to gemma/gemma.ps1. The test must
+# exercise the same dependency order that users get during startup.
 $modules = @(
     (Join-Path $repoRoot 'gemma\config\Cli.ps1'),
     (Join-Path $repoRoot 'gemma\config\Defaults.ps1'),
@@ -10,14 +12,14 @@ $modules = @(
     (Join-Path $repoRoot 'gemma\providers\Antigravity.ps1'),
     (Join-Path $repoRoot 'gemma\ui\ModelPicker.ps1'),
     (Join-Path $repoRoot 'gemma\agent\Execution.ps1'),
-    (Join-Path $repoRoot 'gemma\agent\Settings.ps1'),
     (Join-Path $repoRoot 'gemma\agent\Skills.ps1'),
     (Join-Path $repoRoot 'gemma\agent\Tools.ps1'),
-    (Join-Path $repoRoot 'gemma\agent\Conversation.ps1'),
     (Join-Path $repoRoot 'gemma\windows\Native.ps1'),
+    (Join-Path $repoRoot 'gemma\agent\Settings.ps1'),
+    (Join-Path $repoRoot 'gemma\agent\Conversation.ps1'),
     (Join-Path $repoRoot 'gemma\ui\Output.ps1'),
-    (Join-Path $repoRoot 'gemma\agent\ChatLoop.ps1'),
-    (Join-Path $repoRoot 'gemma\ui\LineEditor.ps1')
+    (Join-Path $repoRoot 'gemma\ui\LineEditor.ps1'),
+    (Join-Path $repoRoot 'gemma\agent\ChatLoop.ps1')
 )
 
 foreach ($modulePath in $modules) {
