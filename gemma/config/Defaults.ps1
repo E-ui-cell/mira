@@ -22,7 +22,7 @@ if ($PSVersionTable.PSVersion.Major -ge 7 -and $env:OS -eq 'Windows_NT') {
 # USER CONFIGURATION — all runtime defaults are centralized here
 # ==============================================================================
 # Answer provider and model
-$MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity', 'gemini', or 'openai'; no automatic provider switching
+$MIRA_DEFAULT_PROVIDER = 'antigravity'       # 'antigravity', 'gemini', 'openai', or 'groq'; no automatic provider switching
 $MIRA_DEFAULT_MODEL = 'gemini-3.1-flash-lite'
 $MIRA_DEFAULT_EFFORT = 'high'                # Shared fallback for every provider: low, medium, high
 # Provider overrides ($null inherits the shared/default effort).
@@ -30,6 +30,7 @@ $MIRA_OPENAI_EFFORT = $null                  # none, minimal, low, medium, high,
 $MIRA_OPENAI_LUNA_EFFORT = $null            # Optional model-specific override; $null inherits .effort
 $MIRA_GEMINI_EFFORT = $null                  # low, medium, high
 $MIRA_ANTIGRAVITY_EFFORT = $null             # low, medium, high
+$MIRA_GROQ_EFFORT = $null                     # low, medium, high; model-validated before sending
 $MIRA_SEARCH_MODEL = 'gemini-3.1-flash-lite' # Dedicated Antigravity OAuth research model for Gemini API web_search
 
 # Generation defaults ($null means: let the selected model use its own default)
@@ -61,6 +62,12 @@ $MIRA_OPENAI_DEFAULT_MODEL = 'gpt-6-luna'
 $MIRA_OPENAI_MAX_COMPLETION_TOKENS = $null
 $MIRA_OPENAI_TEMPERATURE = $null                 # Chat Completions only
 $MIRA_OPENAI_RESPONSE_FORMAT = $null              # Shared setting; converted to each endpoint's format
+
+# Groq uses its OpenAI-compatible Chat Completions endpoint.
+$MIRA_GROQ_MAX_COMPLETION_TOKENS = $null
+$MIRA_GROQ_TEMPERATURE = $null
+$MIRA_GROQ_TOP_P = $null
+$MIRA_GROQ_RESPONSE_FORMAT = $null
 # GPT-6 Luna uses OpenAI-hosted web_search directly in the Responses API.
 # Antigravity chat sends native googleSearch to the selected model. Gemini API models
 # may call web_search, delegated to the dedicated Antigravity OAuth research model.
@@ -103,6 +110,21 @@ $script:OpenAIApiKeys = @(
 ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
     ForEach-Object { ([string]$_).Trim() }
 $script:MiraOpenAIApiKeyIndex = 0
+
+$script:GroqApiKeys = @(
+    $env:GROQ_APIJ
+    $env:GROQ_API_KEY
+) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+    ForEach-Object { ([string]$_).Trim() }
+$script:MiraGroqApiKeyIndex = 0
+$script:GroqKeyRotationErrorCodes = @(
+    'invalid_api_key'
+    'authentication_error'
+    'rate_limit_exceeded'
+    'rate_limit_error'
+    'insufficient_quota'
+    'billing_hard_limit_reached'
+)
 
 # Move to the next configured OpenAI key for these key/account-specific failures.
 # Organization TPM/usage limits are shared across that organization's keys.
