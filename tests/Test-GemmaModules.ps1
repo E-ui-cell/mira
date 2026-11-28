@@ -932,6 +932,19 @@ if ($gemmaBootstrapSource -notmatch 'MIRA_PROFILE_STARTUP' -or
     throw 'Optional GEMMA startup load profiling is missing.'
 }
 
+# Tracked child processes can be stopped independently without ending the GEMMA host.
+$trackedProcess = Start-GemmaTrackedProcess -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden
+try {
+    if (-not $trackedProcess.started -or -not $trackedProcess.process_id -or $trackedProcess.kill_command -ne ('.kill ' + $trackedProcess.process_id)) {
+        throw 'Tracked process launch did not return a usable process handle/PID.'
+    }
+    $stopResult = Stop-GemmaTrackedProcess -Target 'last'
+    if (@($stopResult.results).Count -ne 1 -or -not $stopResult.results[0].stopped) {
+        throw 'The last tracked child process could not be terminated independently.'
+    }
+} finally {
+    if ($script:MiraTrackedProcesses.ContainsKey([int]$trackedProcess.process_id)) { Stop-GemmaTrackedProcess -Target ([string]$trackedProcess.process_id) | Out-Null }
+}
 # TTS playback must be asynchronous; Tab must no longer trigger speech and Ctrl+Tab must own the picker.
 $ttsSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\agent\Tts.ps1') -Raw -Encoding UTF8
 if ($ttsSource -notmatch '\$player\.Play\(\)' -or
