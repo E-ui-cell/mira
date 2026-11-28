@@ -1161,6 +1161,20 @@ if ($executionSource -notmatch 'approvalTreatControlCAsInput' -or
     $executionSource -notmatch 'Command approval cancelled with Ctrl\+C') {
     throw 'Ctrl+C at the ASK approval prompt is not converted into a cancelled tool result.'
 }
+if ($executionSource -notmatch 'Command completed successfully with no output') {
+    throw 'Empty PowerShell tool output is not represented by a non-empty result message.'
+}
+$previousExecutionPermission = $script:ExecutionPermission
+try {
+    $script:ExecutionPermission = 'autopilot'
+    $emptyCommandResult = Invoke-GemmaPowerShellTool -Command '$null'
+    if ([string]::IsNullOrWhiteSpace([string]$emptyCommandResult.output) -or
+        $emptyCommandResult.output -notmatch 'completed successfully with no output') {
+        throw 'A PowerShell command with no pipeline output returned an empty tool result.'
+    }
+} finally {
+    $script:ExecutionPermission = $previousExecutionPermission
+}
 # Tracked child processes can be stopped independently without ending the GEMMA host.
 $trackedProcess = Start-GemmaTrackedProcess -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden
 try {
