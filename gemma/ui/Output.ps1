@@ -35,7 +35,7 @@ function Save-GeminiCodeBlocks {
 # Short interactive entry points: -p asks Mira; -e generates a command without running it.
 if (-not $script:OneShot) {
     try { Clear-Host } catch {}
-    Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.model' | '.effort' | '.verbose' | '.streaming' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '.skills' | '.skill <name>' | '!<cmd>' | '-p <request>' | '-e <command request>'`n" -ForegroundColor DarkGray
+    Write-Host "Commands: '.q' | '.clear' | '.save' | '.exportsession' | '.loadsession' | '.diff' | '.text' | '.file' | '.shot' | '.model provider:model' | '.sysprompt <name>' | '.effort' | '.verbose' | '.oneshot' | '.streaming' | '.auth' | '.grounding' | '.ask' | '.autopilot' | '.skills' | '.skill <name>' | '.usage' | '.speak' | '.stop' | '.replay' | '.kill [last|all|PID]' | '!<cmd>' | '-p <request>' | '-e <command request>'`n" -ForegroundColor DarkGray
 }
 
 # ==============================================================================
