@@ -115,6 +115,7 @@ $script:OpenAIKeyRotationErrorCodes = @(
     'insufficient_permissions'
     'permission_denied'
     'rate_limit_exceeded'
+    'rate_limit_error'
     'insufficient_quota'
     'credit_balance_exhausted'
     'organization_usage_limit_exceeded'
