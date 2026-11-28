@@ -155,7 +155,7 @@ function Invoke-GemmaReplayLatest {
     $style = Get-GemmaTtsDirectorStyle -Contents $Contents
     $audioPath = Get-GemmaTtsCachePath -Transcript $transcript -Style $style
     if (-not (Test-Path -LiteralPath $audioPath -PathType Leaf)) {
-        Write-Host '[TTS] No cached audio for this reply. Press Tab to generate it once.' -ForegroundColor Yellow
+        Write-Host '[TTS] No cached audio for this reply. Use .speak to generate it once.' -ForegroundColor Yellow
         return
     }
 
