@@ -241,6 +241,67 @@ function Invoke-GemmaTtsWithKeyRotation {
     throw ("Gemini TTS failed with every configured API key: " + ($failures -join ' | '))
 }
 
+function Get-GemmaTtsScene {
+    $systemText = [string]$SystemInstruction.parts[0].text
+    $match = [regex]::Match($systemText,'(?ims)^##[ \\t]+(?:TTS scene|Scene)[ \\t]*\\r?\\n(?<body>.*?)(?=^##[ \\t]+|^COMMAND GENERATION MODE:|\\z)')
+    if ($match.Success) { return $match.Groups['body'].Value.Trim() }
+    return ''
+}
+
+function ConvertTo-GemmaTtsLegacyTranscript {
+    param([Parameter(Mandatory = $true)][string]$Transcript,[switch]$RemoveTags)
+    $tagNames = 'whispers?|laughs?|sighs?|short pause|long pause|breath|gasp|cough|groan|scream|chuckles?|giggles?|yawn|grunt|pant|sob|shout|snort|tsk|hiss|phew|moan|whimper'
+    if ($RemoveTags) {
+        $value = [regex]::Replace($Transcript,('(?i)(?:<|\\[)(?:' + $tagNames + ')(?:>|\\])'),' ')
+        return [regex]::Replace($value,'\\s{2,}',' ').Trim()
+    }
+    return [regex]::Replace($Transcript,('(?i)<(' + $tagNames + ')>'),'[$1]')
+}
+
+function New-GemmaTtsSpeechPart {
+    param(
+        [Parameter(Mandatory = $true)][string]$Transcript,
+        [string]$Style = '',
+        [string]$Scene = '',
+        [Parameter(Mandatory = $true)][string]$Model
+    )
+    $partText = $Transcript
+    $part = @{ text = $partText }
+    if ($Model -match '^gemini-3\\.8-') {
+        if (-not [string]::IsNullOrWhiteSpace($Style)) { $part.speechMetadata = @{ style = $Style } }
+        return $part
+    }
+    if ($Model -match '^gemini-3\\.1-') {
+        $legacyTranscript = ConvertTo-GemmaTtsLegacyTranscript -Transcript $Transcript
+        $sections = New-Object 'System.Collections.Generic.List[string]'
+        [void]$sections.Add('[Audio Profile]')
+        [void]$sections.Add(('Voice: ' + [string]$script:MiraTtsVoice))
+        if (-not [string]::IsNullOrWhiteSpace($Scene)) { [void]$sections.Add('[Scene]'); [void]$sections.Add($Scene) }
+        if (-not [string]::IsNullOrWhiteSpace($Style)) { [void]$sections.Add("[Director's Notes]"); [void]$sections.Add($Style) }
+        [void]$sections.Add('[Transcript]')
+        [void]$sections.Add($legacyTranscript)
+        $part.text = [string]::Join([Environment]::NewLine,[string[]]$sections.ToArray())
+        return $part
+    }
+    if ($Model -match '^gemini-2\\.5-') {
+        $plainTranscript = ConvertTo-GemmaTtsLegacyTranscript -Transcript $Transcript -RemoveTags
+        $sections = New-Object 'System.Collections.Generic.List[string]'
+        [void]$sections.Add(('Speak using the voice ' + [string]$script:MiraTtsVoice + '.'))
+        if (-not [string]::IsNullOrWhiteSpace($Scene)) { [void]$sections.Add(('Scene: ' + $Scene)) }
+        if (-not [string]::IsNullOrWhiteSpace($Style)) { [void]$sections.Add(("Director's notes: " + $Style)) }
+        [void]$sections.Add('Read this transcript verbatim:')
+        [void]$sections.Add($plainTranscript)
+        $part.text = [string]::Join([Environment]::NewLine,[string[]]$sections.ToArray())
+        return $part
+    }
+    throw "Unsupported Gemini TTS model '$Model'."
+}
+
+function Test-GemmaTtsModelRetryableFailure {
+    param([string]$Message)
+    return ($Message -match '(?i)HTTP (?:0|408|429|500|502|503|504)\\b' -or
+        $Message -match '(?i)timeout|timed out|connection reset|connection closed|name resolution|temporarily unavailable')
+}
 function Invoke-GemmaSpeakLatest {
     param([System.Collections.IList]$Contents)
     $transcript = Get-GemmaLatestAssistantTranscript -Contents $Contents
@@ -251,40 +312,66 @@ function Invoke-GemmaSpeakLatest {
     }
 
     $style = Get-GemmaTtsDirectorStyle -Contents $Contents
-    $audioPath = Get-GemmaTtsCachePath -Transcript $transcript -Style $style
+    $scene = Get-GemmaTtsScene
+    $models = @($script:MiraTtsModels)
+    if ($models.Count -eq 0) { throw 'No Gemini TTS models are configured.' }
+    $preferredModel = [string]$script:MiraTtsModel
+    $preferredIndex = [Array]::IndexOf($models,$preferredModel)
+    if ($preferredIndex -lt 0) { $preferredIndex = 0 }
+    $modelOrder = @()
+    for ($i = 0; $i -lt $models.Count; $i++) { $modelOrder += [string]$models[($preferredIndex + $i) % $models.Count] }
 
-    # Cache-first: a repeat Tab press replays the same WAV without another request.
-    if (Test-Path -LiteralPath $audioPath -PathType Leaf) {
-        Write-Host '[TTS] Playing cached WAV (no API request)...' -ForegroundColor DarkGray
-        Invoke-GemmaPlayTtsWave -Path $audioPath
-        return
+    # Reuse any model-specific cache before making an API request.
+    foreach ($candidateModel in $modelOrder) {
+        $script:MiraTtsModel = $candidateModel
+        $candidateCache = Get-GemmaTtsCachePath -Transcript $transcript -Style $style
+        if (Test-Path -LiteralPath $candidateCache -PathType Leaf) {
+            Write-Host (('[TTS] Playing cached WAV ({0}; no API request)...' -f $candidateModel)) -ForegroundColor DarkGray
+            Invoke-GemmaPlayTtsWave -Path $candidateCache
+            return
+        }
     }
+    $script:MiraTtsModel = $preferredModel
 
     if (@(Get-GeminiApiKeys).Count -eq 0) {
         Write-Host '[TTS] Set GEMINI_API_KEY or GEMINI_APIJ. Antigravity OAuth alone cannot authenticate Gemini API TTS.' -ForegroundColor Yellow
         return
     }
-
     if (-not (Test-Path -LiteralPath $script:MiraTtsAudioDirectory -PathType Container)) {
         New-Item -ItemType Directory -Path $script:MiraTtsAudioDirectory -Force -ErrorAction Stop | Out-Null
     }
 
-    $speechPart = @{ text = $transcript }
-    if (-not [string]::IsNullOrWhiteSpace($style)) {
-        $speechPart.speechMetadata = @{ style = $style }
-    }
-    $payload = @{
-        contents = @(@{ role = 'user'; parts = @($speechPart) })
-        generationConfig = @{
-            responseModalities = @('AUDIO')
-            speechConfig = @{ voiceConfig = @{ prebuiltVoiceConfig = @{ voiceName = $script:MiraTtsVoice } } }
-        }
-    }
-    $json = $payload | ConvertTo-Json -Depth 12
-    $uri = "https://generativelanguage.googleapis.com/v1beta/models/$($script:MiraTtsModel):generateContent"
-    Write-Host ("[TTS] Generating speech ({0}, {1})..." -f $script:MiraTtsModel,$script:MiraTtsVoice) -ForegroundColor DarkGray
+    $response = $null
+    $successfulModel = ''
+    $lastFailure = ''
     try {
-        $response = Invoke-GemmaTtsWithKeyRotation -Uri $uri -Json $json
+        foreach ($candidateModel in $modelOrder) {
+            $speechPart = New-GemmaTtsSpeechPart -Transcript $transcript -Style $style -Scene $scene -Model $candidateModel
+            $payload = @{
+                contents = @(@{ role = 'user'; parts = @($speechPart) })
+                generationConfig = @{
+                    responseModalities = @('AUDIO')
+                    speechConfig = @{ voiceConfig = @{ prebuiltVoiceConfig = @{ voiceName = $script:MiraTtsVoice } } }
+                }
+            }
+            $json = $payload | ConvertTo-Json -Depth 12
+            $uri = "https://generativelanguage.googleapis.com/v1beta/models/$candidateModel`:generateContent"
+            Write-Host (('[TTS] Generating speech ({0}, {1})...' -f $candidateModel,$script:MiraTtsVoice)) -ForegroundColor DarkGray
+            try {
+                $response = Invoke-GemmaTtsWithKeyRotation -Uri $uri -Json $json
+                $successfulModel = $candidateModel
+                break
+            } catch {
+                $lastFailure = [string]$_.Exception.Message
+                if (-not (Test-GemmaTtsModelRetryableFailure -Message $lastFailure)) { throw }
+                if ($candidateModel -ne $modelOrder[$modelOrder.Count - 1]) {
+                    Write-Host (('[TTS] {0} failed with a retryable server error; trying the next configured model...' -f $candidateModel)) -ForegroundColor DarkYellow
+                }
+            }
+        }
+        if ($null -eq $response -or [string]::IsNullOrWhiteSpace($successfulModel)) { throw $lastFailure }
+        $script:MiraTtsModel = $successfulModel
+        $audioPath = Get-GemmaTtsCachePath -Transcript $transcript -Style $style
         $audioPart = @($response.candidates[0].content.parts | Where-Object { $null -ne $_.inlineData -and -not [string]::IsNullOrWhiteSpace([string]$_.inlineData.data) }) | Select-Object -First 1
         if ($null -eq $audioPart -or [string]::IsNullOrWhiteSpace([string]$audioPart.inlineData.data)) {
             $finishReason = [string]$response.candidates[0].finishReason
@@ -292,11 +379,11 @@ function Invoke-GemmaSpeakLatest {
         }
         $audioBytes = [Convert]::FromBase64String([string]$audioPart.inlineData.data)
         if ($audioBytes.Length -lt 44 -or [Text.Encoding]::ASCII.GetString($audioBytes,0,4) -ne 'RIFF') { throw 'Gemini TTS response was not a complete WAV file.' }
-
-        # Store the generated WAV permanently; do not delete it after playback.
         [IO.File]::WriteAllBytes($audioPath,$audioBytes)
-        Write-Host ("[TTS] Saved WAV: {0}" -f $audioPath) -ForegroundColor DarkGray
+        Write-Host (('[TTS] Saved WAV ({0}): {1}' -f $successfulModel,$audioPath)) -ForegroundColor DarkGray
         Invoke-GemmaPlayTtsWave -Path $audioPath
+    } catch {
+        $script:MiraTtsModel = $preferredModel
+        Write-Host (('[TTS error] {0}' -f $_.Exception.Message)) -ForegroundColor Red
     }
-    catch { Write-Host ("[TTS error] {0}" -f $_.Exception.Message) -ForegroundColor Red }
 }
