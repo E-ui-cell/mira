@@ -957,6 +957,20 @@
                                 }
                                 $lastFailure = "HTTP $status $errorCode $errorMessage $errorBody"
 
+                                # Never replay a Groq generation after visible text was emitted.
+                                # A stream can lose its terminal [DONE] marker after delivering a
+                                # complete-looking answer; retrying then bills another generation
+                                # and prints a second greeting. Preserve the partial answer and stop.
+                                if ($groqReplayState.Text.Length -gt 0) {
+                                    throw "Groq stream was interrupted after emitting text; automatic retry suppressed to prevent duplicate generations. $lastFailure"
+                                }
+
+                                # A 429 is a provider-wide rate-limit signal in many cases. Do not
+                                # hammer Groq with retries or rotate through keys in a tight loop.
+                                if ($status -eq 429) {
+                                    throw "Groq rate limit reached (HTTP 429); automatic retries and key rotation are disabled. $lastFailure"
+                                }
+
                                 $rotateKey = ($keyRotationErrorCodes -contains $errorCode.ToLowerInvariant()) -or
                                     ($keyRotationErrorCodes -contains $errorType.ToLowerInvariant()) -or
                                     ($status -eq 401) -or
