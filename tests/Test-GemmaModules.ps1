@@ -107,7 +107,7 @@ if ($modelPickerSource -notmatch 'Get-AntigravityModels' -or
     $modelPickerSource -notmatch 'Google AI Studio API' -or
     $modelPickerSource -notmatch 'Groq' -or
     $modelPickerSource -notmatch 'MIRA_OPENAI_DEFAULT_MODEL' -or
-    $modelPickerSource -notmatch '\$model\.provider \+ '':'') {
+    -not $modelPickerSource.Contains("provider + ':' +")) {
     throw 'The model picker does not independently load and label all four provider catalogues as provider:model.'
 }
 
@@ -126,8 +126,8 @@ if (-not $catalogProbe[0].legacyAccessRestricted -or
 }
 if ($lineEditorSource -notmatch 'Get-GemmaModelCompletionCandidates' -or
     $lineEditorSource -notmatch 'Get-GemmaSystemPromptNames' -or
-    $lineEditorSource -notmatch "^\\.sysprompt\\s+" -or
-    $lineEditorSource -match "openai:gpt-6-luna|google-ai-studio:") {
+    $lineEditorSource -notmatch '\.sysprompt\s+' -or
+    $lineEditorSource -match 'openai:gpt-6-luna|google-ai-studio:') {
     throw 'The .model or .sysprompt argument tab completions are incomplete or still hard-coded.'
 }
 
@@ -299,6 +299,20 @@ try {
     $groqCompletionOptions = @(Get-GemmaModelCompletionCandidates -Prefix 'groq:')
     if ($groqCompletionOptions -notcontains 'groq:openai/gpt-oss-120b') {
         throw 'The .model completion catalogue omitted the provider-qualified Groq model.'
+    }
+    $oldPromptDirectory = $script:GemmaPromptDirectory
+    $testPromptDirectory = Join-Path ([IO.Path]::GetTempPath()) ('gemma-prompts-' + [guid]::NewGuid().ToString('N'))
+    try {
+        [void](New-Item -ItemType Directory -Path $testPromptDirectory -Force)
+        [IO.File]::WriteAllText((Join-Path $testPromptDirectory 'code-review.md'),'test')
+        $script:GemmaPromptDirectory = $testPromptDirectory
+        $promptNames = @(Get-GemmaSystemPromptNames)
+        if ($promptNames -notcontains 'default' -or $promptNames -notcontains 'code-review') {
+            throw 'System prompt completion did not include default and available prompt names.'
+        }
+    } finally {
+        $script:GemmaPromptDirectory = $oldPromptDirectory
+        if (Test-Path -LiteralPath $testPromptDirectory) { Remove-Item -LiteralPath $testPromptDirectory -Recurse -Force }
     }
 } finally {
     $script:Provider = $oldGemmaProvider
