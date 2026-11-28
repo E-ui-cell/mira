@@ -338,9 +338,10 @@ try {
     try {
         [void](New-Item -ItemType Directory -Path $testPromptDirectory -Force)
         [IO.File]::WriteAllText((Join-Path $testPromptDirectory 'code-review.md'),'test')
+        [IO.File]::WriteAllText((Join-Path $testPromptDirectory 'default.md'),'test')
         $script:GemmaPromptDirectory = $testPromptDirectory
         $promptNames = @(Get-GemmaSystemPromptNames)
-        if ($promptNames -notcontains 'default' -or $promptNames -notcontains 'code-review') {
+        if ($promptNames -notcontains 'default' -or @($promptNames | Where-Object { $_ -ieq 'default' }).Count -ne 1 -or $promptNames -notcontains 'code-review') {
             throw 'System prompt completion did not include default and available prompt names.'
         }
     } finally {
