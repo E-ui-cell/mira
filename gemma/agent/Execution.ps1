@@ -49,12 +49,14 @@ function Stop-GemmaTrackedProcess {
                 if (Test-Path -LiteralPath $taskkill -PathType Leaf) { & $taskkill /PID $processId /T /F 2>&1 | Out-Null }
                 $process.Refresh()
                 if (-not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(2000) }
+                $process.Refresh()
+                if (-not $process.HasExited) { throw 'Process remained active after the termination request.' }
             }
             $results += @{ process_id = [int]$processId; process_name = $processName; stopped = $true; already_exited = [bool]$process.HasExited }
         } catch {
             $results += @{ process_id = [int]$processId; process_name = $processName; stopped = $false; error = $_.Exception.Message }
         } finally {
-            $script:MiraTrackedProcesses.Remove([int]$processId)
+            [void]$script:MiraTrackedProcesses.Remove([int]$processId)
             [void]$script:MiraTrackedProcessOrder.Remove([int]$processId)
             try { $process.Dispose() } catch {}
         }
