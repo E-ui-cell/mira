@@ -1,3 +1,66 @@
+if ($null -eq $script:MiraTrackedProcesses) { $script:MiraTrackedProcesses = @{} }
+if ($null -eq $script:MiraTrackedProcessOrder) { $script:MiraTrackedProcessOrder = New-Object 'System.Collections.Generic.List[int]' }
+
+function Start-GemmaTrackedProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [string]$WorkingDirectory = '',
+        [switch]$NoNewWindow,
+        [ValidateSet('Normal','Hidden','Minimized','Maximized')][string]$WindowStyle = 'Normal'
+    )
+    $startParameters = @{ FilePath = $FilePath; PassThru = $true; ErrorAction = 'Stop' }
+    if ($ArgumentList.Count -gt 0) { $startParameters.ArgumentList = $ArgumentList }
+    if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) { $startParameters.WorkingDirectory = $WorkingDirectory }
+    if ($NoNewWindow) { $startParameters.NoNewWindow = $true } else { $startParameters.WindowStyle = $WindowStyle }
+    $process = Start-Process @startParameters
+    $processId = [int]$process.Id
+    $script:MiraTrackedProcesses[$processId] = $process
+    if (-not $script:MiraTrackedProcessOrder.Contains($processId)) { $script:MiraTrackedProcessOrder.Add($processId) }
+    return @{ started = $true; process_id = $processId; process_name = $process.ProcessName; kill_command = ('.kill ' + $processId) }
+}
+
+function Stop-GemmaTrackedProcess {
+    param([string]$Target = 'last')
+    $ids = @()
+    $value = if ([string]::IsNullOrWhiteSpace($Target)) { 'last' } else { $Target.Trim() }
+    if ($value -ieq 'all') {
+        $ids = @($script:MiraTrackedProcessOrder.ToArray())
+    } elseif ($value -ieq 'last') {
+        if ($script:MiraTrackedProcessOrder.Count -gt 0) { $ids = @([int]$script:MiraTrackedProcessOrder[$script:MiraTrackedProcessOrder.Count - 1]) }
+    } else {
+        $processId = 0
+        if (-not [int]::TryParse($value,[ref]$processId)) { return @{ stopped = $false; error = 'Use .kill, .kill last, .kill all, or .kill <process-id>.' } }
+        $ids = @($processId)
+    }
+    if ($ids.Count -eq 0) { return @{ stopped = $false; error = 'No tracked GEMMA-launched process was found.' } }
+    $results = @()
+    foreach ($processId in $ids) {
+        if (-not $script:MiraTrackedProcesses.ContainsKey([int]$processId)) {
+            $results += @{ process_id = [int]$processId; stopped = $false; error = 'Process is not tracked by GEMMA.' }
+            continue
+        }
+        $process = $script:MiraTrackedProcesses[[int]$processId]
+        $processName = [string]$process.ProcessName
+        try {
+            $process.Refresh()
+            if (-not $process.HasExited) {
+                $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+                if (Test-Path -LiteralPath $taskkill -PathType Leaf) { & $taskkill /PID $processId /T /F 2>&1 | Out-Null }
+                $process.Refresh()
+                if (-not $process.HasExited) { $process.Kill(); [void]$process.WaitForExit(2000) }
+            }
+            $results += @{ process_id = [int]$processId; process_name = $processName; stopped = $true; already_exited = [bool]$process.HasExited }
+        } catch {
+            $results += @{ process_id = [int]$processId; process_name = $processName; stopped = $false; error = $_.Exception.Message }
+        } finally {
+            $script:MiraTrackedProcesses.Remove([int]$processId)
+            [void]$script:MiraTrackedProcessOrder.Remove([int]$processId)
+            try { $process.Dispose() } catch {}
+        }
+    }
+    return @{ results = @($results) }
+}
 function Invoke-GemmaPermissionCommand {
     param([ValidateSet('ask','autopilot')][string]$Mode)
     $script:ExecutionPermission = $Mode
