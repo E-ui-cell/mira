@@ -117,11 +117,14 @@ function ConvertFrom-GemmaOpenAIResponse {
     param([Parameter(Mandatory=$true)]$OpenAIResponse)
     if ($null -eq $OpenAIResponse.choices -or $OpenAIResponse.choices.Count -eq 0) {
         $detail = if ($OpenAIResponse.error.message) { [string]$OpenAIResponse.error.message } else { 'No choices returned.' }
-        throw "OpenAI returned no chat completion choices. $detail"
+        throw "Chat Completions provider returned no choices. $detail"
     }
     $choice = $OpenAIResponse.choices[0]
     $message = $choice.message
     $parts = New-Object System.Collections.Generic.List[object]
+    if (-not [string]::IsNullOrWhiteSpace([string]$message.reasoning)) {
+        [void]$parts.Add(@{ text=[string]$message.reasoning; thought=$true })
+    }
     if ($null -ne $message.content) {
         if ($message.content -is [string] -and -not [string]::IsNullOrWhiteSpace($message.content)) {
             [void]$parts.Add(@{ text=[string]$message.content })
