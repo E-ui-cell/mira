@@ -53,6 +53,19 @@ while ($true) {
         continue
     }
 
+    if ($trimmedInput -ieq '.kill' -or $trimmedInput.StartsWith('.kill ',[StringComparison]::OrdinalIgnoreCase)) {
+        $killTarget = 'last'
+        if ($trimmedInput.Length -gt 5) { $killTarget = $trimmedInput.Substring(5).Trim() }
+        $killResult = Stop-GemmaTrackedProcess -Target $killTarget
+        if ($null -ne $killResult.results) {
+            foreach ($result in @($killResult.results)) {
+                if ($result.stopped) { Write-Host (('[Process stopped] {0} (PID {1})' -f $result.process_name,$result.process_id)) -ForegroundColor Yellow }
+                else { Write-Host (('[Process not stopped] PID {0}: {1}' -f $result.process_id,$result.error)) -ForegroundColor Yellow }
+            }
+        }
+        if ($killResult.error) { Write-Host ('[Process control] ' + $killResult.error) -ForegroundColor DarkGray }
+        continue
+    }
     if ($trimmedInput -ieq '.speak') {
         Initialize-GemmaTts
         Invoke-GemmaSpeakLatest -Contents $Contents
