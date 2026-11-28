@@ -744,12 +744,14 @@
 
                             $httpRequest = $null
                             $httpResponse = $null
+                            $errorResponse = $null
                             $responseReader = $null
                             try {
                                 $httpRequest = [System.Net.HttpWebRequest]::Create($u)
                                 $httpRequest.Method = 'POST'
                                 $httpRequest.ContentType = 'application/json; charset=utf-8'
-                                $httpRequest.Accept = if ($streamResponses) { 'text/event-stream' } else { 'application/json' }
+                                if ($streamResponses) { $httpRequest.Accept = 'text/event-stream' }
+                                else { $httpRequest.Accept = 'application/json' }
                                 $httpRequest.Headers['Authorization'] = ('Bearer ' + [string]$keyPool[$keyIndex])
                                 $httpRequest.Timeout = 180000
                                 $httpRequest.ReadWriteTimeout = 180000
@@ -902,6 +904,7 @@
                             } catch {
                                 $failure = $_
                                 $response = $failure.Exception.Response
+                                if ($null -ne $response) { $errorResponse = $response }
                                 if ($null -eq $response -and $null -ne $httpResponse) { $response = $httpResponse }
                                 $status = 0
                                 $retryAfter = 0
@@ -979,6 +982,7 @@
                             } finally {
                                 if ($null -ne $responseReader) { try { $responseReader.Dispose() } catch {} }
                                 if ($null -ne $httpResponse) { try { $httpResponse.Close() } catch {} }
+                                if ($null -ne $errorResponse -and $null -eq $httpResponse) { try { $errorResponse.Close() } catch {} }
                                 if ($null -ne $httpRequest) { try { $httpRequest.Abort() } catch {} }
                                 if ($null -ne $streamState) { $streamState.Request = $null }
                             }
