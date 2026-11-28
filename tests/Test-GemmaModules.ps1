@@ -134,6 +134,12 @@ if ($rootTuiSource -notmatch '(?s)if\(\$p\.Key -eq \[ConsoleKey\]::Enter.*?if\(A
 if ($rootTuiSource -notmatch '(?s)\$direction=if\(\$shift\)\{-1\}else\{1\}\s*Move-ModelMenu \$direction') {
     throw 'The root TUI model completion menu does not support reverse Tab navigation.'
 }
+if ($lineEditorSource -notmatch '\$oldText\.IndexOf\(\[char\]10\)' -or
+    $lineEditorSource -notmatch '\$newText\.IndexOf\(\[char\]10\)' -or
+    $lineEditorSource -notmatch '\$commonLimit\s*=\s*\[Math\]::Min' -or
+    $lineEditorSource -notmatch '\$cursorRow\s*=\s*\$row.*-\$visibleRowOffset') {
+    throw 'Gemma input editor single-line incremental redraw or long-buffer cursor viewport logic is missing.'
+}
 if ($lineEditorSource -notmatch '\$pendingKeys\s*=\s*New-Object' -or
     $lineEditorSource -notmatch '\$pendingKeys\.Dequeue\(\)' -or
     $lineEditorSource -notmatch '\$pendingKeys\.Enqueue\(\$pk\)' -or
