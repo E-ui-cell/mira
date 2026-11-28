@@ -266,6 +266,7 @@ $oldModelCatalogCacheAt = $script:GemmaModelCatalogCacheAt
 $oldProviderCompletionCache = $script:GemmaProviderCompletionCache
 $oldModelCatalogFunction = (Get-Command Get-GemmaModelCatalog -CommandType Function).ScriptBlock
 $oldAntigravityPathFunction = (Get-Command Get-AntigravityTokenPath -CommandType Function).ScriptBlock
+$oldGeminiModelsFunction = (Get-Command Get-GeminiModels -CommandType Function).ScriptBlock
 $script:TestAntigravityTokenPath = [IO.Path]::Combine([IO.Path]::GetTempPath(),'mira-antigravity-test-' + [guid]::NewGuid().ToString('N') + '.json')
 try {
     $script:OpenAIApiKeys = @('unit-test-openai-key')
@@ -316,6 +317,22 @@ try {
         $antigravityCompletionOptions -notcontains 'antigravity:gemini-3-flash') {
         throw 'The .model completion catalogue did not keep identical model IDs distinct by provider.'
     }
+    $script:GemmaModelCatalogCache = $null
+    $script:GemmaModelCatalogCacheAt = [DateTime]::MinValue
+    $script:GemmaProviderCompletionCache = @{}
+    Set-Item -Path Function:\Get-GeminiModels -Value {
+        if ($script:Provider -ne 'gemini') { throw 'Gemini API catalogue was fetched under the wrong active provider.' }
+        return @([pscustomobject]@{ name = 'gemini-api-only-test' })
+    }
+    $script:Provider = 'antigravity'
+    $geminiProviderOnlyModels = @(Get-GemmaProviderCompletionModels -Provider 'gemini')
+    if ($script:Provider -ne 'antigravity' -or
+        $geminiProviderOnlyModels.Count -ne 1 -or
+        $geminiProviderOnlyModels[0].provider -ne 'gemini' -or
+        $geminiProviderOnlyModels[0].name -ne 'gemini-api-only-test') {
+        throw 'Gemini provider-specific completion did not isolate and restore the active provider.'
+    }
+    $script:Provider = 'groq'
     $oldPromptDirectory = $script:GemmaPromptDirectory
     $testPromptDirectory = Join-Path ([IO.Path]::GetTempPath()) ('gemma-prompts-' + [guid]::NewGuid().ToString('N'))
     try {
@@ -341,6 +358,7 @@ try {
     $script:GemmaProviderCompletionCache = $oldProviderCompletionCache
     Set-Item -Path Function:\Get-GemmaModelCatalog -Value $oldModelCatalogFunction
     Set-Item -Path Function:\Get-AntigravityTokenPath -Value $oldAntigravityPathFunction
+    Set-Item -Path Function:\Get-GeminiModels -Value $oldGeminiModelsFunction
     if (Test-Path -LiteralPath $script:TestAntigravityTokenPath) {
         Remove-Item -LiteralPath $script:TestAntigravityTokenPath -Force
     }
