@@ -243,7 +243,7 @@ function Invoke-GemmaTtsWithKeyRotation {
 
 function Get-GemmaTtsScene {
     $systemText = [string]$SystemInstruction.parts[0].text
-    $match = [regex]::Match($systemText,'(?ims)^##[ \\t]+(?:TTS scene|Scene)[ \\t]*\\r?\\n(?<body>.*?)(?=^##[ \\t]+|^COMMAND GENERATION MODE:|\\z)')
+    $match = [regex]::Match($systemText,'(?ims)^##[ \t]+(?:TTS scene|Scene)[ \t]*\r?\n(?<body>.*?)(?=^##[ \t]+|^COMMAND GENERATION MODE:|\z)')
     if ($match.Success) { return $match.Groups['body'].Value.Trim() }
     return ''
 }
@@ -252,8 +252,8 @@ function ConvertTo-GemmaTtsLegacyTranscript {
     param([Parameter(Mandatory = $true)][string]$Transcript,[switch]$RemoveTags)
     $tagNames = 'whispers?|laughs?|sighs?|short pause|long pause|breath|gasp|cough|groan|scream|chuckles?|giggles?|yawn|grunt|pant|sob|shout|snort|tsk|hiss|phew|moan|whimper'
     if ($RemoveTags) {
-        $value = [regex]::Replace($Transcript,('(?i)(?:<|\\[)(?:' + $tagNames + ')(?:>|\\])'),' ')
-        return [regex]::Replace($value,'\\s{2,}',' ').Trim()
+        $value = [regex]::Replace($Transcript,('(?i)(?:<|\[)(?:' + $tagNames + ')(?:>|\])'),' ')
+        return [regex]::Replace($value,'\s{2,}',' ').Trim()
     }
     return [regex]::Replace($Transcript,('(?i)<(' + $tagNames + ')>'),'[$1]')
 }
@@ -267,11 +267,11 @@ function New-GemmaTtsSpeechPart {
     )
     $partText = $Transcript
     $part = @{ text = $partText }
-    if ($Model -match '^gemini-3\\.8-') {
+    if ($Model -match '^gemini-3\.8-') {
         if (-not [string]::IsNullOrWhiteSpace($Style)) { $part.speechMetadata = @{ style = $Style } }
         return $part
     }
-    if ($Model -match '^gemini-3\\.1-') {
+    if ($Model -match '^gemini-3\.1-') {
         $legacyTranscript = ConvertTo-GemmaTtsLegacyTranscript -Transcript $Transcript
         $sections = New-Object 'System.Collections.Generic.List[string]'
         [void]$sections.Add('[Audio Profile]')
@@ -283,7 +283,7 @@ function New-GemmaTtsSpeechPart {
         $part.text = [string]::Join([Environment]::NewLine,[string[]]$sections.ToArray())
         return $part
     }
-    if ($Model -match '^gemini-2\\.5-') {
+    if ($Model -match '^gemini-2\.5-') {
         $plainTranscript = ConvertTo-GemmaTtsLegacyTranscript -Transcript $Transcript -RemoveTags
         $sections = New-Object 'System.Collections.Generic.List[string]'
         [void]$sections.Add(('Speak using the voice ' + [string]$script:MiraTtsVoice + '.'))
@@ -299,7 +299,7 @@ function New-GemmaTtsSpeechPart {
 
 function Test-GemmaTtsModelRetryableFailure {
     param([string]$Message)
-    return ($Message -match '(?i)HTTP (?:0|408|429|500|502|503|504)\\b' -or
+    return ($Message -match '(?i)HTTP (?:0|408|429|500|502|503|504)\b' -or
         $Message -match '(?i)timeout|timed out|connection reset|connection closed|name resolution|temporarily unavailable')
 }
 function Invoke-GemmaSpeakLatest {
