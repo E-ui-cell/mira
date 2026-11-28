@@ -773,6 +773,24 @@ try {
             $antigravityUsageOutput -match 'OpenAI key candidates:|Google AI Studio API key candidates:') {
             throw '.usage diagnostics did not follow the active Antigravity OAuth provider.'
         }
+        $oldGroqKeysForUsage = @($script:GroqApiKeys)
+        $oldGroqIndexForUsage = $script:MiraGroqApiKeyIndex
+        try {
+            $script:GroqApiKeys = @('groq-usage-test-key')
+            $script:MiraGroqApiKeyIndex = 0
+            $script:Provider = 'groq'
+            $script:MODEL = 'openai/gpt-oss-120b'
+            Add-GemmaUsageRecord -Provider 'groq' -Model $script:MODEL -Succeeded $true -InputTokens 55 -OutputTokens 22 -HttpAttempts 1 -KeyIndex 0 -KeyCount 1 -KeySlotsTried @(1) -RateLimitHeaders @{ 'x-ratelimit-remaining-requests' = '9' } -RequestId 'groq_usage_test' -HttpStatus 200
+            $groqUsageOutput = (& { Invoke-GemmaUsageCommand } 6>&1 | Out-String)
+            if ($groqUsageOutput -notmatch 'Active model: Groq \| openai/gpt-oss-120b' -or
+                $groqUsageOutput -notmatch 'Groq API key candidates: 1 configured \| next slot 1/1' -or
+                $groqUsageOutput -notmatch 'Last observed Groq rate-limit/response headers:') {
+                throw '.usage diagnostics did not follow the active Groq provider.'
+            }
+        } finally {
+            $script:GroqApiKeys = $oldGroqKeysForUsage
+            $script:MiraGroqApiKeyIndex = $oldGroqIndexForUsage
+        }
     } finally {
         $script:Provider = $oldUsageProvider
         $script:MODEL = $oldUsageModel
