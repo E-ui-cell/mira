@@ -404,7 +404,7 @@ if ($turnSource -notmatch '\$streamState\.Response\s*=\s*\$streamResponse' -or
     $turnSource -notmatch '\$response\s*=\s*\$streamState\.Response' -or
     $turnSource -notmatch '\$streamGoogle -and \$streamTextThisRequest' -or
     $turnSource -notmatch '\$requestStats\.ErrorMessage\s*=\s*\$diagnosticMessage' -or
-    $turnSource -notmatch "ErrorCode 'EMPTY_CANDIDATE_CONTENT'" -or
+    $turnSource -notmatch '\$candidateFailureCode' -or
     $turnSource -notmatch 'Google returned no candidates') {
     throw 'Gemini streaming response handoff, streamed-text recovery, or structured API error diagnostics are missing.'
 }
