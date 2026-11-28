@@ -1156,6 +1156,11 @@ if ($executionSource -notmatch '\[Console\]::TreatControlCAsInput\s*=\s*\$false'
     $executionSource -notmatch '\[Console\]::TreatControlCAsInput\s*=\s*\$previousTreatControlCAsInput') {
     throw 'LLM PowerShell commands do not isolate Ctrl+C cancellation from the GEMMA host.'
 }
+if ($executionSource -notmatch 'approvalTreatControlCAsInput' -or
+    $executionSource -notmatch 'catch \[System\.Management\.Automation\.PipelineStoppedException\]' -or
+    $executionSource -notmatch 'Command approval cancelled with Ctrl\+C') {
+    throw 'Ctrl+C at the ASK approval prompt is not converted into a cancelled tool result.'
+}
 # Tracked child processes can be stopped independently without ending the GEMMA host.
 $trackedProcess = Start-GemmaTrackedProcess -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden
 try {
