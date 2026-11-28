@@ -32,18 +32,25 @@
         }
 
         $usingOpenAI = ($script:Provider -eq 'openai')
+        $usingGroq = ($script:Provider -eq 'groq')
+        $usingOpenAICompatible = ($usingOpenAI -or $usingGroq)
         $usingOpenAIResponses = ($usingOpenAI -and [string]$script:MODEL -ieq 'gpt-6-luna')
+        $streamMode = [string]$script:StreamingMode
+        $streamOpenAIResponses = ($usingOpenAIResponses -and $streamMode -ne 'off')
+        $streamGroqChat = ($usingGroq -and $streamMode -ne 'off')
+        $streamOpenAICompatible = ($streamOpenAIResponses -or $streamGroqChat)
+        $streamGoogle = (-not $usingOpenAICompatible -and $streamMode -ne 'off')
+        $streamingActive = ($streamOpenAICompatible -or $streamGoogle)
+
         if ($usingOpenAIResponses) {
             $payloadObj = Build-GemmaOpenAIResponsesPayload -SystemInstruction $SystemInstruction -Contents $Contents
         } elseif ($usingOpenAI) {
             $payloadObj = Build-GemmaOpenAIChatPayload -SystemInstruction $SystemInstruction -Contents $Contents
+        } elseif ($usingGroq) {
+            $payloadObj = Build-GemmaGroqChatPayload -SystemInstruction $SystemInstruction -Contents $Contents -Streaming ($streamMode -ne 'off')
         } else {
             $payloadObj = Build-GeminiPayload -SystemInstruction $SystemInstruction -Contents $Contents
         }
-        $streamMode = [string]$script:StreamingMode
-        $streamOpenAIResponses = ($usingOpenAIResponses -and $streamMode -ne 'off')
-        $streamGoogle = (-not $usingOpenAI -and $streamMode -ne 'off')
-        $streamingActive = ($streamOpenAIResponses -or $streamGoogle)
         if ($streamOpenAIResponses) {
             # Luna uses the Responses API SSE stream when streaming is enabled.
             $payloadObj.stream = $true
@@ -83,6 +90,14 @@
             else { $url = 'https://api.openai.com/v1/chat/completions' }
             $requestHeaders = @{}
             $requestProviderName = 'openai'
+        } elseif ($usingGroq) {
+            $requestApiKeys = @(Get-GroqApiKeys)
+            if ($requestApiKeys.Count -eq 0) { throw 'Groq API key is not configured in the Groq candidate list in Defaults.ps1.' }
+            if ($null -ne $script:MiraGroqApiKeyIndex) { $requestKeyIndex = [int]($script:MiraGroqApiKeyIndex % $requestApiKeys.Count) }
+            $jsonPayload = $payloadObj | ConvertTo-Json -Depth 30
+            $url = 'https://api.groq.com/openai/v1/chat/completions'
+            $requestHeaders = @{}
+            $requestProviderName = 'groq'
         } else {
             $requestApiKeys = @(Get-GeminiApiKeys)
             if ($requestApiKeys.Count -eq 0) { throw 'Gemini API keys are not configured in the Gemini candidate list in Defaults.ps1.' }
@@ -93,6 +108,7 @@
             $requestHeaders = @{ 'x-goog-api-key' = $requestApiKeys[$requestKeyIndex] }
         }
 
+        $requestKeyRotationErrorCodes = if ($usingGroq) { @($script:GroqKeyRotationErrorCodes) } else { @($script:OpenAIKeyRotationErrorCodes) }
         $requestStats = [hashtable]::Synchronized(@{
             HttpAttempts = 0
             LastKeyIndex = -1
@@ -976,7 +992,7 @@
                         Start-Sleep -Seconds ([int]$delay)
                     }
                 }
-            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders).AddArgument($requestApiKeys).AddArgument($requestKeyIndex).AddArgument($requestProviderName).AddArgument([bool]$streamOpenAIResponses).AddArgument($streamQueue).AddArgument($streamState).AddArgument([bool]$streamGoogle).AddArgument([bool]$script:VerboseOutput).AddArgument($requestStats).AddArgument(@($script:OpenAIKeyRotationErrorCodes))
+            }).AddArgument($url).AddArgument($utf8Bytes).AddArgument($requestHeaders).AddArgument($requestApiKeys).AddArgument($requestKeyIndex).AddArgument($requestProviderName).AddArgument([bool]$streamOpenAICompatible).AddArgument($streamQueue).AddArgument($streamState).AddArgument([bool]$streamGoogle).AddArgument([bool]$script:VerboseOutput).AddArgument($requestStats).AddArgument(@($requestKeyRotationErrorCodes))
             $asyncResult = $powershell.BeginInvoke()
 
             $cancelled = $false
