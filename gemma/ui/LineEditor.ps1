@@ -900,7 +900,7 @@ function Read-GemLineConsole {
 
             if ($b -match '^\.[^\s]*$') {
                 $found = @($script:GemCommands | Where-Object { $_.StartsWith($b,[StringComparison]::OrdinalIgnoreCase) })
-                $argumentCommands = @('.model','.sysprompt','.skill','.kill','.verbose','.oneshot','.streaming','.grounding','.auth','.effort')
+                $argumentCommands = @('.model','.sysprompt','.skill','.kill','.verbose','.oneshot','.streaming','.grounding','.auth','.effort','.exportsession','.loadsession')
                 foreach ($item in $found) {
                     $completion = [string]$item
                     if ($argumentCommands -contains $completion) { $completion += ' ' }
