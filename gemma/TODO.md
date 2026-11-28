@@ -5,7 +5,7 @@
 - [ ] **Restore long and multiline text input (major regression):**
   Progress: restored scrolling of the visible input rows when the logical prompt exceeds the console buffer, and restored Ctrl+V clipboard insertion with CR/LF normalization, NUL removal, and one-step undo. Interactive Windows PowerShell 5.1 validation is still required. The current input editor no longer reliably supports long prompts or multiline input/paste. Restore the full input-buffer behavior, including arbitrarily long practical input, multiple lines, multiline paste, cursor movement/editing across lines, and correct redraw without truncation, dropped text, or buffer corruption. Add regression tests for long single-line input, long multiline input, multiline paste, editing near the beginning/middle/end, and submission of the exact complete buffer. Validate interactively in Windows PowerShell 5.1; parser-only tests are not sufficient.
 - [ ] **Input editor performance / typing lag:**
-  Progress: added a single-line fast path that redraws only the changed suffix when the full line fits on one terminal row, avoiding the normal full layout/clear/repaint path. Corrected cursor-row positioning to account for the long-buffer viewport offset. Multiline/wrapped-line incremental redraw and measured latency benchmarks remain outstanding. Profile and optimize `Read-GemLineConsole` and its redraw path. Current implementation takes full-buffer undo snapshots on edits (up to 100) and recalculates layout plus clears/redraws the complete old/new screen region on each edit. Avoid repeated full-buffer/full-screen work for ordinary keystrokes; use incremental or dirty-region redraw where safe, and keep undo behavior correct. Test typing, cursor movement, paste and deletion in short and very long prompts; verify latency does not grow unacceptably with buffer length. Preserve Windows PowerShell 5.1 compatibility and Unicode/multiline correctness.
+  Progress: added a single-line fast path that redraws only the changed suffix when the full line fits on one terminal row, avoiding the normal full layout/clear/repaint path. Corrected cursor-row positioning to account for the long-buffer viewport offset. Command completion now inserts a space after argument-taking commands; `.sysprompt` and `.model` argument completion use shared helpers, and model completion fetches only the selected provider's catalogue instead of blocking on every provider. Multiline/wrapped-line incremental redraw and measured latency benchmarks remain outstanding. Profile and optimize `Read-GemLineConsole` and its redraw path. Current implementation takes full-buffer undo snapshots on edits (up to 100) and recalculates layout plus clears/redraws the complete old/new screen region on each edit. Avoid repeated full-buffer/full-screen work for ordinary keystrokes; use incremental or dirty-region redraw where safe, and keep undo behavior correct. Test typing, cursor movement, paste and deletion in short and very long prompts; verify latency does not grow unacceptably with buffer length. Preserve Windows PowerShell 5.1 compatibility and Unicode/multiline correctness.
 - [ ] **Startup latency:**
   Progress: moved the optional TTS module out of eager startup loading; it is dot-sourced on first `.speak`, `.replay`, `.stop`, or Ctrl+Tab use. Added opt-in bootstrap timing with `MIRA_PROFILE_STARTUP=1`; it reports module-load milliseconds without adding normal-mode output. Cold/warm startup timings and before/after measurements remain outstanding. Measure cold and warm startup, then identify and reduce PowerShell parsing/module-loading overhead. The launcher currently dot-sources 16 component scripts eagerly, while `ChatLoop.ps1` loads `Turn.ps1` when the chat loop is entered. Determine which components can be loaded lazily or consolidated without introducing first-use pauses, changing behavior, or breaking Windows PowerShell 5.1. Record before/after timings; do not optimize based only on assumptions.
 - [ ] **API-key rotation edge-case consistency and regression tests:**
@@ -22,7 +22,10 @@
   Progress: added model-specific request text: Gemini 3.8 keeps transcript and `speechMetadata.style` separate; 3.1 uses Audio Profile / Scene / Director's Notes sections with square-bracket tags; 2.5 uses plain-text voice/scene/director instructions and strips unsupported inline tags. Added fixture tests for all three payload families; the Windows PowerShell 5.1 Gemma module test step passed. Live model/API validation remains pending. Support all of these configured models: `gemini-3.8-flash-tts` (current preferred model), `gemini-3.1-flash-tts-preview`, `gemini-2.5-flash-preview-tts`, and `gemini-3.8-flash-lite-tts`. Implement model-specific request/response compatibility. In particular, Gemini 2.5 Flash TTS and Gemini 3.1 Flash TTS do not understand the newer audio tags and use a different format for director notes; support their format differences and the additional `scene` field instead of sending them the newer-model payload unchanged.
 - [ ] **Manual TTS model selection:**
   Progress: added a four-model picker on Ctrl+Tab at the start of a logical input line; supports arrows/j/k, Home/End, Enter and Esc. Static and Windows PowerShell 5.1 module tests passed; interactive terminal validation remains pending. Add a TTS model completion/picker opened by Ctrl+Tab when the input cursor is at the beginning of the line. Show the supported TTS model list and allow the user to manually switch the active TTS model. Ctrl+Tab elsewhere in the input must not unexpectedly open this picker or interfere with normal text editing.
-- [x] **OpenAI API provider (initial Chat Completions implementation):** Added provider switching, model discovery/selection, configurable `OPENAI_API_KEY` / `OPENAI_API_KEYS`, conversation and image-message conversion, function/tool calls, usage reporting, bounded retries, and API-key rotation. Remaining provider-specific work: validate supported model parameters and add OpenAI-native reasoning controls if needed.
+- [x] **OpenAI API provider:** Added provider switching, pinned GPT-6 Luna Responses API support, Chat Completions for other models, explicit key candidates, conversation/image/tool conversion, usage reporting, bounded retries, and key rotation.
+- [x] **System-prompt argument completion:** `.sysprompt` now completes `default` and the available prompt-file names through the same helper used by the command; Tab on the command name advances directly to its argument.
+- [x] **Provider-qualified model picker:** Every model entry is shown and completed as `provider:model`, keeping identical IDs from Gemini API and Antigravity separate. `.model` completion is provider-scoped and cached.
+- [ ] **Groq provider:** Added the Groq model catalogue, Chat Completions requests and SSE streaming, explicit key rotation, tool-call conversion, usage diagnostics, and model-specific reasoning controls. Deterministic regression tests are included; Windows PowerShell 5.1 CI and live API validation remain pending.
 
 ---
 
@@ -60,9 +63,11 @@ and features that do not justify their maintenance cost.
 NON-NEGOTIABLE PRODUCT PRINCIPLES
 ---------------------------------
 [ ] Small entry point and clearly separated responsibilities.
-[ ] Exactly two supported answer providers:
+[ ] Four supported answer providers:
     1. Google Antigravity OAuth provider.
     2. Gemini Developer API provider.
+    3. OpenAI API provider (GPT-6 Luna Responses API and Chat Completions).
+    4. Groq API provider (Chat Completions with model-specific reasoning controls).
 [ ] No silent provider switching, no hidden model substitution and no
     ungrounded fallback when Search is mandatory.
 [ ] Model selection belongs to the user. Discover the provider's real model
@@ -80,9 +85,9 @@ NON-NEGOTIABLE PRODUCT PRINCIPLES
 [ ] No diagnostic chatter in normal conversation output. Show actual errors,
     not internal implementation traces or successful tool-call announcements.
 
-1. TWO PROVIDERS AND AUTHENTICATION
------------------------------------
-[ ] Define one provider interface and two independent provider adapters.
+1. FOUR PROVIDERS AND AUTHENTICATION
+-------------------------------------
+[ ] Define one provider interface and four independent provider adapters.
 
     A. ANTIGRAVITY OAUTH
        - Google Antigravity OAuth login using PKCE/state validation.
@@ -103,7 +108,21 @@ NON-NEGOTIABLE PRODUCT PRINCIPLES
          canonical environment variable. Preserve a migration alias if needed;
          do not silently break existing users.
 
-[ ] Both providers must support model switching, request cancellation,
+    C. OPENAI API
+       - Keep GPT-6 Luna pinned to the configured Responses API model.
+       - Use Chat Completions for other explicitly selected OpenAI models.
+       - Keep the explicit API-key rotation order and model-specific reasoning
+         effort handling; record provider usage from actual responses.
+
+    D. GROQ API
+       - Use the Groq OpenAI-compatible Chat Completions endpoint and model list.
+       - Support SSE streaming, tool calls, explicit API-key rotation and usage
+         diagnostics without leaking Groq state into other providers.
+       - Apply reasoning controls only to models that document them: GPT-OSS
+         uses include_reasoning; other supported reasoning models use
+         reasoning_format; reasoning_effort is model-validated.
+
+[ ] All providers must support model switching, request cancellation,
     conversation context, tool calls and useful usage/error information where
     the provider supplies it.
 [ ] Provider-specific feature differences must be explicit, not hidden behind
