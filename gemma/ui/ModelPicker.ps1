@@ -354,7 +354,7 @@ function Read-GemmaModelSelection {
             }
         }
 
-        $selection = Read-Host 'Select model number or exact model ID; Enter cancels'
+        $selection = Read-Host 'Select model number or exact provider:model ID; Enter cancels'
         if ([string]::IsNullOrWhiteSpace($selection)) { return -1 }
         $selection = $selection.Trim() -replace '^models/',''
         if ($selection -match '^\d+$') {
