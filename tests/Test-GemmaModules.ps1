@@ -940,7 +940,7 @@ if ($ttsSource -notmatch '\$player\.Play\(\)' -or
     $ttsSource -notmatch 'function Invoke-GemmaTtsModelPicker' -or
     -not $ttsSource.Contains('[ConsoleKey]::UpArrow') -or
     -not $ttsSource.Contains('[ConsoleKey]::DownArrow') -or
-    -not $ttsSource.Contains("$character -eq 'j'")) {
+    -not $ttsSource.Contains("character -eq 'j'")) {
     throw 'Gemma TTS playback/picker lifecycle is not asynchronous or fully implemented.'
 }
 if ($lineEditorSource -notmatch '\$controlTab\s*=.*ConsoleModifiers\]::Control' -or
