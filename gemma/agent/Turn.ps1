@@ -1337,7 +1337,12 @@
 
             if ($null -eq $response.candidates -or @($response.candidates).Count -eq 0) {
                 $candidateFailureCode = 'NO_CANDIDATES'
-                $candidateFailureMessage = 'Google returned no candidates. Possible safety filter block or malformed request context.'
+                $candidateFailureMessage = 'Google returned no candidates and supplied no prompt-level block metadata. Check the request context and model response.'
+                $blockDiagnostic = Get-GemmaGoogleBlockDiagnostic -Response $response
+                if ($blockDiagnostic.Blocked) {
+                    $candidateFailureCode = [string]$blockDiagnostic.Code
+                    $candidateFailureMessage = [string]$blockDiagnostic.Message
+                }
                 if ($null -ne $response.error) {
                     $candidateFailureCode = if ($null -ne $response.error.code) { [string]$response.error.code } else { 'GOOGLE_API_ERROR' }
                     $candidateFailureMessage = [string]$response.error.message
@@ -1367,10 +1372,17 @@
                 $hasContentParts = $true
             }
             if (-not $hasContentParts) {
-                $reason = [string]$response.candidates[0].finishReason
-                $failureReason = if ([string]::IsNullOrWhiteSpace($reason)) { 'unspecified (Google omitted finishReason)' } else { $reason }
-                $candidateFailureMessage = "Google returned no response text or function calls (finishReason: $failureReason)."
-                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -InputTokens $roundPromptTokens -OutputTokens $roundCompletionTokens -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorCode 'EMPTY_CANDIDATE_CONTENT' -ErrorMessage $candidateFailureMessage
+                $blockDiagnostic = Get-GemmaGoogleBlockDiagnostic -Response $response
+                if ($blockDiagnostic.Blocked) {
+                    $candidateFailureCode = [string]$blockDiagnostic.Code
+                    $candidateFailureMessage = [string]$blockDiagnostic.Message
+                } else {
+                    $reason = [string]$response.candidates[0].finishReason
+                    $failureReason = if ([string]::IsNullOrWhiteSpace($reason)) { 'unspecified (Google omitted finishReason)' } else { $reason }
+                    $candidateFailureCode = 'EMPTY_CANDIDATE_CONTENT'
+                    $candidateFailureMessage = "Google returned no response text or function calls (finishReason: $failureReason)."
+                }
+                Add-GemmaUsageRecord -Provider $requestProviderName -Model ([string]$script:MODEL) -Succeeded $false -InputTokens $roundPromptTokens -OutputTokens $roundCompletionTokens -HttpAttempts ([int]$requestStats.HttpAttempts) -KeyIndex ([int]$requestStats.LastKeyIndex) -KeyCount ([int]$requestStats.KeyCount) -KeySlotsTried @($requestStats.KeySlotsTried.ToArray()) -RateLimitHeaders $requestStats.RateLimitHeaders -RequestId ([string]$requestStats.RequestId) -HttpStatus ([int]$requestStats.HttpStatus) -ErrorCode $candidateFailureCode -ErrorMessage $candidateFailureMessage
                 throw $candidateFailureMessage
             }
 
