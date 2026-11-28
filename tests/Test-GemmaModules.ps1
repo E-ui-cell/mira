@@ -833,6 +833,23 @@ if ($ordinaryEmpty.Blocked -or $ordinaryEmpty.Code) {
     throw 'An ordinary empty Gemini response was incorrectly classified as a safety block.'
 }
 
+# TTS playback must be asynchronous; Tab must no longer trigger speech and Ctrl+Tab must own the picker.
+$ttsSource = Get-Content -LiteralPath (Join-Path $repoRoot 'gemma\agent\Tts.ps1') -Raw -Encoding UTF8
+if ($ttsSource -notmatch '\$player\.Play\(\)' -or
+    $ttsSource -match '\$player\.PlaySync\(\)' -or
+    $ttsSource -notmatch 'function Stop-GemmaTtsPlayback' -or
+    $ttsSource -notmatch 'function Invoke-GemmaTtsModelPicker') {
+    throw 'Gemma TTS playback/picker lifecycle is not asynchronous or fully implemented.'
+}
+if ($lineEditorSource -notmatch '\$controlTab\s*=.*ConsoleModifiers\]::Control' -or
+    $lineEditorSource -match 'Invoke-GemmaSpeakLatest -Contents \$Contents') {
+    throw 'Tab still triggers TTS or Ctrl+Tab model picker handling is missing.'
+}
+if ($chatLoopSource -notmatch 'Initialize-GemmaTts' -or
+    $chatLoopSource -notmatch 'Stop-GemmaTtsPlayback') {
+    throw 'Explicit .speak/.stop TTS commands are not wired into the chat loop.'
+}
+
 # Verify common cursor-word calculations independently of terminal interaction.
 if ((Get-GemWordStart -Text 'one two' -Position 7) -ne 4) {
     throw 'Readline backward-word calculation failed.'
