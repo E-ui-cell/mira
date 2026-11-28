@@ -42,8 +42,10 @@ function Stop-GemmaTrackedProcess {
         }
         $process = $script:MiraTrackedProcesses[[int]$processId]
         $processName = [string]$process.ProcessName
+        $wasAlreadyExited = $false
         try {
             $process.Refresh()
+            $wasAlreadyExited = [bool]$process.HasExited
             if (-not $process.HasExited) {
                 $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
                 if (Test-Path -LiteralPath $taskkill -PathType Leaf) { & $taskkill /PID $processId /T /F 2>&1 | Out-Null }
@@ -52,13 +54,18 @@ function Stop-GemmaTrackedProcess {
                 $process.Refresh()
                 if (-not $process.HasExited) { throw 'Process remained active after the termination request.' }
             }
-            $results += @{ process_id = [int]$processId; process_name = $processName; stopped = $true; already_exited = [bool]$process.HasExited }
+            $results += @{ process_id = [int]$processId; process_name = $processName; stopped = $true; already_exited = $wasAlreadyExited }
         } catch {
             $results += @{ process_id = [int]$processId; process_name = $processName; stopped = $false; error = $_.Exception.Message }
         } finally {
-            [void]$script:MiraTrackedProcesses.Remove([int]$processId)
-            [void]$script:MiraTrackedProcessOrder.Remove([int]$processId)
-            try { $process.Dispose() } catch {}
+            try {
+                $process.Refresh()
+                if ($process.HasExited) {
+                    [void]$script:MiraTrackedProcesses.Remove([int]$processId)
+                    [void]$script:MiraTrackedProcessOrder.Remove([int]$processId)
+                    $process.Dispose()
+                }
+            } catch {}
         }
     }
     return @{ results = @($results) }
