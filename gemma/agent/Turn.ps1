@@ -800,6 +800,7 @@
                                         if ($eventData.Count -eq 0) { continue }
                                         $eventJson = [string]::Join("`n",$eventData.ToArray())
                                         $eventData.Clear()
+                                        if ([string]::IsNullOrWhiteSpace($eventJson)) { continue }
                                         if ($eventJson -eq '[DONE]') {
                                             $chatState.Done = $true
                                             break
@@ -855,7 +856,12 @@
                                             }
                                         }
                                     } elseif ($sseLine.StartsWith('data:')) {
-                                        [void]$eventData.Add($sseLine.Substring(5).TrimStart())
+                                        $dataLine = $sseLine.Substring(5).TrimStart()
+                                        if ($dataLine -eq '[DONE]') {
+                                            $chatState.Done = $true
+                                            break
+                                        }
+                                        [void]$eventData.Add($dataLine)
                                     }
                                 }
 
