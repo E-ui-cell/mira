@@ -44,6 +44,55 @@ foreach ($modulePath in $modules) {
     . $modulePath
 }
 
+$toolTestOriginalProvider = $script:Provider
+$toolTestOriginalCommandMode = $script:CommandMode
+$toolTestOriginalPermission = $script:ExecutionPermission
+try {
+    $script:Provider = 'antigravity'
+    $script:CommandMode = $false
+
+    $chatToolSet = Get-GemmaToolConfiguration -InputText 'wow'
+    if ($null -ne $chatToolSet.Tools -or $null -ne $chatToolSet.ToolConfig) {
+        throw 'Ordinary chat still sends unused tool schemas.'
+    }
+
+    $fileToolSet = Get-GemmaToolConfiguration -InputText 'list files'
+    $fileToolNames = @($fileToolSet.Tools[0].functionDeclarations | ForEach-Object { $_.name })
+    if ($fileToolNames.Count -ne 1 -or $fileToolNames[0] -ne 'run_powershell') {
+        throw 'A file-list request did not expose only run_powershell.'
+    }
+
+    $dateToolSet = Get-GemmaToolConfiguration -InputText 'what time is it'
+    $dateToolNames = @($dateToolSet.Tools[0].functionDeclarations | ForEach-Object { $_.name })
+    if ($dateToolNames.Count -ne 1 -or $dateToolNames[0] -ne 'get_current_datetime') {
+        throw 'A local-time request did not expose only get_current_datetime.'
+    }
+
+    $weatherToolSet = Get-GemmaToolConfiguration -InputText 'weather in Lviv'
+    $weatherToolNames = @($weatherToolSet.Tools[0].functionDeclarations | ForEach-Object { $_.name })
+    if ($weatherToolNames.Count -ne 1 -or $weatherToolNames[0] -ne 'quick_web') {
+        throw 'A weather request did not expose only quick_web.'
+    }
+
+    $skillToolSet = Get-GemmaToolConfiguration -InputText 'organize my files into folders'
+    $skillToolNames = @($skillToolSet.Tools[0].functionDeclarations | ForEach-Object { $_.name })
+    if ($skillToolNames -notcontains 'run_powershell' -or $skillToolNames -notcontains 'get_skill') {
+        throw 'A complex file task did not expose the execution tool and task skill.'
+    }
+
+    $script:ExecutionPermission = 'autopilot'
+    $dispatchResult = Invoke-GemmaToolCall -Call @{ name = 'run_powershell'; args = @{ command = '$null'; elevated = $false } }
+    if ([string]::IsNullOrWhiteSpace([string]$dispatchResult.output) -or
+        $dispatchResult.output -notmatch 'completed successfully with no output') {
+        throw 'run_powershell did not dispatch to Invoke-GemmaPowerShellTool.'
+    }
+} finally {
+    $script:Provider = $toolTestOriginalProvider
+    $script:CommandMode = $toolTestOriginalCommandMode
+    $script:ExecutionPermission = $toolTestOriginalPermission
+}
+Write-Host 'GEMMA tool registry and PowerShell dispatch checks passed.'
+
 if ($MIRA_DEFAULT_SYSTEM_PROMPT.Length -gt 500) {
     throw 'The default system prompt must stay compact to avoid unnecessary input-token overhead.'
 }
