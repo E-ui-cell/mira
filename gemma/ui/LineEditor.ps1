@@ -989,7 +989,8 @@ function Read-GemLineConsole {
             }
             elseif ($b -match '^\.verbose\s+(\S*)$') {
                 $verbosePrefix = $matches[1]
-                foreach ($item in @('on','off' | Where-Object { $_.StartsWith($verbosePrefix,[StringComparison]::OrdinalIgnoreCase) -and ('.verbose ' + $_) -ne $b })) {
+                $verboseOptions = @('on','off')
+                foreach ($item in @($verboseOptions | Where-Object { $_.StartsWith($verbosePrefix,[StringComparison]::OrdinalIgnoreCase) -and ('.verbose ' + $_) -ne $b })) {
                     $candidateBuffers += ('.verbose ' + $item); $candidateLabels += $item
                 }
             }
