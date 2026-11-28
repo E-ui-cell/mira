@@ -878,15 +878,20 @@ function Read-GemLineConsole {
         }
 
         if ($k.Key -eq [ConsoleKey]::Tab) {
-            # Empty prompt + cursor at zero: speak the latest reply on demand.
-            # With any input present, Tab remains the normal completion key.
-            if ($b.Length -eq 0 -and $c -eq 0) {
-                [Console]::WriteLine()
-                Invoke-GemmaSpeakLatest -Contents $Contents
-                $row = [Console]::CursorTop
-                [Console]::Write($promptText)
-                $renderedRows = 1
-                Redraw '' $b $c
+            $controlTab = (($k.Modifiers -band [ConsoleModifiers]::Control) -ne 0)
+            if ($controlTab) {
+                $atLogicalLineStart = ($c -eq 0 -or ($c -gt 0 -and $b[$c - 1] -eq [char]10))
+                if ($atLogicalLineStart) {
+                    [Console]::WriteLine()
+                    Initialize-GemmaTts
+                    Invoke-GemmaTtsModelPicker
+                    $row = [Console]::CursorTop
+                    [Console]::Write($promptText)
+                    $renderedRows = 1
+                    Redraw '' $b $c
+                } else {
+                    [Console]::Beep(700,60)
+                }
                 continue
             }
             if ($c -ne $b.Length) { continue }
